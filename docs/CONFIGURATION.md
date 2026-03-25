@@ -78,7 +78,7 @@ WX_CHANNEL_DOWNLOAD_RETRY_COUNT=3
 
 ```bash
 # 是否显示左下角日志按钮（默认：false）
-WX_CHANNEL_SHOW_LOG_BUTTON=false
+WX_CHANNEL_SHOW_LOG_BUTTON=true
 ```
 
 **说明**：

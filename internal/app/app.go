@@ -267,7 +267,7 @@ func (app *App) Run() {
 
 	// 2. 立即渲染界面面板 (不再受网络连接阻塞)
 	utils.PrintSeparator()
-	color.Blue("📡 服务状态信息")
+	// color.Blue("📡 服务状态信息")
 	utils.PrintSeparator()
 	utils.PrintLabelValue("⏳", "服务状态", "已启动")
 	utils.PrintLabelValue("🔌", "代理端口", app.Port)
@@ -307,7 +307,7 @@ func (app *App) Run() {
 			if ok := app.Sunny.StartProcess(); ok {
 				utils.Info("✓ 视频号引擎已就绪 (WeChatAppEx.exe)")
 			} else {
-				utils.Warn("⚠️ 注入引擎启动失败：可能需要 [管理员权限] 才能在视频号内显示按钮")
+				utils.Warn("⚠️ 引擎启动失败：可能需要 [管理员权限] 才能在视频号内显示按钮")
 			}
 		}
 

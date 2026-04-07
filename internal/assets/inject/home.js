@@ -199,6 +199,7 @@ function __update_download_button_state() {
         downloadBtn.title = '当前页面不支持下载';
       }
     }
+    downloadBtn.style.display = 'none';
   }
 }
 
@@ -763,7 +764,7 @@ function __show_home_download_options(profile) {
 
 // ==================== 统一按钮插入入口 ====================
 async function insert_download_btn() {
-  __wx_log({ msg: "等待注入下载按钮" });
+  __wx_log({ msg: "等待下载按钮" });
 
   var pathname = window.location.pathname;
   console.log('[home.js] 当前页面路径:', pathname);

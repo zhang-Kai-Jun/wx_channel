@@ -357,7 +357,7 @@ function __remember_current_feed(feed, reason) {
 }
 
 function __sync_feed_profile_with_runtime(forceLog) {
-  showFeedDebugInfo('🔍 同步视频信息中... (runtime)');
+  // showFeedDebugInfo('🔍 同步视频信息中... (runtime)');
 
   console.log('[feed.js] __sync_feed_profile_with_runtime 开始执行, forceLog:', forceLog);
 
@@ -365,7 +365,7 @@ function __sync_feed_profile_with_runtime(forceLog) {
   console.log('[feed.js] runtimeFeed:', runtimeFeed ? '找到' : '未找到');
   if (runtimeFeed) {
     console.log('[feed.js] runtimeFeed 内容:', runtimeFeed.objectDesc ? runtimeFeed.objectDesc.media : '无 media');
-    showFeedDebugInfo('✅ 从页面获取到视频信息');
+    // showFeedDebugInfo('✅ 从页面获取到视频信息');
     return __remember_current_feed(runtimeFeed, forceLog ? 'runtime' : '');
   }
 
@@ -375,7 +375,7 @@ function __sync_feed_profile_with_runtime(forceLog) {
     window.__wx_channels_store__.profile = fallback;
     __wx_feed_runtime_state.activeFeedId = fallback.id || __get_active_feed_id();
     console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
-    showFeedDebugInfo('✅ 从DOM元素获取到视频信息');
+    // showFeedDebugInfo('✅ 从DOM元素获取到视频信息');
     if (forceLog) {
       console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
     }
@@ -383,7 +383,7 @@ function __sync_feed_profile_with_runtime(forceLog) {
   }
 
   console.log('[feed.js] 最终 profile:', window.__wx_channels_store__ && window.__wx_channels_store__.profile);
-  showFeedDebugInfo('⚠️ 未能获取到视频信息，请尝试重新播放视频');
+  // showFeedDebugInfo('⚠️ 未能获取到视频信息，请尝试重新播放视频');
   return window.__wx_channels_store__ && window.__wx_channels_store__.profile;
 }
 
@@ -457,6 +457,8 @@ async function __insert_download_btn_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.85 18.825L3 20.1l1.275-3.85A7.95 7.95 0 0 1 4 14.15c0-4.28 3.57-7.75 8-7.75s8 3.47 8 7.75-3.57 7.75-8 7.75c-.73 0-1.44-.1-2.1-.3a8.23 8.23 0 0 1-3.05-1.775Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
     );
 
+    commentIconWrapper.style.display = 'none';
+
     commentIconWrapper.onclick = function () {
       __start_feed_comment_collection_with_open_panel();
     };
@@ -467,6 +469,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '复制链接',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M7.75 11.25a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5ZM4.75 8A2.25 2.25 0 0 0 2.5 10.25v4.5A2.25 2.25 0 0 0 4.75 17h4.5a2.25 2.25 0 0 0 2.25-2.25V15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.75 4.75A2.25 2.25 0 0 1 10 2.5h7.5A2.25 2.25 0 0 1 19.75 4.75v7.5A2.25 2.25 0 0 1 17.5 14.5H15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
     );
+    copyLinkIconWrapper.style.display = 'none';
 
     copyLinkIconWrapper.onclick = function () {
       // 从本地存储获取profile数据
@@ -542,6 +545,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>'
     );
 
+    domIconWrapper.style.display = 'none';
     domIconWrapper.onclick = function () {
       try {
         // 获取完整HTML
@@ -582,6 +586,8 @@ async function __insert_download_btn_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>'
     );
 
+    downloadIconWrapper.style.display = 'none';
+
     downloadIconWrapper.onclick = function () {
       __handle_feed_download_click();
     };
@@ -593,6 +599,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M8 3.75h5.25L18 8.5v11.75H8c-1.1 0-2-.9-2-2V5.75c0-1.1.9-2 2-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M13 3.75V8.5h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M9.5 12.5h5M9.5 15.5h5M9.5 18.5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>'
     );
 
+    exportIconWrapper.style.display = 'none';
     exportIconWrapper.onclick = function () {
       __handle_export_click();
     };
@@ -805,7 +812,7 @@ function __show_feed_download_options(profile) {
 
 /** Feed页面按钮注入入口 */
 async function __insert_download_btn_to_feed_page() {
-  console.log('[feed.js] 开始注入Feed页面按钮到顶部工具栏...');
+  console.log('[feed.js] 开始Feed页面按钮到顶部工具栏...');
   __start_feed_slide_monitor();
 
   var success = await __insert_download_btn_to_feed_toolbar();

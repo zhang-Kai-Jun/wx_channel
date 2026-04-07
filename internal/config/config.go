@@ -252,23 +252,17 @@ func GetMachineID() string {
 	existingContent, err := os.ReadFile(configFile)
 	if err != nil {
 		// 配置文件不存在，创建精简版配置
-		simpleConfig := fmt.Sprintf(`# wx_channel 配置文件
-# 只包含常用配置项，其他配置将使用合理的默认值
+		simpleConfig := fmt.Sprintf(`
+port: 2025                    
+download_dir: downloads       
 
-# === 核心配置 ===
-port: 2025                    # 服务端口
-download_dir: downloads       # 下载目录
 
-# === 云端管理 ===
-cloud_hub_url: ws://wx.dongzuren.com/ws/client
+cloud_hub_url: ""
 cloud_secret: ""
 
-# === 设备标识 ===
-# 自动生成，用于在云端唯一标识此设备，请勿手动修改
 machine_id: %s
 
-# === 性能配置（可选）===
-download_concurrency: 5       # 下载并发数，可根据网络情况调整
+download_concurrency: 5     
 `, deviceID)
 
 		if err := os.WriteFile(configFile, []byte(simpleConfig), 0644); err != nil {

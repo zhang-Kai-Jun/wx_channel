@@ -198,22 +198,22 @@ func (l *Logger) SetLevel(level LogLevel) {
 
 // Debug 调试日志
 func (l *Logger) Debug(format string, args ...interface{}) {
-	l.zLogger.Debug().Msgf(format, args...)
+	l.fileLogger.Debug().Msgf(format, args...)
 }
 
 // Info 信息日志
 func (l *Logger) Info(format string, args ...interface{}) {
-	l.zLogger.Info().Msgf(format, args...)
+	l.fileLogger.Info().Msgf(format, args...)
 }
 
 // Warn 警告日志
 func (l *Logger) Warn(format string, args ...interface{}) {
-	l.zLogger.Warn().Msgf(format, args...)
+	l.fileLogger.Warn().Msgf(format, args...)
 }
 
 // Error 错误日志
 func (l *Logger) Error(format string, args ...interface{}) {
-	l.zLogger.Error().Msgf(format, args...)
+	l.fileLogger.Error().Msgf(format, args...)
 }
 
 // Close 关闭日志文件
@@ -229,43 +229,43 @@ func (l *Logger) Close() error {
 	return nil
 }
 
-// Info 信息日志
+// Info 信息日志 (仅输出到文件，不输出到控制台)
 func Info(format string, args ...interface{}) {
-	GetLogger().Info(format, args...)
+	GetLogger().fileLogger.Info().Msgf(format, args...)
 }
 
-// Warn 警告日志
+// Warn 警告日志 (仅输出到文件，不输出到控制台)
 func Warn(format string, args ...interface{}) {
-	GetLogger().Warn(format, args...)
+	GetLogger().fileLogger.Warn().Msgf(format, args...)
 }
 
-// Error 错误日志
+// Error 错误日志 (仅输出到文件，不输出到控制台)
 func Error(format string, args ...interface{}) {
-	GetLogger().Error(format, args...)
+	GetLogger().fileLogger.Error().Msgf(format, args...)
 }
 
-// LogDebug 全局便捷函数
+// LogDebug 全局便捷函数 (仅输出到文件，不输出到控制台)
 func LogDebug(format string, args ...interface{}) {
-	GetLogger().Debug(format, args...)
+	GetLogger().fileLogger.Debug().Msgf(format, args...)
 }
 
 func LogInfo(format string, args ...interface{}) {
-	GetLogger().Info(format, args...)
+	GetLogger().fileLogger.Info().Msgf(format, args...)
 }
 
 func LogWarn(format string, args ...interface{}) {
-	GetLogger().Warn(format, args...)
+	GetLogger().fileLogger.Warn().Msgf(format, args...)
 }
 
 func LogError(format string, args ...interface{}) {
-	GetLogger().Error(format, args...)
+	GetLogger().fileLogger.Error().Msgf(format, args...)
 }
 
 // LogDownload 记录下载操作
 func LogDownload(videoID, title, author, url string, size int64, success bool) {
-	event := GetLogger().zLogger.Info()
+	event := GetLogger().fileLogger.Info()
 	if !success {
-		event = GetLogger().zLogger.Warn()
+		event = GetLogger().fileLogger.Warn()
 	}
 
 	status := "成功"
@@ -287,9 +287,9 @@ func LogDownload(videoID, title, author, url string, size int64, success bool) {
 
 // LogComment 记录评论采集操作
 func LogComment(videoID, title string, commentCount int, success bool) {
-	event := GetLogger().zLogger.Info()
+	event := GetLogger().fileLogger.Info()
 	if !success {
-		event = GetLogger().zLogger.Warn()
+		event = GetLogger().fileLogger.Warn()
 	}
 	status := "成功"
 	if !success {
@@ -305,7 +305,7 @@ func LogComment(videoID, title string, commentCount int, success bool) {
 
 // LogBatchDownload 记录批量下载操作
 func LogBatchDownload(total, success, failed int) {
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "批量下载").
 		Int("total", total).
 		Int("success", success).
@@ -315,7 +315,7 @@ func LogBatchDownload(total, success, failed int) {
 
 // LogDownloadError 记录下载错误详情
 func LogDownloadError(videoID, title, author, url string, err error, retryCount int) {
-	GetLogger().zLogger.Error().
+	GetLogger().fileLogger.Error().
 		Str("type", "下载错误").
 		Str("id", videoID).
 		Str("title", title).
@@ -328,7 +328,7 @@ func LogDownloadError(videoID, title, author, url string, err error, retryCount 
 
 // LogDownloadRetry 记录下载重试
 func LogDownloadRetry(videoID, title string, attempt, maxRetries int, err error) {
-	GetLogger().zLogger.Warn().
+	GetLogger().fileLogger.Warn().
 		Str("type", "下载重试").
 		Str("id", videoID).
 		Str("title", title).
@@ -340,7 +340,7 @@ func LogDownloadRetry(videoID, title string, attempt, maxRetries int, err error)
 
 // LogAPI 记录API调用
 func LogAPI(method, path string, statusCode int, duration time.Duration) {
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "API").
 		Str("method", method).
 		Str("path", path).
@@ -355,7 +355,7 @@ func LogUploadInit(uploadID string, success bool) {
 	if !success {
 		status = "失败"
 	}
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "上传初始化").
 		Str("upload_id", uploadID).
 		Str("status", status).
@@ -368,7 +368,7 @@ func LogUploadChunk(uploadID string, index, total int, sizeMB float64, success b
 	if !success {
 		status = "失败"
 	}
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "分片上传").
 		Str("upload_id", uploadID).
 		Int("index", index+1).
@@ -384,7 +384,7 @@ func LogUploadMerge(uploadID, filename, author string, totalChunks int, sizeMB f
 	if !success {
 		status = "失败"
 	}
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "分片合并").
 		Str("upload_id", uploadID).
 		Str("filename", filename).
@@ -401,7 +401,7 @@ func LogDirectUpload(filename, author string, sizeMB float64, encrypted bool, su
 	if !success {
 		status = "失败"
 	}
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "直接上传").
 		Str("filename", filename).
 		Str("author", author).
@@ -417,7 +417,7 @@ func LogCSVOperation(operation, videoID, title string, success bool, reason stri
 	if !success {
 		status = "失败"
 	}
-	event := GetLogger().zLogger.Info().
+	event := GetLogger().fileLogger.Info().
 		Str("type", "CSV操作").
 		Str("operation", operation).
 		Str("id", videoID).
@@ -436,7 +436,7 @@ func LogCSVRebuild(filePath string, success bool) {
 	if !success {
 		status = "失败"
 	}
-	GetLogger().zLogger.Warn().
+	GetLogger().fileLogger.Warn().
 		Str("type", "CSV重建").
 		Str("file", filePath).
 		Str("status", status).
@@ -445,7 +445,7 @@ func LogCSVRebuild(filePath string, success bool) {
 
 // LogSystemStart 记录系统启动
 func LogSystemStart(port int, proxyMode string) {
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "系统启动").
 		Int("port", port).
 		Str("proxy_mode", proxyMode).
@@ -454,7 +454,7 @@ func LogSystemStart(port int, proxyMode string) {
 
 // LogSystemShutdown 记录系统关闭
 func LogSystemShutdown(reason string) {
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "系统关闭").
 		Str("reason", reason).
 		Msg("服务正在关闭")
@@ -466,7 +466,7 @@ func LogConfigLoad(configPath string, success bool) {
 	if !success {
 		status = "失败"
 	}
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "配置加载").
 		Str("path", configPath).
 		Str("status", status).
@@ -475,7 +475,7 @@ func LogConfigLoad(configPath string, success bool) {
 
 // LogAuthFailed 记录认证失败
 func LogAuthFailed(endpoint, clientIP string) {
-	GetLogger().zLogger.Warn().
+	GetLogger().fileLogger.Warn().
 		Str("type", "认证失败").
 		Str("endpoint", endpoint).
 		Str("ip", clientIP).
@@ -484,7 +484,7 @@ func LogAuthFailed(endpoint, clientIP string) {
 
 // LogCORSBlocked 记录CORS拦截
 func LogCORSBlocked(origin, endpoint string) {
-	GetLogger().zLogger.Warn().
+	GetLogger().fileLogger.Warn().
 		Str("type", "CORS拦截").
 		Str("origin", origin).
 		Str("endpoint", endpoint).
@@ -494,9 +494,9 @@ func LogCORSBlocked(origin, endpoint string) {
 // LogDiskSpace 记录磁盘空间检查
 func LogDiskSpace(path string, availableGB, totalGB float64) {
 	usagePercent := (totalGB - availableGB) / totalGB * 100
-	event := GetLogger().zLogger.Debug()
+	event := GetLogger().fileLogger.Debug()
 	if usagePercent > 90 {
-		event = GetLogger().zLogger.Warn()
+		event = GetLogger().fileLogger.Warn()
 	}
 	event.Str("type", "磁盘检查").
 		Str("path", path).
@@ -508,7 +508,7 @@ func LogDiskSpace(path string, availableGB, totalGB float64) {
 
 // LogConcurrency 记录并发状态
 func LogConcurrency(operation string, active, max int) {
-	GetLogger().zLogger.Debug().
+	GetLogger().fileLogger.Debug().
 		Str("type", "并发控制").
 		Str("operation", operation).
 		Int("active", active).
@@ -518,7 +518,7 @@ func LogConcurrency(operation string, active, max int) {
 
 // LogRetry 记录重试操作
 func LogRetry(operation string, attempt, maxAttempts int, err error) {
-	GetLogger().zLogger.Warn().
+	GetLogger().fileLogger.Warn().
 		Str("type", "重试").
 		Str("operation", operation).
 		Int("attempt", attempt).
@@ -533,7 +533,7 @@ func LogCleanup(operation string, itemsRemoved int, success bool) {
 	if !success {
 		status = "失败"
 	}
-	GetLogger().zLogger.Info().
+	GetLogger().fileLogger.Info().
 		Str("type", "清理").
 		Str("operation", operation).
 		Int("removed", itemsRemoved).

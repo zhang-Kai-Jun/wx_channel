@@ -261,7 +261,7 @@ func (h *APIHandler) processVideoData(data map[string]interface{}) {
 
 	// 打印视频详细信息
 	utils.PrintSeparator()
-	color.Blue("📊 视频详细信息")
+	// color.Blue("📊 视频详细信息")
 	utils.PrintSeparator()
 
 	if nickname, ok := data["nickname"].(string); ok {

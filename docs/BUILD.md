@@ -36,12 +36,18 @@ cd wx_channel
 
 ### 2. 基本编译
 
-```bash
-# 最简单的编译方式
+本项目在 Windows 上依赖 CGO（`SunnyNet` 等库），因此 **必须开启 CGO**。
+
+```powershell
+# PowerShell
+$env:CGO_ENABLED = "1"
 go build -o wx_channel.exe
 
-# 编译完成后会生成 wx_channel.exe
+# 或一行命令（CMD/PowerShell 均适用）
+go build -ldflags="-s -w" -o wx_channel.exe
 ```
+
+> **注意**：如果 `CGO_ENABLED` 被错误设置为 `0`，SunnyNet 会报 `build constraints exclude all Go files` 错误。此时请显式设回 `1` 或检查环境变量。
 
 ### 3. 运行程序
 
@@ -57,16 +63,18 @@ wx_channel.exe -p 2025
 
 ### 优化体积编译（推荐）
 
-使用 `-ldflags` 参数可以显著减小可执行文件体积：
+使用 `-ldflags` 参数可以显著减小可执行文件体积，并可通过 `-extldflags=-static` 尽量静态链接 C 运行库，避免打包后缺少 DLL：
 
-```bash
-# 去除调试信息和符号表
-go build -ldflags="-s -w" -o wx_channel.exe
+```powershell
+# PowerShell：静态链接 + 去除符号表
+$env:CGO_ENABLED = "1"
+go build -ldflags="-s -w -extldflags=-static" -o wx_channel.exe
 
 # 说明：
 # -s: 去除符号表
 # -w: 去除 DWARF 调试信息
-# 可以减小约 30-40% 的文件体积
+# -extldflags=-static: 让链接器静态链接 C/C++ 运行库（libgcc、libstdc++、libwinpthread 等）
+# 结果：生成约 45MB 的单文件 exe，基本不依赖外部 DLL
 ```
 
 ### 添加版本信息
@@ -416,15 +424,38 @@ go-winres make
 go build -o wx_channel.exe
 ```
 
-### 问题 4：交叉编译失败
+### 问题 4：SunnyNet 报 `build constraints exclude all Go files`
+
+**原因**：`CGO_ENABLED` 被设成了 `0`，但 SunnyNet 在 Windows 上必须有 CGO 才能编译。
 
 **解决方案**：
-```bash
-# 确保设置了正确的环境变量
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o wx_channel.exe
 
-# 注意：某些依赖可能需要 CGO，如果失败尝试在目标平台编译
+```powershell
+# PowerShell
+$env:CGO_ENABLED = "1"
+go build -o wx_channel.exe
 ```
+
+### 问题 5：打包后的 exe 提示找不到 libwinpthread（或 libwinpthread_64-1.dll）
+
+**原因**：MinGW 默认动态链接 `libwinpthread`，打包时漏掉了 DLL。
+
+**解决方案（两种）**：
+
+**方案 A：将 DLL 与 exe 同目录分发（最稳妥）**  
+在编译用的 MinGW 安装目录的 `bin` 下找到 `libwinpthread*.dll`、`libgcc_s_*.dll`、`libstdc++-6.dll` 等，与 exe 放在同一目录一起打包。
+
+**方案 B：静态链接 C 运行库（做成单文件）**  
+已在本文档上方「优化体积编译」中给出命令：
+
+```powershell
+$env:CGO_ENABLED = "1"
+go build -ldflags="-s -w -extldflags=-static" -o wx_channel.exe
+```
+
+使用 `-extldflags=-static` 后，链接器会尝试静态链接 `libwinpthread`、`libgcc_s`、`libstdc++` 等 C 运行时 DLL。生成的单文件约 45MB，无需额外携带 DLL。
+
+> **注意**：如果目标电脑使用不同的 MinGW 版本，混用 DLL 可能导致崩溃。方案 B 的静态链接版本兼容性最好。
 
 ## 版本管理
 

@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,8 +77,8 @@ func (c *Client) ReadPump() {
 		c.Close()
 	}()
 
-	// 设置最大消息大小为 1MB (而不是之前的10MB，防止恶意大包内存撑爆)
-	c.Conn.SetReadLimit(1 * 1024 * 1024)
+	// 设置最大消息大小为 50MB (大列表数据可能超过10MB)
+	c.Conn.SetReadLimit(50 * 1024 * 1024)
 
 	// 启动 ping 循环
 	go c.pingLoop()
@@ -130,7 +131,7 @@ func (c *Client) ReadPump() {
 			} else if errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "context canceled") {
 				utils.LogInfo("WebSocket 上下文已取消: %s", c.RemoteAddr)
 			} else {
-			// 检查是否是正常关闭
+				// 检查是否是正常关闭
 				status := websocket.CloseStatus(err)
 				if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
 					utils.LogInfo("WebSocket 正常关闭")
@@ -187,6 +188,22 @@ func (c *Client) ReadPump() {
 				c.hub.handleAPIResponse(resp)
 			}
 		}
+
+		// 处理任务消息（从前端上报的任务进度、视频、完成等）
+		if msg.Type == WSMessageTypeTaskProgress ||
+			msg.Type == WSMessageTypeTaskVideo ||
+			msg.Type == WSMessageTypeTaskComplete ||
+			msg.Type == WSMessageTypeTaskError {
+
+			var taskMsg TaskMessage
+			if err := json.Unmarshal(message, &taskMsg); err != nil {
+				utils.LogError("任务消息解析失败: %v", err)
+				continue
+			}
+
+			// 处理任务消息并广播给其他客户端
+			c.hub.HandleTaskMessage(taskMsg)
+		}
 	}
 }
 
@@ -203,6 +220,26 @@ func (c *Client) WritePump() {
 		case message, ok := <-c.send:
 			if !ok {
 				return
+			}
+
+			// 解析消息内容用于日志
+			var msgPreview string
+			var rawMsg map[string]interface{}
+			if json.Unmarshal(message, &rawMsg) == nil {
+				if typeStr, ok := rawMsg["type"].(string); ok {
+					if dataMap, ok := rawMsg["data"].(map[string]interface{}); ok {
+						if action, ok := dataMap["action"].(string); ok {
+							msgPreview = fmt.Sprintf("type=%s, action=%s", typeStr, action)
+						} else {
+							msgPreview = fmt.Sprintf("type=%s", typeStr)
+						}
+					} else {
+						msgPreview = fmt.Sprintf("type=%s", typeStr)
+					}
+				}
+			}
+			if msgPreview == "" {
+				msgPreview = fmt.Sprintf("len=%d", len(message))
 			}
 
 			ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
@@ -226,10 +263,31 @@ func (c *Client) Send(data []byte) error {
 		return errors.New("client is closed")
 	}
 
+	// 解析消息内容用于日志
+	var msgPreview string
+	var rawMsg map[string]interface{}
+	if json.Unmarshal(data, &rawMsg) == nil {
+		if typeStr, ok := rawMsg["type"].(string); ok {
+			if dataMap, ok := rawMsg["data"].(map[string]interface{}); ok {
+				if action, ok := dataMap["action"].(string); ok {
+					msgPreview = fmt.Sprintf("type=%s, action=%s", typeStr, action)
+				} else {
+					msgPreview = fmt.Sprintf("type=%s", typeStr)
+				}
+			} else {
+				msgPreview = fmt.Sprintf("type=%s", typeStr)
+			}
+		}
+	}
+	if msgPreview == "" {
+		msgPreview = fmt.Sprintf("len=%d", len(data))
+	}
+
 	select {
 	case c.send <- data:
 		return nil
 	default:
+		utils.LogWarn("[Client.Send] 发送缓冲区已满, client_id=%s", c.ID)
 		return errors.New("send buffer is full")
 	}
 }

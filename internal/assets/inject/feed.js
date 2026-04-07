@@ -232,6 +232,8 @@ function __get_feed_runtime_roots() {
   var activeFeedNode = __get_active_feed_element();
   var app = document.getElementById('app') || document.querySelector('[data-v-app]');
 
+  console.log('[feed.js] __get_feed_runtime_roots, activeFeedNode:', activeFeedNode ? '存在' : '空', 'app:', app ? '存在' : '空');
+
   function push(root) {
     if (root) roots.push(root);
   }
@@ -273,13 +275,21 @@ function __get_feed_runtime_roots() {
 
 function __locate_current_feed_runtime() {
   var activeFeedId = __get_active_feed_id();
+  console.log('[feed.js] __locate_current_feed_runtime, activeFeedId:', activeFeedId);
+
   var roots = __get_feed_runtime_roots();
+  console.log('[feed.js] 获取到', roots.length, '个 runtime roots');
 
   for (var i = 0; i < roots.length; i++) {
+    console.log('[feed.js] 检查 root', i, ':', roots[i] ? '存在' : '空');
     var match = __search_feed_candidate(roots[i], activeFeedId, 6, 40);
-    if (match) return match;
+    if (match) {
+      console.log('[feed.js] 在 root', i, '找到匹配');
+      return match;
+    }
   }
 
+  console.log('[feed.js] 所有 roots 都没有找到匹配');
   return null;
 }
 
@@ -347,21 +357,33 @@ function __remember_current_feed(feed, reason) {
 }
 
 function __sync_feed_profile_with_runtime(forceLog) {
+  showFeedDebugInfo('🔍 同步视频信息中... (runtime)');
+
+  console.log('[feed.js] __sync_feed_profile_with_runtime 开始执行, forceLog:', forceLog);
+
   var runtimeFeed = __locate_current_feed_runtime();
+  console.log('[feed.js] runtimeFeed:', runtimeFeed ? '找到' : '未找到');
   if (runtimeFeed) {
+    console.log('[feed.js] runtimeFeed 内容:', runtimeFeed.objectDesc ? runtimeFeed.objectDesc.media : '无 media');
+    showFeedDebugInfo('✅ 从页面获取到视频信息');
     return __remember_current_feed(runtimeFeed, forceLog ? 'runtime' : '');
   }
 
   var fallback = __extract_profile_from_feed_dom_fallback(__get_active_feed_id());
+  console.log('[feed.js] fallback:', fallback ? '找到' : '未找到');
   if (fallback && fallback.url && window.__wx_channels_store__) {
     window.__wx_channels_store__.profile = fallback;
     __wx_feed_runtime_state.activeFeedId = fallback.id || __get_active_feed_id();
+    console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
+    showFeedDebugInfo('✅ 从DOM元素获取到视频信息');
     if (forceLog) {
       console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
     }
     return fallback;
   }
 
+  console.log('[feed.js] 最终 profile:', window.__wx_channels_store__ && window.__wx_channels_store__.profile);
+  showFeedDebugInfo('⚠️ 未能获取到视频信息，请尝试重新播放视频');
   return window.__wx_channels_store__ && window.__wx_channels_store__.profile;
 }
 
@@ -439,6 +461,120 @@ async function __insert_download_btn_to_feed_toolbar() {
       __start_feed_comment_collection_with_open_panel();
     };
 
+    // 创建复制链接按钮
+    var copyLinkIconWrapper = __build_feed_header_icon(
+      'wx-feed-copy-link-icon',
+      '复制链接',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M7.75 11.25a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5ZM4.75 8A2.25 2.25 0 0 0 2.5 10.25v4.5A2.25 2.25 0 0 0 4.75 17h4.5a2.25 2.25 0 0 0 2.25-2.25V15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.75 4.75A2.25 2.25 0 0 1 10 2.5h7.5A2.25 2.25 0 0 1 19.75 4.75v7.5A2.25 2.25 0 0 1 17.5 14.5H15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
+    );
+
+    copyLinkIconWrapper.onclick = function () {
+      // 从本地存储获取profile数据
+      var profile = __wx_channels_store__ && __wx_channels_store__.profile;
+
+      // 如果本地没有，尝试从API获取
+      if (!profile || !profile.id) {
+        fetch('/__wx_channels_api/get_current_profile', {
+          method: 'GET',
+          headers: { 'X-Local-Auth': 'local-dev' }
+        }).then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data && data.id) {
+              __copy_video_ids_to_clipboard(data);
+            } else {
+              // 降级：复制URL
+              __copy_to_clipboard(window.location.href);
+            }
+          }).catch(function () {
+            __copy_to_clipboard(window.location.href);
+          });
+      } else {
+        __copy_video_ids_to_clipboard(profile);
+      }
+    };
+
+    // 复制到剪贴板函数
+    function __copy_to_clipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          __wx_log({ msg: '已复制: ' + text });
+          showFeedDebugInfo('已复制: ' + text);
+        }).catch(function () {
+          __fallback_copy(text);
+        });
+      } else {
+        __fallback_copy(text);
+      }
+    }
+
+    // 降级复制方案
+    function __fallback_copy(text) {
+      var textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        __wx_log({ msg: '已复制: ' + text });
+        showFeedDebugInfo('已复制: ' + text);
+      } catch (err) {
+        console.error('[feed.js] 复制失败:', err);
+        __wx_log({ msg: '复制失败，请手动复制' });
+      }
+      document.body.removeChild(textArea);
+    }
+
+    // 复制视频ID到剪贴板
+    function __copy_video_ids_to_clipboard(profile) {
+      var id = profile.id || '';
+      var nonceId = profile.nonce_id || '';
+      var copyText = 'id: ' + id + '\nnonce_id: ' + nonceId;
+
+      console.log('[feed.js] 复制视频ID:', copyText);
+      __copy_to_clipboard(copyText);
+    };
+
+    // 创建获取DOM按钮
+    var domIconWrapper = __build_feed_header_icon(
+      'wx-feed-dom-icon',
+      '获取DOM',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>'
+    );
+
+    domIconWrapper.onclick = function () {
+      try {
+        // 获取完整HTML
+        var pageHTML = document.documentElement.outerHTML;
+
+        // 创建Blob对象
+        var blob = new Blob([pageHTML], { type: 'text/plain;charset=utf-8' });
+
+        // 创建下载链接
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+
+        // 生成文件名
+        var pageTitle = document.title || 'page';
+        pageTitle = pageTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+        var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+        a.download = pageTitle + '_dom_' + timestamp + '.txt';
+
+        // 触发下载
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        __wx_log({ msg: 'DOM已下载: ' + a.download });
+        console.log('[feed.js] DOM已下载:', a.download);
+      } catch (e) {
+        console.error('[feed.js] 获取DOM失败:', e);
+        __wx_log({ msg: '获取DOM失败: ' + e.message });
+      }
+    };
+
     // 创建下载图标
     var downloadIconWrapper = __build_feed_header_icon(
       'wx-feed-download-icon',
@@ -464,7 +600,9 @@ async function __insert_download_btn_to_feed_toolbar() {
     // Insert into container
     container.insertBefore(exportIconWrapper, container.firstChild);
     container.insertBefore(downloadIconWrapper, container.firstChild);
+    container.insertBefore(domIconWrapper, container.firstChild);
     container.insertBefore(commentIconWrapper, container.firstChild);
+    container.insertBefore(copyLinkIconWrapper, container.firstChild);
 
     console.log('[feed.js] ✅ 工具栏按钮注入成功');
     __wx_log({ msg: "注入评论和下载按钮成功!" });
@@ -499,22 +637,67 @@ async function __insert_download_btn_to_feed_toolbar() {
 
 /** Feed页面下载按钮点击处理 */
 function __handle_feed_download_click() {
+  var currentProfile = __wx_channels_store__ && __wx_channels_store__.profile;
+
+  // 直接在页面上显示提示
+  showFeedDebugInfo('📥 点击下载按钮 | 当前profile: ' + (currentProfile ? '已存储' : '为空'));
+
+  console.log('[feed.js] 点击下载按钮，当前 profile:', currentProfile);
+
+  // 尝试从 runtime 获取
   var profile = __sync_feed_profile_with_runtime(false);
+  console.log('[feed.js] runtime 同步后的 profile:', profile);
 
   if (!profile || !profile.url) {
-    __wx_log({ msg: '⏳ 正在获取视频数据，请稍候...' });
+    // runtime 失败，尝试从后端 API 获取
+    showFeedDebugInfo('⏳ 正在从服务器获取视频数据...');
+    console.log('[feed.js] 尝试从后端获取视频数据');
 
-    __resolve_current_feed_profile(12, 180).then(function (resolvedProfile) {
-      if (resolvedProfile) {
-        __show_feed_download_options(resolvedProfile);
+    fetch('/__wx_channels_api/get_current_profile', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    .then(function(response) { return response.json(); })
+    .then(function(data) {
+      console.log('[feed.js] 后端返回的profile数据:', data);
+      if (data && data.id) {
+        profile = data;
+        __wx_channels_store__.profile = profile;
+        showFeedDebugInfo('✅ 从服务器获取到视频: ' + (profile.title || profile.id).substring(0, 15));
+        __show_feed_download_options(profile);
       } else {
-        __wx_log({ msg: '❌ 获取当前视频数据超时\n请翻到目标视频后重试' });
+        showFeedDebugInfo('❌ 服务器没有视频数据 - 请先播放视频');
       }
+    })
+    .catch(function(err) {
+      console.error('[feed.js] 获取视频数据失败:', err);
+      showFeedDebugInfo('❌ 获取视频数据失败');
     });
+
     return;
   }
 
+  showFeedDebugInfo('✅ 视频数据已就绪: ' + (profile.title || profile.id).substring(0, 20));
   __show_feed_download_options(profile);
+}
+
+// 在页面上显示调试信息
+function showFeedDebugInfo(msg) {
+  // 创建临时提示元素
+  var existing = document.getElementById('wx-feed-debug-toast');
+  if (existing) existing.remove();
+
+  var toast = document.createElement('div');
+  toast.id = 'wx-feed-debug-toast';
+  toast.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);z-index:99999;background:rgba(0,0,0,0.8);color:#fff;padding:12px 20px;border-radius:8px;font-size:14px;max-width:90%;word-break:break-all;';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+
+  setTimeout(function() {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.5s';
+    setTimeout(function() { toast.remove(); }, 500);
+  }, 3000);
 }
 
 /** Feed页面下载选项菜单 */

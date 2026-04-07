@@ -32,8 +32,76 @@ func (h *CommentHandler) getConfig() *config.Config {
 
 // Handle implements router.Interceptor
 func (h *CommentHandler) Handle(Conn *SunnyNet.HttpConn) bool {
+	// 处理保存评论数据
+	if h.HandleSaveCommentData(Conn) {
+		return true
+	}
+	// 处理保存原始评论API数据
+	if h.HandleSaveRawCommentAPI(Conn) {
+		return true
+	}
+	return false
+}
 
-	return h.HandleSaveCommentData(Conn)
+// HandleSaveRawCommentAPI 处理保存原始评论API数据
+func (h *CommentHandler) HandleSaveRawCommentAPI(Conn *SunnyNet.HttpConn) bool {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/save_raw_comment_api" {
+		return false
+	}
+
+	utils.LogInfo("[原始评论API] 收到保存请求")
+
+	body, err := io.ReadAll(Conn.Request.Body)
+	if err != nil {
+		utils.HandleError(err, "读取原始评论API请求体")
+		return true
+	}
+	defer Conn.Request.Body.Close()
+
+	if len(body) == 0 {
+		utils.Warn("原始评论API请求体为空")
+		return true
+	}
+
+	// 保存原始数据
+	if err := h.saveRawCommentAPIData(body); err != nil {
+		utils.HandleError(err, "保存原始评论API数据")
+	}
+
+	// 返回成功
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	Conn.Response.Body = io.NopCloser(strings.NewReader(`{"success":true}`))
+	return true
+}
+
+// saveRawCommentAPIData 保存原始评论API数据到文件
+func (h *CommentHandler) saveRawCommentAPIData(data []byte) error {
+	// 获取基础目录
+	baseDir, err := utils.GetBaseDir()
+	if err != nil {
+		return fmt.Errorf("获取基础目录失败: %v", err)
+	}
+
+	// 创建原始API数据目录
+	rawDataDir := filepath.Join(baseDir, h.getConfig().DownloadsDir, "comment_data", "raw_api")
+	if err := utils.EnsureDir(rawDataDir); err != nil {
+		return fmt.Errorf("创建原始API数据目录失败: %v", err)
+	}
+
+	// 生成文件名
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	fileName := "raw_comment_api_" + timestamp + ".json"
+	targetPath := filepath.Join(rawDataDir, fileName)
+
+	// 保存文件
+	if err := os.WriteFile(targetPath, data, 0644); err != nil {
+		return fmt.Errorf("保存原始API数据失败: %v", err)
+	}
+
+	utils.LogInfo("[原始评论API] 已保存: %s", fileName)
+	return nil
 }
 
 // HandleSaveCommentData 处理保存评论数据请求
@@ -81,11 +149,17 @@ func (h *CommentHandler) HandleSaveCommentData(Conn *SunnyNet.HttpConn) bool {
 	}
 
 	var requestData struct {
-		Comments             []map[string]interface{} `json:"comments"`
-		VideoID              string                   `json:"videoId"`
-		VideoTitle           string                   `json:"videoTitle"`
-		OriginalCommentCount int                      `json:"originalCommentCount"`
-		Timestamp            int64                    `json:"timestamp"`
+		Comments               []map[string]interface{} `json:"comments"`
+		VideoID                string                   `json:"videoId"`
+		VideoTitle             string                   `json:"videoTitle"`
+		OriginalCommentCount   int                      `json:"originalCommentCount"`
+		Timestamp              int64                    `json:"timestamp"`
+		RawAPIData             map[string]interface{}   `json:"rawApiData"` // 新增：原始API数据
+		// 新增：作者信息
+		AuthorID               string                   `json:"authorId"`
+		AuthorNickname         string                   `json:"authorNickname"`
+		ProfileURL             string                   `json:"profileUrl"`
+		Username              string                   `json:"username"` // 视频号ID
 	}
 
 	body, err := io.ReadAll(Conn.Request.Body)
@@ -113,7 +187,7 @@ func (h *CommentHandler) HandleSaveCommentData(Conn *SunnyNet.HttpConn) bool {
 	}
 
 	// 保存评论数据
-	if err := h.saveCommentData(requestData.Comments, requestData.VideoID, requestData.VideoTitle, requestData.OriginalCommentCount, requestData.Timestamp); err != nil {
+	if err := h.saveCommentData(requestData.Comments, requestData.VideoID, requestData.VideoTitle, requestData.OriginalCommentCount, requestData.Timestamp, requestData.RawAPIData, requestData.AuthorID, requestData.AuthorNickname, requestData.ProfileURL, requestData.Username); err != nil {
 		utils.HandleError(err, "保存评论数据")
 		h.sendErrorResponse(Conn, err)
 		return true
@@ -124,7 +198,7 @@ func (h *CommentHandler) HandleSaveCommentData(Conn *SunnyNet.HttpConn) bool {
 }
 
 // saveCommentData 保存评论数据到文件
-func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, videoID, videoTitle string, originalCommentCount int, timestamp int64) error {
+func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, videoID, videoTitle string, originalCommentCount int, timestamp int64, rawAPIData map[string]interface{}, authorID, authorNickname, profileURL, username string) error {
 	if len(comments) == 0 {
 		return nil
 	}
@@ -177,6 +251,12 @@ func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, vide
 		"originalCommentCount": originalCommentCount,
 		"saved_at":             saveTime.Format(time.RFC3339),
 		"timestamp":            timestamp,
+		"rawApiData":           rawAPIData, // 保存原始API数据
+		// 新增：作者信息
+		"authorId":             authorID,
+		"authorNickname":       authorNickname,
+		"profileUrl":           profileURL,
+		"username":             username, // 视频号ID
 	}
 
 	// 保存JSON数据

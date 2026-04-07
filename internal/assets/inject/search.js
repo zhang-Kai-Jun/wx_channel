@@ -14,12 +14,112 @@ window.__wx_channels_search_collector = {
   _lastProcessTime: 0, // 上次处理时间
   _processDelay: 100, // 处理延迟（毫秒）
 
+  // 滚动加载状态
+  _scrollLoading: false,
+  _scrollCount: 0,
+  _maxScrollCount: 200,
+  _noMoreData: false,
+  _lastFeedCount: 0,
+  _stableCount: 0, // 连续计数不变次数
+  _scrollTimer: null,
+
+  // 滚动状态重置
+  resetScrollState: function () {
+    this._scrollLoading = false;
+    this._scrollCount = 0;
+    this._noMoreData = false;
+    this._lastFeedCount = 0;
+    this._stableCount = 0;
+    if (this._scrollTimer) {
+      clearTimeout(this._scrollTimer);
+      this._scrollTimer = null;
+    }
+  },
+
   // 初始化
   init: function () {
     var self = this;
     setTimeout(function () {
       self.injectToolbarIcon();
     }, 2000);
+    // 自动恢复监听中的任务（搜索页加载后主动查询并恢复）
+    this.checkAndRecoverListeningTasks();
+  },
+
+  // 检查并自动恢复 listening 状态的任务
+  checkAndRecoverListeningTasks: function () {
+    var self = this;
+    var searchParams = new URLSearchParams(window.location.search);
+    var keyword = searchParams.get('q') || '';
+
+    if (!keyword || keyword.length < 2) {
+      return;
+    }
+
+    var baseURL = window.location.origin;
+    var url = baseURL + '/api/v1/tasks/search?keyword=' + encodeURIComponent(keyword);
+
+    console.log('[任务采集] 检查 listening 任务, keyword:', keyword);
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.setRequestHeader('Accept', 'application/json');
+
+    xhr.onload = function () {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          var tasks = JSON.parse(xhr.responseText);
+          console.log('[任务采集] 获取到 listening 任务:', tasks);
+
+          if (tasks && tasks.length > 0) {
+            // 恢复最新的 listening 任务
+            var task = tasks[0];
+            console.log('[任务采集] 自动恢复 listening 任务:', task.task_id);
+            self._recoverTask(task);
+          } else {
+            console.log('[任务采集] 没有找到 listening 任务，不做恢复');
+          }
+        } catch (e) {
+          console.error('[任务采集] 解析 listening 任务响应失败:', e);
+        }
+      } else {
+        console.warn('[任务采集] 查询 listening 任务失败, status:', xhr.status);
+      }
+    };
+
+    xhr.onerror = function () {
+      console.error('[任务采集] 查询 listening 任务网络错误');
+    };
+
+    xhr.send();
+  },
+
+    // 恢复任务（从 listening 状态，等待 start_scroll 指令）
+  _recoverTask: function (task) {
+    console.log('[任务采集] 恢复任务:', task.task_id, '| keyword:', task.keyword, '| target:', task.target_count);
+
+    this._currentTask = {
+      task_id: task.task_id,
+      keyword: task.keyword,
+      target_count: task.target_count || 100,
+      task_type: task.task_type || 'search_keyword_videocontact',
+      start_time: Date.now()
+    };
+
+    // 已有视频数据要恢复
+    if (task.current_count > 0) {
+      console.log('[任务采集] 恢复已有 ' + task.current_count + ' 条视频数据');
+      // TODO: 如果需要恢复视频列表，后端可以返回 video_list
+    }
+
+    this._matchedVideos = [];
+    this._isWatching = true;
+    this._isScrolling = false;
+
+    // 【关键修改】不再自动开始滚动，只初始化状态
+    // 等待后端发送 start_scroll 指令才真正开始滚动
+    // 这是因为 RPA 流程中，watchVideo 可能在页面加载前就触发了
+    // 需要确保滚动指令由外部程序控制
+    console.log('[任务采集] 任务已恢复，正在监听视频，等待 start_scroll 指令...');
   },
 
   // 从API添加搜索结果
@@ -76,6 +176,8 @@ window.__wx_channels_search_collector = {
       var videoCount = this.feeds.filter(function (f) { return f.type === 'media'; }).length;
       var liveCount = this.feeds.filter(function (f) { return f.type === 'live'; }).length;
 
+      // 打印出视频数据
+      // __wx_log({ msg: '视频数据: ' + JSON.stringify(this.feeds[0]) });
       console.log('[搜索] 新增 ' + addedCount + ' 条数据，总计: ' + videoCount + ' 个视频' + (liveCount > 0 ? ', ' + liveCount + ' 个直播' : '') + ' (耗时: ' + elapsed + 'ms)');
 
       // 只在整十数时打印到后台日志
@@ -107,7 +209,39 @@ window.__wx_channels_search_collector = {
       var container = findIconContainer();
       if (!container) return false;
       if (container.querySelector('#wx-search-download-icon')) return true;
+      if (container.querySelector('#wx-search-more-icon')) return true;
 
+      // 获取DOM按钮
+      var domIconWrapper = document.createElement('div');
+      domIconWrapper.id = 'wx-search-dom-icon';
+      domIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
+      domIconWrapper.title = '获取DOM';
+      domIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>';
+
+      domIconWrapper.onclick = function () {
+        try {
+          var pageHTML = document.documentElement.outerHTML;
+          var blob = new Blob([pageHTML], { type: 'text/plain;charset=utf-8' });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          var pageTitle = document.title || 'page';
+          pageTitle = pageTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+          var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+          a.download = pageTitle + '_dom_' + timestamp + '.txt';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          __wx_log({ msg: 'DOM已下载: ' + a.download });
+          console.log('[搜索] DOM已下载:', a.download);
+        } catch (e) {
+          console.error('[搜索] 获取DOM失败:', e);
+          __wx_log({ msg: '获取DOM失败: ' + e.message });
+        }
+      };
+
+      // 下载按钮
       var iconWrapper = document.createElement('div');
       iconWrapper.id = 'wx-search-download-icon';
       iconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
@@ -129,7 +263,20 @@ window.__wx_channels_search_collector = {
         }
       };
 
+      // 获取更多视频按钮
+      var moreIconWrapper = document.createElement('div');
+      moreIconWrapper.id = 'wx-search-more-icon';
+      moreIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
+      moreIconWrapper.title = '获取更多视频';
+      moreIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
+
+      moreIconWrapper.onclick = function () {
+        self.triggerScrollAndCollect();
+      };
+
       container.insertBefore(iconWrapper, container.firstChild);
+      container.insertBefore(moreIconWrapper, container.firstChild);
+      container.insertBefore(domIconWrapper, container.firstChild);
       console.log('[搜索] ✅ 下载图标已注入到工具栏');
       return true;
     };
@@ -140,6 +287,156 @@ window.__wx_channels_search_collector = {
     });
     observer.observe(document.body, { childList: true, subtree: true });
     setTimeout(function () { observer.disconnect(); }, 5000);
+  },
+
+  // 触发滚动加载更多视频
+  triggerScrollAndCollect: function () {
+    var self = this;
+
+    // 如果正在加载中，直接返回
+    if (this._scrollLoading) {
+      __wx_log({ msg: '⏳ 正在加载中，请稍候...' });
+      return;
+    }
+
+    // 找到搜索结果页面的滚动容器
+    var scrollContainer = document.querySelector('[data-v-3932dd4a].search-result-page');
+    if (!scrollContainer) {
+      console.error('[搜索] 未找到滚动容器 .search-result-page');
+      __wx_log({ msg: '❌ 未找到滚动容器' });
+      return;
+    }
+
+    // 重置状态
+    this.resetScrollState();
+    this._scrollLoading = true;
+
+    // 保存初始数量
+    var startCount = this.feeds.length;
+    __wx_log({ msg: '🔄 开始滚动加载，当前已有 ' + startCount + ' 个视频...' });
+    console.log('[搜索] 开始滚动加载，当前已有 ' + startCount + ' 个视频');
+
+    // 更新按钮状态为加载中
+    this._updateMoreButton('loading', 0);
+
+    // 递归滚动函数
+    var scrollOnce = function () {
+      // 如果没有更多标记已设置，不再滚动
+      if (self._noMoreData) {
+        return;
+      }
+
+      // 检查 infinite-scroll-disabled 属性（Vue infinite-scroll 组件设置）
+      var disabled = scrollContainer.getAttribute('infinite-scroll-disabled');
+      var loadingNode = scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]');
+      console.log('[搜索] scroll #' + (self._scrollCount + 1) + ' | disabled: ' + disabled + ' | loading节点: ' + (loadingNode ? '存在' : '不存在'));
+
+      // disabled=true 且没有 loading 节点 → 已无更多
+      if (disabled === 'true' && !loadingNode) {
+        console.log('[搜索] disabled=true 且无loading节点，已无更多数据');
+        self._scrollLoading = false;
+        self._noMoreData = true;
+        __wx_log({ msg: '✅ 已加载完毕，共 ' + self.feeds.length + ' 个视频' });
+        self._updateMoreButton('done', self.feeds.length);
+        return;
+      }
+
+      // 滚动次数超限
+      self._scrollCount++;
+      if (self._scrollCount >= self._maxScrollCount) {
+        console.log('[搜索] 达到最大滚动次数 ' + self._maxScrollCount);
+        self._scrollLoading = false;
+        __wx_log({ msg: '✅ 已累计采集 ' + self.feeds.length + ' 个视频（已达最大滚动次数）' });
+        self._updateMoreButton('done', self.feeds.length);
+        return;
+      }
+
+      // 记录滚动前的数据量
+      var beforeCount = self.feeds.length;
+
+      // 执行滚动：超过容器高度触发 infinite-scroll
+      var scrollHeight = scrollContainer.scrollHeight;
+      scrollContainer.scrollTop = scrollHeight + 600;
+      console.log('[搜索] 滚动后，scrollHeight: ' + scrollHeight + '，当前: ' + beforeCount + ' 个');
+
+      // 轮询等待 loading 节点消失（即本轮数据加载完毕）
+      var pollInterval;
+      var pollCount = 0;
+      var maxPoll = 15; // 最多等待 15 * 1000 = 15秒
+
+      var checkLoaded = function () {
+        pollCount++;
+        var stillLoading = scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]');
+        var afterCount = self.feeds.length;
+        var newFeeds = afterCount - beforeCount;
+
+        console.log('[搜索] 轮询 #' + pollCount + ' | loading: ' + (stillLoading ? '还有' : '已消失') + ' | 新增: ' + newFeeds + ' | 总计: ' + afterCount);
+
+        if (stillLoading) {
+          // loading 还在，继续等
+          if (pollCount < maxPoll) {
+            pollInterval = setTimeout(checkLoaded, 1000);
+          } else {
+            // 等待超时，强制停止
+            console.log('[搜索] 等待 loading 消失超时');
+            self._scrollLoading = false;
+            self._noMoreData = true;
+            __wx_log({ msg: '✅ 已加载 ' + afterCount + ' 个视频（等待超时）' });
+            self._updateMoreButton('done', afterCount);
+          }
+          return;
+        }
+
+        // loading 消失了，检查数据量是否增长
+        if (newFeeds > 0) {
+          // 有新增，继续滚动
+          console.log('[搜索] 新增 ' + newFeeds + ' 个，继续滚动...');
+          setTimeout(scrollOnce, 500);
+        } else {
+          // 没有新增，等 3 秒再确认一次（避免异步数据延迟）
+          console.log('[搜索] 无新增，等待 3 秒确认...');
+          setTimeout(function () {
+            var confirmedCount = self.feeds.length;
+            var confirmedNew = confirmedCount - beforeCount;
+            console.log('[搜索] 确认: 新增 ' + confirmedNew + ' 个，总计: ' + confirmedCount);
+
+            if (confirmedNew > 0) {
+              // 确认有新数据，继续
+              scrollOnce();
+            } else {
+              // 确认无新数据，停止
+              console.log('[搜索] 确认已无更多数据，最终: ' + confirmedCount + ' 个');
+              self._scrollLoading = false;
+              self._noMoreData = true;
+              __wx_log({ msg: '✅ 已加载完毕，共 ' + confirmedCount + ' 个视频' });
+              self._updateMoreButton('done', confirmedCount);
+            }
+          }, 3000);
+        }
+      };
+
+      // 开始轮询
+      pollInterval = setTimeout(checkLoaded, 1000);
+    };
+
+    // 开始第一次滚动
+    scrollOnce();
+  },
+
+  // 更新更多按钮状态
+  _updateMoreButton: function (state, totalCount) {
+    var btn = document.getElementById('wx-search-more-icon');
+    if (!btn) return;
+
+    if (state === 'done') {
+      btn.style.color = '#07c160';
+      btn.title = '已加载完毕，共 ' + totalCount + ' 个视频';
+      btn.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/></svg>';
+    } else if (state === 'loading') {
+      btn.style.color = '#07c160';
+      btn.title = '加载中...';
+      btn.innerHTML = '<svg class="h-full w-full animate-spin" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    }
   },
 
   // 添加搜索UI
@@ -478,6 +775,644 @@ window.__wx_channels_search_collector = {
   }
 };
 
+// ==================== 搜索关键词视频采集任务器 ====================
+window.__wx_channels_search_task_collector = {
+  // 任务状态
+  _currentTask: null,        // 当前任务
+  _matchedVideos: [],        // 匹配到的视频（前端内存，用于防重）
+  _dbConfirmedCount: 0,      // 数据库确认入库的数量（后端返回，用于停止控制）
+  _isWatching: false,        // 是否正在监听视频
+  _isScrolling: false,       // 是否正在滚动加载
+  _scrollTimer: null,        // 滚动定时器
+
+  // 监听视频（创建任务时调用，等待开始滚动）
+  watchVideo: function (taskData) {
+    var self = this;
+
+    // 检查是否是搜索页面
+    if (!is_search_page()) {
+      console.error('[任务采集] 当前不在搜索页面，无法执行任务');
+      self._reportError(taskData.task_id, '当前不在搜索页面');
+      return;
+    }
+
+    // 检查任务数据
+    if (!taskData.keyword || !taskData.task_id) {
+      console.error('[任务采集] 任务数据不完整:', taskData);
+      return;
+    }
+
+    console.log('[任务采集] ★★★ watchVideo 被调用, taskId:', taskData.task_id);
+    console.log('[任务采集] 当前页面:', window.location.href);
+
+    // 重置状态
+    this._currentTask = {
+      task_id: taskData.task_id,
+      keyword: taskData.keyword,
+      target_count: taskData.target_count || 100,
+      task_type: taskData.task_type,
+      start_time: Date.now()
+    };
+    this._matchedVideos = [];
+    this._isWatching = true;
+    this._isScrolling = false; // 【关键修复】重置滚动状态，避免前一个任务中断时 _isScrolling=true 导致新任务无法滚动
+    if (this._scrollTimer) {
+      clearTimeout(this._scrollTimer);
+      this._scrollTimer = null;
+    }
+
+    // 【关键修复】：如果 collector 中已有数据，立即处理所有已有视频
+    // 这是 RPA 流程的关键：进入页面时 WXE.onSearchResultLoaded 已触发了 addSearchResult
+    this._processExistingCollectorFeeds();
+
+    // 通知外部任务已开始
+    this._reportTaskStarted();
+
+    console.log('[任务采集] 任务已创建，正在监听视频，等待开始滚动...');
+  },
+
+  // 处理 collector 中已有的所有视频数据
+  _processExistingCollectorFeeds: function () {
+    var collector = window.__wx_channels_search_collector;
+    if (!collector || !collector.feeds || collector.feeds.length === 0) {
+      console.log('[任务采集] collector 中暂无数据，跳过');
+      return;
+    }
+
+    var existingCount = 0;
+    collector.feeds.forEach(function (feed) {
+      if (feed && feed.type === 'media') {
+        // 检查是否已处理过
+        var alreadyProcessed = this._matchedVideos.some(function (v) { return v.id === feed.id; });
+        if (!alreadyProcessed) {
+          this._matchedVideos.push(feed);
+          existingCount++;
+          // 上报单条数据
+          this._reportVideo(feed);
+        }
+      }
+    }, this);
+
+    if (existingCount > 0) {
+      console.log('[任务采集] 已处理 collector 中已有的 ' + existingCount + ' 个视频，_matchedVideos 共 ' + this._matchedVideos.length + ' 个');
+    }
+  },
+
+  // 开始滚动（监听视频后，外部调用此方法开始滚动）
+  startScroll: function (taskId) {
+    var self = this;
+
+    console.log('[任务采集] ★★★ startScroll 被调用, taskId:', taskId);
+    console.log('[任务采集] 当前 _currentTask:', this._currentTask ? this._currentTask.task_id : 'null');
+    console.log('[任务采集] 当前 _isScrolling:', this._isScrolling);
+    console.log('[任务采集] window.__wx_channels_search_task_collector:', !!window.__wx_channels_search_task_collector);
+
+    // 【修复竞态】：如果任务还未初始化，等待最多 2 秒让 watch_video 先完成
+    var waitCount = 0;
+    var maxWait = 20; // 20 * 100ms = 2秒
+    var waitAndProceed = function () {
+      if (!self._currentTask || self._currentTask.task_id !== taskId) {
+        waitCount++;
+        if (waitCount < maxWait) {
+          setTimeout(waitAndProceed, 100);
+          return;
+        }
+        console.error('[任务采集] 等待 watch_video 超时，任务不存在，无法开始滚动');
+        return;
+      }
+
+      // 任务已就绪，继续执行滚动逻辑
+      self._doStartScroll(taskId);
+    };
+
+    waitAndProceed();
+  },
+
+  // 实际执行滚动（从 waitAndProceed 调用）
+  _doStartScroll: function (taskId) {
+    var self = this;
+
+    console.log('[任务采集] ★★★ _doStartScroll 开始执行, taskId:', taskId);
+    console.log('[任务采集] 当前 _matchedVideos.length:', this._matchedVideos.length);
+    if (this._isScrolling) {
+      console.log('[任务采集] 已在滚动中，先处理已有数据');
+      this._processExistingCollectorFeeds();
+      return;
+    }
+
+    console.log('[任务采集] 开始滚动:', taskId, '| 当前匹配数:', this._matchedVideos.length, '| 目标:', this._currentTask.target_count);
+
+    this._isWatching = false; // 停止监听，开始滚动
+    this._isScrolling = true;
+
+    // 【修复】：先处理 collector 中已有的所有视频（避免漏掉）
+    this._processExistingCollectorFeeds();
+
+    // 查找滚动容器：优先找页面 div 容器，回退到 window
+    var pageContainer = document.querySelector('[data-v-3932dd4a].search-result-page, [class*="search-result"]');
+    if (pageContainer) {
+      console.log('[任务采集] 找到页面滚动容器:', pageContainer.className);
+    } else {
+      console.log('[任务采集] 未找到 div 滚动容器，将使用 window 滚动');
+    }
+
+    // 上报滚动已开始
+    this._sendWebSocketMessage({
+      type: 'task_progress',
+      data: {
+        task_id: taskId,
+        current_count: this._dbConfirmedCount || this._matchedVideos.length,
+        target_count: this._currentTask.target_count,
+        status: 'running'
+      }
+    });
+
+    // 开始自动滚动加载（带重试机制）
+    this._scrollAttempt = 0;
+    this._maxScrollAttempts = 10; // 最多尝试滚动 10 次
+    this._triggerScrollWithTargetCount();
+  },
+
+  // 暂停滚动
+  pauseScroll: function (taskId) {
+    if (!this._currentTask || this._currentTask.task_id !== taskId) {
+      console.log('[任务采集] 任务不存在或ID不匹配，无法暂停');
+      return;
+    }
+
+    console.log('[任务采集] 暂停滚动:', taskId);
+
+    // 停止滚动
+    this._isScrolling = false;
+    if (this._scrollTimer) {
+      clearTimeout(this._scrollTimer);
+      this._scrollTimer = null;
+    }
+
+    // 上报暂停状态
+    this._sendWebSocketMessage({
+      type: 'task_progress',
+      data: {
+        task_id: taskId,
+        current_count: this._dbConfirmedCount || this._matchedVideos.length,
+        target_count: this._currentTask.target_count,
+        status: 'paused'
+      }
+    });
+  },
+
+  // 恢复滚动
+  resumeScroll: function (taskId) {
+    var self = this;
+
+    if (!this._currentTask || this._currentTask.task_id !== taskId) {
+      console.log('[任务采集] 任务不存在或ID不匹配，无法恢复');
+      return;
+    }
+
+    console.log('[任务采集] 恢复滚动:', taskId);
+
+    // 重新开始滚动
+    if (!this._isScrolling) {
+      this._isScrolling = true;
+      this._triggerScrollWithTargetCount();
+    }
+
+    // 上报恢复状态
+    this._sendWebSocketMessage({
+      type: 'task_progress',
+      data: {
+        task_id: taskId,
+        current_count: this._dbConfirmedCount || this._matchedVideos.length,
+        target_count: this._currentTask.target_count,
+        status: 'running'
+      }
+    });
+  },
+
+  // 停止任务
+  stopTask: function (taskId) {
+    if (!this._currentTask || this._currentTask.task_id !== taskId) {
+      console.log('[任务采集] 任务不存在或ID不匹配，无法停止');
+      return;
+    }
+
+    console.log('[任务采集] 停止任务:', taskId);
+
+    // 停止监听和滚动
+    this._isWatching = false;
+    this._isScrolling = false;
+    if (this._scrollTimer) {
+      clearTimeout(this._scrollTimer);
+      this._scrollTimer = null;
+    }
+
+    // 上报任务被停止
+    this._sendWebSocketMessage({
+      type: 'task_complete',
+      data: {
+        task_id: taskId,
+        current_count: this._dbConfirmedCount || this._matchedVideos.length,
+        target_count: this._currentTask.target_count,
+        status: 'stopped'
+      }
+    });
+
+    // 清理任务状态
+    this._currentTask = null;
+    this._matchedVideos = [];
+    this._dbConfirmedCount = 0;
+  },
+
+  // 带目标数量的滚动加载
+  // 参考 triggerScrollAndCollect 的成功逻辑：必须先滚动，再检查
+  _triggerScrollWithTargetCount: function () {
+    var self = this;
+
+    // 【安全检查】如果任务不存在，直接返回
+    if (!this._currentTask) {
+      console.log('[任务采集] 任务已失效，停止滚动');
+      this._isScrolling = false;
+      return;
+    }
+
+    var currentCount = this._dbConfirmedCount || this._matchedVideos.length;
+    var targetCount = this._currentTask ? this._currentTask.target_count : 0;
+
+    console.log('[任务采集] [_triggerScrollWithTargetCount] 当前:', currentCount, '| 目标:', targetCount);
+
+    // 清除之前的定时器
+    if (this._scrollTimer) {
+      clearTimeout(this._scrollTimer);
+      this._scrollTimer = null;
+    }
+
+    // 【关键修改】如果已达到目标数量，立即完成，不滚动
+    if (currentCount >= targetCount) {
+      console.log('[任务采集] 已达到目标数量 ' + targetCount + '，停止加载');
+      this._isScrolling = false;
+      this._reportTaskComplete('completed');
+      return;
+    }
+
+    // ===== 找到滚动容器（与 triggerScrollAndCollect 完全一致的选择器）=====
+    var scrollContainer = document.querySelector('[data-v-3932dd4a].search-result-page');
+    if (!scrollContainer) {
+      console.log('[任务采集] 未找到精确滚动容器 [data-v-3932dd4a].search-result-page，尝试备用选择器');
+      scrollContainer = document.querySelector('[class*="search-result"]');
+    }
+    if (!scrollContainer) {
+      console.log('[任务采集] 未找到任何滚动容器，改用 window 滚动');
+      scrollContainer = null;
+    } else {
+      console.log('[任务采集] ★★★ 找到滚动容器:', scrollContainer.tagName, scrollContainer.className);
+      console.log('[任务采集] 滚动容器属性: scrollHeight=' + scrollContainer.scrollHeight + ', scrollTop=' + scrollContainer.scrollTop + ', clientHeight=' + scrollContainer.clientHeight + ', offsetHeight=' + scrollContainer.offsetHeight);
+    }
+
+    // ===== 每次滚动前，先检查是否已标记"无更多"（仅用于提前退出）=====
+    if (scrollContainer) {
+      var disabled = scrollContainer.getAttribute('infinite-scroll-disabled');
+      console.log('[任务采集] 滚动前检查: infinite-scroll-disabled=' + disabled);
+      var alreadyNoMore = (disabled === 'true' && !scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]'));
+      if (alreadyNoMore) {
+        console.log('[任务采集] 已标记无更多数据（infinite-scroll-disabled=true），停止');
+        this._isScrolling = false;
+        this._reportTaskComplete('insufficient_data');
+        return;
+      }
+    }
+
+    // 记录滚动前的数量（用于判断是否有新增）
+    var beforeCount = this._matchedVideos.length;
+
+    // ===== 执行滚动（参考 triggerScrollAndCollect：使用 scrollHeight + 600 超过容器高度）=====
+    if (scrollContainer) {
+      var beforeScrollTop = scrollContainer.scrollTop;
+      var beforeScrollHeight = scrollContainer.scrollHeight;
+      var beforeClientHeight = scrollContainer.clientHeight;
+      // 设置 scrollTop 超过 clientHeight，触发 infinite-scroll
+      var targetScrollTop = beforeScrollHeight + 600;
+      scrollContainer.scrollTop = targetScrollTop;
+      console.log('[任务采集] ★★★ 执行 div 滚动: [scroll#' + (this._scrollAttempt + 1) + '] scrollHeight=' + beforeScrollHeight + ' + 600 = ' + targetScrollTop + '（容器高度=' + beforeClientHeight + '，原scrollTop=' + beforeScrollTop + '）');
+    } else {
+      var beforeDocHeight = document.documentElement.scrollHeight;
+      window.scrollTo({ top: beforeDocHeight + 600, behavior: 'auto' });
+      console.log('[任务采集] ★★★ 执行 window 滚动: [scroll#' + (this._scrollAttempt + 1) + '] docHeight=' + beforeDocHeight + ' + 600 = ' + (beforeDocHeight + 600));
+    }
+
+    // ===== 轮询等待本轮数据加载完毕（参考 triggerScrollAndCollect）=====
+    var pollCount = 0;
+    var maxPoll = 15; // 最多等待 15 秒
+    var scrollAttempt = this._scrollAttempt || 0;
+
+    var checkLoaded = function () {
+      pollCount++;
+
+      // 【重要】每次轮询时重新查找 loading 节点（避免引用过期）
+      var loadingNode = scrollContainer ? scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]') : null;
+      var stillLoading = !!loadingNode;
+
+      // 同步 collector 中的新数据
+      var collectorBefore = self._matchedVideos.length;
+      self._syncCollectorFeeds();
+      var collectorNew = self._matchedVideos.length - collectorBefore;
+
+      var afterMatched = self._matchedVideos.length;
+      var newMatched = afterMatched - beforeCount;
+
+      console.log('[任务采集] 轮询 #' + pollCount + ' | loading: ' + (stillLoading ? '还有' : '已消失') + ' | collector新增: ' + collectorNew + ' | 本轮新增: ' + newMatched + ' | 总计: ' + afterMatched);
+
+      // 上报进度
+      self._reportProgress(afterMatched);
+
+      // 【提前完成检查】达到目标就停止
+      if (afterMatched >= targetCount) {
+        console.log('[任务采集] 已达到目标数量 ' + targetCount + '，停止加载');
+        self._isScrolling = false;
+        self._scrollTimer = null;
+        self._reportTaskComplete('completed');
+        return;
+      }
+
+      // loading 还在，继续等
+      if (stillLoading) {
+        if (pollCount < maxPoll) {
+          self._scrollTimer = setTimeout(checkLoaded, 1000);
+        } else {
+          console.log('[任务采集] 等待 loading 消失超时（15秒）');
+          self._isScrolling = false;
+          self._scrollTimer = null;
+          self._reportTaskComplete('timeout');
+        }
+        return;
+      }
+
+      // ===== loading 已消失，分析是否有新数据 =====
+
+      // 有新增数据 → 继续滚动
+      if (newMatched > 0) {
+        self._scrollAttempt = 0; // 重置重试计数
+        console.log('[任务采集] 有新增 ' + newMatched + ' 个，继续滚动...');
+        self._scrollTimer = setTimeout(function () {
+          self._triggerScrollWithTargetCount();
+        }, 500);
+        return;
+      }
+
+      // 无新增 → 重试机制（最多 3 次）
+      scrollAttempt++;
+      self._scrollAttempt = scrollAttempt;
+
+      if (scrollAttempt <= 3) {
+        console.log('[任务采集] 无新增，第 ' + scrollAttempt + ' 次重试...');
+        self._scrollTimer = setTimeout(function () {
+          self._triggerScrollWithTargetCount();
+        }, scrollAttempt * 1000);
+        return;
+      }
+
+      // 3 次重试都无新增 → 等待 3 秒最终确认（参考 triggerScrollAndCollect）
+      console.log('[任务采集] 3 次重试无新增，等待 3 秒最终确认...');
+      setTimeout(function () {
+        var confirmedCount = self._matchedVideos.length;
+        var confirmedNew = confirmedCount - beforeCount;
+        console.log('[任务采集] 最终确认: 新增 ' + confirmedNew + ' 个，总计: ' + confirmedCount);
+
+        if (confirmedNew > 0) {
+          // 确认有新数据 → 继续
+          self._scrollAttempt = 0;
+          self._scrollTimer = setTimeout(function () {
+            self._triggerScrollWithTargetCount();
+          }, 500);
+        } else {
+          // 确认无更多数据 → 停止
+          console.log('[任务采集] 最终确认已无更多数据，停止（总计: ' + confirmedCount + '）');
+          self._isScrolling = false;
+          self._scrollTimer = null;
+          if (confirmedCount < targetCount) {
+            self._reportTaskComplete('insufficient_data');
+          } else {
+            self._reportTaskComplete('completed');
+          }
+        }
+      }, 3000);
+    };
+
+    // 开始轮询
+    self._scrollTimer = setTimeout(checkLoaded, 1000);
+  },
+
+  // 同步 collector 中的新视频到 _matchedVideos（轮询时调用）
+  _syncCollectorFeeds: function () {
+    var collector = window.__wx_channels_search_collector;
+    if (!collector || !collector.feeds || collector.feeds.length === 0) return;
+
+    var newCount = 0;
+    collector.feeds.forEach(function (feed) {
+      // 只处理视频类型，且必须有 id（用于防重）
+      if (!feed || feed.type !== 'media' || !feed.id) return;
+      var alreadyProcessed = this._matchedVideos.some(function (v) { return v.id === feed.id; });
+      if (!alreadyProcessed) {
+        this._matchedVideos.push(feed);
+        newCount++;
+        this._reportVideo(feed);
+      }
+    }, this);
+
+    if (newCount > 0) {
+      console.log('[任务采集] 同步 collector 新视频: ' + newCount + ' 个, 共 ' + this._matchedVideos.length + ' 个');
+    }
+  },
+
+  // 处理新视频数据
+  _handleNewVideo: function (feed) {
+    var self = this;
+
+    // 如果还没有开始任务，跳过
+    if (!this._currentTask) {
+      return;
+    }
+
+    // 【防重检查】确保视频有 id，且未在 _matchedVideos 中出现过
+    if (!feed || !feed.id) {
+      console.warn('[任务采集] 跳过无 id 的视频:', feed ? feed.title : 'unknown');
+      return;
+    }
+    var alreadyMatched = this._matchedVideos.some(function (v) { return v.id === feed.id; });
+    if (alreadyMatched) {
+      return; // 已存在，不重复处理
+    }
+
+    // 检查是否匹配关键词
+    if (this._isKeywordMatched(feed)) {
+      console.log('[任务采集] 匹配到视频:', feed.title || feed.id);
+
+      // 添加到匹配列表
+      this._matchedVideos.push(feed);
+
+      // 上报单条数据
+      this._reportVideo(feed);
+
+      // 检查是否已达到目标
+      if (this._matchedVideos.length >= this._currentTask.target_count) {
+        console.log('[任务采集] 已达到目标数量 ' + this._currentTask.target_count);
+        this._isScrolling = false;
+        this._reportTaskComplete('completed');
+      }
+    }
+  },
+
+  // 关键词匹配判断
+  _isKeywordMatched: function (feed) {
+    if (!this._currentTask || !this._currentTask.keyword) {
+      return false;
+    }
+
+    var keyword = this._currentTask.keyword.toLowerCase();
+
+    // 检查标题
+    if (feed.title && feed.title.toLowerCase().indexOf(keyword) !== -1) {
+      return true;
+    }
+
+    // 检查昵称
+    if (feed.nickname && feed.nickname.toLowerCase().indexOf(keyword) !== -1) {
+      return true;
+    }
+
+    // 检查作者
+    if (feed.author && feed.author.toLowerCase().indexOf(keyword) !== -1) {
+      return true;
+    }
+
+    return false;
+  },
+
+  // 上报任务开始
+  _reportTaskStarted: function () {
+    if (!this._currentTask) return;
+
+    this._sendWebSocketMessage({
+      type: 'task_started',
+      data: {
+        task_id: this._currentTask.task_id,
+        keyword: this._currentTask.keyword,
+        target_count: this._currentTask.target_count,
+        status: 'listening'
+      }
+    });
+  },
+
+  // 上报进度
+  _reportProgress: function (currentCount) {
+    if (!this._currentTask) return;
+
+    this._sendWebSocketMessage({
+      type: 'task_progress',
+      data: {
+        task_id: this._currentTask.task_id,
+        current_count: currentCount,
+        target_count: this._currentTask.target_count,
+        status: 'running'
+      }
+    });
+  },
+
+  // 上报单条视频
+  _reportVideo: function (feed) {
+    if (!this._currentTask) return;
+
+    this._sendWebSocketMessage({
+      type: 'task_video',
+      data: {
+        task_id: this._currentTask.task_id,
+        video: feed
+      }
+    });
+  },
+
+  // 接收后端广播的进度/完成消息（入库数量由数据库确认）
+  _onBackendMessage: function (msg) {
+    if (!this._currentTask) return;
+
+    var taskID = msg.data && msg.data.task_id;
+    if (taskID !== this._currentTask.task_id) return;
+
+    if (msg.type === 'task_progress') {
+      var dbCount = msg.data.current_count;
+      if (typeof dbCount === 'number') {
+        this._dbConfirmedCount = dbCount;
+      }
+    } else if (msg.type === 'task_complete') {
+      this._dbConfirmedCount = msg.data.current_count || this._dbConfirmedCount;
+    }
+  },
+
+  // 上报任务完成（不包含视频列表，由调用方自行查询）
+  _reportTaskComplete: function (status) {
+    if (!this._currentTask) return;
+
+    console.log('[任务采集] 任务完成, status:', status, 'count:', this._matchedVideos.length);
+
+    this._sendWebSocketMessage({
+      type: 'task_complete',
+      data: {
+        task_id: this._currentTask.task_id,
+        current_count: this._dbConfirmedCount || this._matchedVideos.length,
+        target_count: this._currentTask.target_count,
+        status: status
+      }
+    });
+
+    // 清理任务状态
+    this._currentTask = null;
+    this._matchedVideos = [];
+    this._dbConfirmedCount = 0;
+    this._isWatching = false;
+    this._isScrolling = false;
+    if (this._scrollTimer) {
+      clearTimeout(this._scrollTimer);
+      this._scrollTimer = null;
+    }
+  },
+
+  // 上报错误
+  _reportError: function (taskId, message) {
+    this._sendWebSocketMessage({
+      type: 'task_error',
+      data: {
+        task_id: taskId,
+        message: message
+      }
+    });
+  },
+
+  // 发送 WebSocket 消息
+  _sendWebSocketMessage: function (msg) {
+    if (window.__wx_api_client && window.__wx_api_client.connected) {
+      try {
+        window.__wx_api_client.ws.send(JSON.stringify(msg));
+        console.log('[任务采集] 发送消息:', msg.type);
+      } catch (e) {
+        console.error('[任务采集] 发送消息失败:', e);
+      }
+    } else {
+      console.warn('[任务采集] WebSocket 未连接，无法发送消息');
+    }
+  },
+
+  // 获取当前任务状态
+  getStatus: function () {
+    return {
+      hasTask: !!this._currentTask,
+      task: this._currentTask,
+      matchedCount: this._matchedVideos.length,
+      isWatching: this._isWatching,
+      isScrolling: this._isScrolling
+    };
+  }
+};
+
 // ==================== 事件监听 ====================
 
 // 确保事件监听器只注册一次
@@ -497,16 +1432,45 @@ if (!window.__wx_search_event_registered) {
       return;
     }
 
-    console.log('[搜索] 收到搜索结果 - feeds:', data.feeds ? data.feeds.length : 0);
+    console.log('[搜索] ★★★ onSearchResultLoaded, feeds:', (data.feeds || data.objectList || []).length);
+    console.log('[搜索] ★★★ 原始数据 keys:', Object.keys(data));
 
+    // 添加到常规采集器
     window.__wx_channels_search_collector.addSearchResult(data);
+
+    // 如果有任务在运行，处理新数据
+    if (window.__wx_channels_search_task_collector._currentTask) {
+      var feeds = data.feeds || [];
+      var taskCollector = window.__wx_channels_search_task_collector;
+      feeds.forEach(function (feed) {
+        var formatted = WXU.format_feed(feed);
+        if (formatted && formatted.type === 'media') {
+          taskCollector._handleNewVideo(formatted);
+        } else {
+          console.log('[搜索] format_feed跳过: id=', feed.id, '| mediaType=', feed.objectDesc ? feed.objectDesc.mediaType : '无');
+        }
+      });
+    }
   });
 }
 
 // ==================== 初始化 ====================
 
 function is_search_page() {
-  return window.location.pathname.includes('/pages/s');
+  var path = window.location.pathname || '';
+  // 微信搜一搜页面路径特征
+  if (!path.includes('/pages/s')) {
+    return false;
+  }
+  // 额外验证：确保 URL 中包含 q= 参数（搜索关键词参数）
+  // 排除掉 q= 空值或只有占位符的情况
+  var searchParams = new URLSearchParams(window.location.search);
+  var q = searchParams.get('q') || '';
+  // 如果 q 参数为空或只有纯数字/英文短词（可能是测试数据），也认为不在有效搜索状态
+  if (!q || q.length < 2) {
+    return false;
+  }
+  return true;
 }
 
 if (is_search_page()) {

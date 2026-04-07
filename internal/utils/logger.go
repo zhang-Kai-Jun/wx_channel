@@ -34,6 +34,70 @@ type Logger struct {
 	fileLogger zerolog.Logger
 	file       *os.File
 	minLevel   LogLevel
+
+	// 异步 stdout 写入器，解决 Windows 控制台缓冲区满时 WriteFile 阻塞导致 goroutine 卡死的问题
+	asyncStdout *asyncStdoutWriter
+}
+
+// asyncStdoutWriter 异步写 stdout，写入方永远不阻塞。
+//
+// zerolog ConsoleWriter.Write() 接收完整一行（已含 \n），调用 buf.WriteTo(w.Out)。
+// 若 w.Out.Write() 阻塞 goroutine，ConsoleWriter.Write() 卡在 buf.WriteTo() 里，
+// MultiLevelWriter.mu 不释放，导致所有日志 goroutine 全被 mutex 堵死。
+//
+// 解决：Write() 永远不走阻塞 send。只尝试一次 non-blocking send；
+// channel 满则直接写 stdout（临时慢速由 writeLoop 独自承担）。
+// goroutine 毫秒级退出，MultiLevelWriter.mu 迅速释放。
+type asyncStdoutWriter struct {
+	out  *os.File
+	ch   chan []byte
+	done chan struct{}
+}
+
+func newAsyncStdoutWriter(bufSize int) *asyncStdoutWriter {
+	w := &asyncStdoutWriter{
+		out:  os.Stdout,
+		ch:   make(chan []byte, bufSize),
+		done: make(chan struct{}),
+	}
+	go w.writeLoop()
+	return w
+}
+
+// Write 接收 ConsoleWriter 传来的一整行，非阻塞写出，永远不卡住调用方。
+func (w *asyncStdoutWriter) Write(p []byte) (n int, err error) {
+	select {
+	case w.ch <- p:
+	case <-w.done:
+		os.Stdout.Write(p)
+	default:
+		// channel 满了直接写 stdout，不等待
+		os.Stdout.Write(p)
+	}
+	return len(p), nil
+}
+
+func (w *asyncStdoutWriter) writeLoop() {
+	for {
+		select {
+		case p := <-w.ch:
+			if len(p) > 0 {
+				os.Stdout.Write(p)
+			}
+		case <-w.done:
+			for len(w.ch) > 0 {
+				p := <-w.ch
+				if len(p) > 0 {
+					os.Stdout.Write(p)
+				}
+			}
+			return
+		}
+	}
+}
+
+func (w *asyncStdoutWriter) Close() {
+	close(w.done)
 }
 
 // InitLoggerWithRotation 初始化带日志轮转的日志系统
@@ -61,33 +125,10 @@ func InitLoggerWithRotation(level LogLevel, logFile string, maxSizeMB int) error
 	}
 
 	// 配置 zerolog
-	// 文件输出 JSON (或普通文本，这里为了现代化建议用 JSON，但为了人类可读性，zerolog file 一般也推荐 ConsoleWriter 也可以，或者纯 JSON)
-	// 如果用户想要 "现代化"，JSON 是更好的机器可读格式。但为了兼容原有 "cat log" 的体验，可能 ConsoleWriter (无颜色) 更好？
-	// 让我们同时输出到控制台(带颜色)和文件(JSON 或 纯文本)。
-	// 以前的逻辑是：只写入文件，不写入控制台（控制台由 Info/Warn/Error 函数负责? 不，原代码 consoleLog 也是 log.New(os.Stdout...)）
-	// 原代码：defaultLogger.logger 写入 file, defaultLogger.consoleLog 写入 stdout.
-
-	// Zerolog MultiLevelWriter
-	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "2006-01-02 15:04:05"}
-	// fileWriter := file // 文件里存 JSON，方便分析？或者也存文本？
-	// 为了方便查看，文件里我们也暂时用 ConsoleWriter (no color) 或者是纯 JSON。
-	// 通常生产环境文件存 JSON。但这是一个客户端工具，由用户直接看日志，可能文本更好。
-	// 让我们让文件也存文本格式，或者 JSON。
-	// 考虑到 gap analysis 说 "Standardize error handling" 和 "Modernization", JSON is safer.
-	// 但是用户之前的日志是文本的。
-	// 让我们用 zerolog 的 ConsoleWriter 但去除颜色写入文件，这样格式好看。
-
-	// fileOutput := zerolog.ConsoleWriter{Out: file, TimeFormat: "2006-01-02 15:04:05", NoColor: true}
-	// 为了更好的机器可读性和标准实践，文件输出应使用普通 JSON
-	// 但为了匹配之前的行为（纯文本），让我们使用不带颜色的 ConsoleWriter
+	// 主 logger 只写文件（同步），stdout 走异步 writer（不阻塞主 goroutine）
 	fileOutput := zerolog.ConsoleWriter{Out: file, TimeFormat: "2006-01-02 15:04:05", NoColor: true}
 
-	multi := zerolog.MultiLevelWriter(consoleWriter, fileOutput)
-
-	zLog := zerolog.New(multi).With().Timestamp().Logger()
-	fLog := zerolog.New(fileOutput).With().Timestamp().Logger()
-
-	// 设置级别
+	// 设置日志级别
 	var zLevel zerolog.Level
 	switch level {
 	case DEBUG:
@@ -103,11 +144,19 @@ func InitLoggerWithRotation(level LogLevel, logFile string, maxSizeMB int) error
 	}
 	zerolog.SetGlobalLevel(zLevel)
 
+	// stdout 通过异步 channel 写出，解决 Windows 控制台缓冲区满时 WriteFile 阻塞问题
+	asyncOut := newAsyncStdoutWriter(2048)
+	stdoutWriter := zerolog.ConsoleWriter{Out: asyncOut, TimeFormat: "2006-01-02 15:04:05"}
+	// 主 logger 同时写文件和异步 stdout
+	zLog := zerolog.New(zerolog.MultiLevelWriter(fileOutput, stdoutWriter)).With().Timestamp().Logger()
+	fLog := zerolog.New(fileOutput).With().Timestamp().Logger()
+
 	defaultLogger = &Logger{
-		file:       file,
-		zLogger:    zLog,
-		fileLogger: fLog,
-		minLevel:   level,
+		file:        file,
+		zLogger:     zLog,
+		fileLogger:  fLog,
+		minLevel:    level,
+		asyncStdout: asyncOut,
 	}
 
 	// 同时替换全局 log，以防甚至第三方库用 log.Print
@@ -171,6 +220,9 @@ func (l *Logger) Error(format string, args ...interface{}) {
 func (l *Logger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.asyncStdout != nil {
+		l.asyncStdout.Close()
+	}
 	if l.file != nil {
 		return l.file.Close()
 	}

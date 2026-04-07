@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -70,10 +71,19 @@ func (h *APIHandler) HandleProfile(Conn *SunnyNet.HttpConn) bool {
 
 	err = json.Unmarshal(body, &data)
 	if err != nil {
-		utils.HandleError(err, "解析profile JSON数据")
+		// 忽略空body的情况（可能是探测请求）
+		if len(body) == 0 {
+			utils.LogWarn("[Profile API] 请求体为空，忽略")
+		} else {
+			utils.HandleError(err, "解析profile JSON数据")
+		}
 		h.sendErrorResponse(Conn, err)
 		return true
 	}
+
+	// 保存到全局变量
+	h.currentProfile = data
+	utils.LogInfo("[Profile API] 已缓存视频profile: %v", data["title"])
 
 	// 处理视频数据
 	h.processVideoData(data)
@@ -83,11 +93,42 @@ func (h *APIHandler) HandleProfile(Conn *SunnyNet.HttpConn) bool {
 	return true
 }
 
+// HandleGetCurrentProfile 获取当前缓存的视频profile
+func (h *APIHandler) HandleGetCurrentProfile(Conn *SunnyNet.HttpConn) bool {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/get_current_profile" {
+		return false
+	}
+	utils.LogInfo("[GetCurrentProfile API] 收到请求")
+
+	if h.currentProfile == nil {
+		// 返回空对象
+		responseJSON, _ := json.Marshal(map[string]interface{}{})
+		Conn.Response.Header.Set("Content-Type", "application/json")
+		Conn.Response.Body = io.NopCloser(bytes.NewBuffer(responseJSON))
+		return true
+	}
+
+	// 返回缓存的profile
+	responseJSON, err := json.Marshal(h.currentProfile)
+	if err != nil {
+		utils.HandleError(err, "序列化profile数据")
+		h.sendEmptyResponse(Conn)
+		return true
+	}
+
+	Conn.Response.Header.Set("Content-Type", "application/json")
+	Conn.Response.Body = io.NopCloser(bytes.NewBuffer(responseJSON))
+	return true
+}
+
 // processVideoData 处理视频数据并显示
 func (h *APIHandler) processVideoData(data map[string]interface{}) {
 	// 打印提醒
 	utils.Info("💡 [提醒] 视频已成功播放")
-	utils.Info("💡 [提醒] 可以在「更多」菜单中下载视频啦！")
+	// data转为string 字符串并打印
+	// jsonData, _ := json.Marshal(data)
+	// utils.Info("💡 [提醒] data: %s", string(jsonData))
 
 	// 记录视频信息到日志文件
 	videoID := ""
@@ -155,7 +196,7 @@ func (h *APIHandler) processVideoData(data map[string]interface{}) {
 	// 提取分辨率信息：优先从media直接获取宽x高格式
 	resolution := ""
 	fileFormat := "" // 视频格式标识（如 xWT128, xWT111）
-	
+
 	// 前端发送的media是单个对象，不是数组
 	if mediaItem, ok := data["media"].(map[string]interface{}); ok {
 		// 从media直接获取width和height
@@ -170,7 +211,7 @@ func (h *APIHandler) processVideoData(data map[string]interface{}) {
 			resolution = fmt.Sprintf("%dx%d", width, height)
 			utils.LogInfo("[分辨率] 从media获取: %s", resolution)
 		}
-		
+
 		// 从spec中提取fileFormat和分辨率
 		if spec, ok := mediaItem["spec"].([]interface{}); ok && len(spec) > 0 {
 			// 遍历spec数组，找到最高质量的格式（通常是第一个或最后一个）
@@ -181,7 +222,7 @@ func (h *APIHandler) processVideoData(data map[string]interface{}) {
 						fileFormat = format
 						utils.LogInfo("[视频格式] 从spec获取: %s", fileFormat)
 					}
-					
+
 					// 如果还没有分辨率，从spec中提取
 					if resolution == "" {
 						if w, ok := specItem["width"].(float64); ok {
@@ -191,7 +232,7 @@ func (h *APIHandler) processVideoData(data map[string]interface{}) {
 							}
 						}
 					}
-					
+
 					// 如果已经找到fileFormat，优先使用第一个（通常是最高质量）
 					if fileFormat != "" {
 						break
@@ -200,7 +241,7 @@ func (h *APIHandler) processVideoData(data map[string]interface{}) {
 			}
 		}
 	}
-	
+
 	if resolution == "" {
 		utils.LogInfo("[分辨率] 未能获取分辨率信息")
 	}

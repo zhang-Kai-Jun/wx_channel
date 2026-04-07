@@ -13,8 +13,9 @@ import (
 
 // APIHandler API请求处理器
 type APIHandler struct {
-	cfg        *config.Config
-	currentURL string
+	cfg            *config.Config
+	currentURL     string
+	currentProfile map[string]interface{} // 存储当前视频的profile
 }
 
 // NewAPIHandler 创建API处理器
@@ -62,6 +63,9 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 	}
 
 	if h.HandleProfile(Conn) {
+		return true
+	}
+	if h.HandleGetCurrentProfile(Conn) {
 		return true
 	}
 	if h.HandleTip(Conn) {

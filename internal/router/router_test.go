@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"wx_channel/internal/config"
+	"wx_channel/internal/database"
 	"wx_channel/internal/websocket"
 
 	"github.com/qtgolang/SunnyNet/SunnyNet"
@@ -19,7 +20,8 @@ func newTestRouter() *APIRouter {
 		Port:           2025,
 		AllowedOrigins: []string{"*"},
 	}
-	hub := websocket.NewHub()
+	taskService := database.NewSearchTaskService()
+	hub := websocket.NewHub(taskService)
 	sunny := SunnyNet.NewSunny()
 
 	// Create router with nil dependencies where possible or mocked ones

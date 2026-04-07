@@ -18,7 +18,7 @@ func setupTestDB(t *testing.T) func() {
 	dbPath := filepath.Join(tmpDir, "test.db")
 
 	// 直接打开数据库进行测试（绕过 once）
-	testDB, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_journal_mode=WAL")
+	testDB, err := sql.Open("sqlite", dbPath+"?_foreign_keys=on&_journal_mode=WAL")
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("Failed to open database: %v", err)

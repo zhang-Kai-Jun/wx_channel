@@ -243,32 +243,32 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 	case "/web/pages/home":
 		// Home页面：新版部分链接会渲染成详情页模式，因此同时注入评论采集脚本
 		pageSpecificScripts = h.getVideoCacheNotificationScript() + h.getCommentCaptureScript()
-		utils.LogFileInfo("[脚本注入] Home页面 - 注入视频缓存监控和评论采集脚本")
+		utils.LogFileInfo("[脚本] Home页面 - 注入视频缓存监控和评论采集脚本")
 
 	case "/web/pages/profile":
 		// Profile页面（视频列表）：不需要特定脚本
 		pageSpecificScripts = ""
-		utils.LogFileInfo("[脚本注入] Profile页面 - 仅注入基础脚本")
+		utils.LogFileInfo("[脚本] Profile页面 - 仅注入基础脚本")
 
 	case "/web/pages/account/like":
 		// 赞过页面会加载被全局改写的公共 bundle，需要基础脚本环境避免 WXU/WXE 未定义
 		pageSpecificScripts = ""
-		utils.LogFileInfo("[脚本注入] Account Like页面 - 注入基础脚本以兼容公共 JS 事件")
+		utils.LogFileInfo("[脚本] Account Like页面 - 注入基础脚本以兼容公共 JS 事件")
 
 	case "/web/pages/feed":
 		// Feed页面（视频详情）：注入视频缓存监控和评论采集脚本
 		pageSpecificScripts = h.getVideoCacheNotificationScript() + h.getCommentCaptureScript()
-		utils.LogFileInfo("[脚本注入] Feed页面 - 注入视频缓存监控和评论采集脚本")
+		utils.LogFileInfo("[脚本] Feed页面 - 注入视频缓存监控和评论采集脚本")
 
 	case "/web/pages/s":
 		// 搜索页面：注入搜索模块
 		pageSpecificScripts = searchScript
-		utils.LogInfo("[脚本注入] 搜索页面 - 注入搜索模块（事件系统）")
+		utils.LogInfo("[脚本] 搜索页面 - 注入搜索模块（事件系统）")
 
 	default:
 		// 其他页面：不注入页面特定脚本
 		pageSpecificScripts = ""
-		utils.LogInfo("[脚本注入] 其他页面 - 仅注入基础脚本")
+		utils.LogInfo("[脚本] 其他页面 - 仅注入基础脚本")
 	}
 
 	// 初始化脚本（延迟执行）
@@ -2449,7 +2449,7 @@ func (h *ScriptHandler) getLogPanelScript() string {
 	if h.getConfig().ShowLogButton {
 		showLogButton = "true"
 	}
-	
+
 	// 根据配置决定是否拦截日志（默认禁用以节省内存）
 	enableLogInterception := "false"
 	if h.getConfig().EnableLogInterception {

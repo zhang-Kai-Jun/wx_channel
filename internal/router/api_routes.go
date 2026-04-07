@@ -25,6 +25,7 @@ type APIRouter struct {
 	certificateService *api.CertificateService
 	versionService     *api.VersionAPI
 	radarAPI           *api.RadarServiceAPI
+	taskAPI            *api.TaskAPI
 	allowedOrigins     []string
 	secretToken        string
 }
@@ -66,6 +67,7 @@ func NewAPIRouter(cfg *config.Config, hub *websocket.Hub, sunny *SunnyNet.Sunny)
 		certificateService: api.NewCertificateService(sunny),
 		versionService:     api.NewVersionAPI(),
 		radarAPI:           api.NewRadarServiceAPI(),
+		taskAPI:            api.NewTaskAPI(hub),
 		allowedOrigins:     cfg.AllowedOrigins,
 		secretToken:        cfg.SecretToken,
 	}
@@ -143,6 +145,9 @@ func (r *APIRouter) registerRoutes() {
 
 	// Radar API
 	r.radarAPI.RegisterRoutes(r.mux)
+
+	// Task API - 搜索任务管理
+	r.taskAPI.RegisterRoutes(r.mux)
 }
 
 // Handler 返回带中间件的 HTTP Handler

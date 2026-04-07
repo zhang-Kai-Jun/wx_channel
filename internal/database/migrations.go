@@ -1,7 +1,9 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // Migration 表示数据库迁移
@@ -283,6 +285,281 @@ CREATE INDEX IF NOT EXISTS idx_radar_logs_check_time ON radar_logs(check_time);
 		Description: "Add video_list column to radar_logs for per-video details",
 		Up:          `ALTER TABLE radar_logs ADD COLUMN video_list TEXT DEFAULT '';`,
 	},
+	{
+		Version:     15,
+		Description: "Create search_tasks table for search keyword video collection tasks",
+		Up: `
+-- Search tasks table (搜索关键词视频采集任务)
+CREATE TABLE IF NOT EXISTS search_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL UNIQUE,
+    keyword TEXT NOT NULL,
+    target_count INTEGER,
+    current_count INTEGER,
+    status TEXT NOT NULL,
+    window_id TEXT,
+    created_at DATETIME,
+    started_at DATETIME,
+    completed_at DATETIME,
+    error_message TEXT,
+    task_type TEXT,
+    video_list TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_tasks_status ON search_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_search_tasks_created_at ON search_tasks(created_at DESC);
+`,
+	},
+	{
+		Version:     16,
+		Description: "Create task_videos table for storing individual videos per task",
+		Up: `
+-- Task videos table (任务视频详情表，支持分条存储)
+CREATE TABLE IF NOT EXISTS task_videos (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    video_data TEXT NOT NULL,
+    video_index TEXT NOT NULL DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(task_id) REFERENCES search_tasks(task_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_videos_task_id ON task_videos(task_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_videos_unique ON task_videos(task_id, video_index);
+`,
+	},
+	{
+		Version:     17,
+		Description: "Fix search_tasks / task_videos schema to match code design",
+		Up: `
+CREATE TABLE IF NOT EXISTS __placeholder__ (dummy INTEGER);
+`,
+	},
+}
+
+type colInfo struct{ Name, Type string }
+
+func loadColumns(dbConn *sql.DB, table string) ([]colInfo, error) {
+	rows, err := dbConn.Query(fmt.Sprintf("PRAGMA table_info(%q)", table))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cols []colInfo
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		cols = append(cols, colInfo{Name: name, Type: ctype})
+	}
+	return cols, rows.Err()
+}
+
+func colSet(cols []colInfo) map[string]bool {
+	m := make(map[string]bool, len(cols))
+	for _, c := range cols {
+		m[c.Name] = true
+	}
+	return m
+}
+
+func hasPKInt(cols []colInfo) bool {
+	for _, c := range cols {
+		if c.Type != "" && strings.HasPrefix(strings.ToUpper(c.Type), "INT") && c.Name == "id" {
+			return true
+		}
+	}
+	return false
+}
+
+func migrateSearchTasksV17() error {
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name='search_tasks'`)
+	if err != nil {
+		return err
+	}
+	if !rows.Next() {
+		rows.Close()
+		return nil
+	}
+	rows.Close()
+
+	cols, err := loadColumns(db, "search_tasks")
+	if err != nil {
+		return fmt.Errorf("pragma table_info: %w", err)
+	}
+	cs := colSet(cols)
+
+	if cs["task_id"] && cs["task_type"] && hasPKInt(cols) {
+		return nil
+	}
+
+	fmt.Println("Applying migration 17: fix search_tasks / task_videos schema")
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	_, _ = tx.Exec("PRAGMA foreign_keys = OFF")
+
+	if _, err = tx.Exec(`CREATE TABLE search_tasks_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL UNIQUE,
+    keyword TEXT NOT NULL,
+    target_count INTEGER,
+    current_count INTEGER,
+    status TEXT NOT NULL,
+    window_id TEXT,
+    created_at DATETIME,
+    started_at DATETIME,
+    completed_at DATETIME,
+    error_message TEXT,
+    task_type TEXT,
+    video_list TEXT
+)`); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("create search_tasks_new: %w", err)
+	}
+
+	// 动态构建 INSERT SELECT，只引用实际存在的列
+	taskIDSrc := func() string {
+		if cs["task_id"] {
+			return "task_id"
+		}
+		return "id"
+	}()
+	ttSrc := func() string {
+		if cs["task_type"] {
+			return "task_type"
+		}
+		if cs["type"] {
+			return "type"
+		}
+		return "NULL"
+	}()
+	vlSrc := "COALESCE(NULLIF(TRIM(video_list), ''), '[]')"
+	if !cs["video_list"] {
+		vlSrc = "'[]'"
+	}
+	saSrc := "NULL"
+	if cs["started_at"] {
+		saSrc = "started_at"
+	}
+	caSrc := "NULL"
+	if cs["completed_at"] {
+		caSrc = "completed_at"
+	}
+	emSrc := "NULL"
+	if cs["error_message"] {
+		emSrc = "NULLIF(TRIM(error_message), '')"
+	}
+
+	insertSQL := fmt.Sprintf(`INSERT INTO search_tasks_new
+    (task_id, keyword, target_count, current_count, status, window_id,
+     created_at, started_at, completed_at, error_message, task_type, video_list)
+SELECT
+    %s, keyword,
+    COALESCE(target_count, 0),
+    COALESCE(current_count, 0),
+    status,
+    NULL,
+    created_at,
+    %s,
+    %s,
+    %s,
+    %s,
+    %s
+FROM search_tasks`, taskIDSrc, saSrc, caSrc, emSrc, ttSrc, vlSrc)
+
+	if _, err = tx.Exec(insertSQL); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("insert search_tasks_new: %w", err)
+	}
+
+	// 同样处理 task_videos
+	tvRows, _ := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_videos'`)
+	tvExists := tvRows != nil && tvRows.Next()
+	if tvRows != nil {
+		tvRows.Close()
+	}
+	if tvExists {
+		tvCols, _ := loadColumns(db, "task_videos")
+		tvCS := colSet(tvCols)
+		if _, err = tx.Exec(`CREATE TABLE task_videos_new (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    video_data TEXT NOT NULL,
+    video_index TEXT NOT NULL DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(task_id) REFERENCES search_tasks(task_id) ON DELETE CASCADE
+)`); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("create task_videos_new: %w", err)
+		}
+		viSrc := "video_index"
+		if !tvCS["video_index"] {
+			viSrc = "CAST(video_index AS TEXT)"
+		}
+		if _, err = tx.Exec(fmt.Sprintf(`INSERT INTO task_videos_new
+    (id, task_id, video_data, video_index, created_at)
+SELECT id, task_id, video_data, %s, created_at FROM task_videos`, viSrc)); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert task_videos_new: %w", err)
+		}
+		if _, err = tx.Exec(`DROP TABLE task_videos`); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err = tx.Exec(`ALTER TABLE task_videos_new RENAME TO task_videos`); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	if _, err = tx.Exec(`DROP TABLE search_tasks`); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err = tx.Exec(`ALTER TABLE search_tasks_new RENAME TO search_tasks`); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	_, _ = tx.Exec(`DROP INDEX IF EXISTS idx_search_tasks_type`)
+	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_search_tasks_status ON search_tasks(status)`); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_search_tasks_created_at ON search_tasks(created_at DESC)`); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if tvExists {
+		if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_task_videos_task_id ON task_videos(task_id)`); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err = tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_videos_unique ON task_videos(task_id, video_index)`); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	_, _ = tx.Exec("PRAGMA foreign_keys = ON")
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	// 记录版本 17
+	if _, err = db.Exec(`INSERT INTO schema_migrations (version) VALUES (17)`); err != nil {
+		return fmt.Errorf("record migration 17: %w", err)
+	}
+	fmt.Println("Applied migration 17: Fix search_tasks / task_videos schema to match code design")
+	return nil
 }
 
 // runMigrations 执行所有待处理的迁移
@@ -305,9 +582,9 @@ func runMigrations() error {
 		return fmt.Errorf("failed to get current schema version: %w", err)
 	}
 
-	// 运行待处理的迁移
+	// 运行待处理的迁移（v17 由 migrateSearchTasksV17 处理）
 	for _, m := range migrations {
-		if m.Version > currentVersion {
+		if m.Version > currentVersion && m.Version != 17 {
 			// 开启事务
 			tx, err := db.Begin()
 			if err != nil {
@@ -334,6 +611,12 @@ func runMigrations() error {
 			}
 
 			fmt.Printf("Applied migration %d: %s\n", m.Version, m.Description)
+		}
+	}
+
+	if currentVersion < 17 {
+		if err := migrateSearchTasksV17(); err != nil {
+			return fmt.Errorf("migrateSearchTasksV17: %w", err)
 		}
 	}
 

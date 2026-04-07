@@ -121,10 +121,13 @@ var WXU = (() => {
     if (!feed) return null;
 
     var contact = feed.contact ? {
-      id: feed.contact.username,
+      id: feed.id,
       avatar_url: feed.contact.headUrl,
       nickname: feed.contact.nickname,
       username: feed.contact.username,
+      headUrl: feed.contact.headUrl,
+      signature: feed.contact.signature,
+      extInfo: feed.contact.extInfo,
     } : null;
 
     // 处理正在直播的数据

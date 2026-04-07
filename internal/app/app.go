@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/qtgolang/SunnyNet/SunnyNet"
 	"github.com/qtgolang/SunnyNet/public"
 
 	"wx_channel/internal/api"
 	"wx_channel/internal/assets"
-	"wx_channel/internal/cloud"
 	"wx_channel/internal/config"
 	"wx_channel/internal/database"
 	"wx_channel/internal/handlers"
@@ -31,8 +31,6 @@ import (
 	"wx_channel/internal/websocket"
 	"wx_channel/pkg/certificate"
 	"wx_channel/pkg/proxy"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // App 结构体，用于保存依赖项和状态
@@ -59,11 +57,11 @@ type App struct {
 	StaticFileHandler *handlers.StaticFileHandler
 
 	// 服务
-	WSHub          *websocket.Hub
-	SearchService  *api.SearchService
-	RadarService   *services.RadarService  // 自动轮询雷达
-	GopeedService  *services.GopeedService // Add GopeedService
-	CloudConnector *cloud.Connector
+	WSHub         *websocket.Hub
+	TaskService   *database.SearchTaskService // 搜索任务服务（共享实例）
+	SearchService *api.SearchService
+	RadarService  *services.RadarService  // 自动轮询雷达
+	GopeedService *services.GopeedService // Add GopeedService
 
 	// 路由器
 	APIRouter *router.APIRouter
@@ -89,15 +87,15 @@ func NewApp(cfgParam *config.Config) *App {
 	globalApp = app
 
 	// 初始化日志
-	app.printTitle()
 	utils.LogConfigLoad("config.yaml", true)
 	if app.Cfg.LogFile != "" {
 		_ = utils.InitLoggerWithRotation(utils.INFO, app.Cfg.LogFile, app.Cfg.MaxLogSizeMB)
-		app.LogInitMsg = fmt.Sprintf("日志已初始化: %s (最大 %dMB)", app.Cfg.LogFile, app.Cfg.MaxLogSizeMB)
 	}
 
 	// 尽早初始化 WebSocket Hub，以确保它对 APIRouter 可用
-	app.WSHub = websocket.NewHub()
+	// 先创建共享的 TaskService，确保 Hub 和 API 使用同一实例
+	app.TaskService = database.NewSearchTaskService()
+	app.WSHub = websocket.NewHub(app.TaskService)
 
 	// 根据配置设置负载均衡选择器
 	app.configureLoadBalancer()
@@ -122,6 +120,9 @@ func (app *App) initDownloadRecords() error {
 	if err := database.Initialize(&database.Config{DBPath: dbPath}); err != nil {
 		return fmt.Errorf("初始化数据库失败: %v", err)
 	}
+
+	// 确保任务相关表存在
+	app.TaskService.EnsureTablesExist()
 
 	// Initialize Gopeed Service
 	app.GopeedService = services.NewGopeedService(downloadsDir)
@@ -153,29 +154,6 @@ func (app *App) Run() {
 			})
 		}
 		close(done)
-	}()
-
-	// 启动时检查更新 (移到这里以确保尽早执行)
-	go func() {
-		time.Sleep(2 * time.Second) // 缩短等待时间
-		utils.Info("正在检查更新...")
-		vService := services.NewVersionService()
-		result, err := vService.CheckUpdate()
-		if err != nil {
-			utils.Warn("检查更新失败: %v", err)
-			return
-		}
-
-		if result.HasUpdate {
-			utils.PrintSeparator()
-			color.Green("🚀 发现新版本 available: v%s", result.LatestVersion)
-			color.Green("⬇️ 下载地址: %s", result.DownloadURL)
-			utils.PrintSeparator()
-		} else {
-			utils.PrintSeparator()
-			color.Green("✅ 当前已是最新版本: v%s", result.CurrentVersion)
-			utils.PrintSeparator()
-		}
 	}()
 
 	if err := app.initDownloadRecords(); err != nil {
@@ -313,17 +291,6 @@ func (app *App) Run() {
 		go app.startMetricsServer()
 	}
 
-	// 启动云端连接器（如果启用）
-	if app.Cfg.CloudEnabled {
-		app.CloudConnector = cloud.NewConnector(app.Cfg, app.WSHub)
-		app.CloudConnector.Start()
-		utils.Info("✓ 云端管理功能已启用")
-	} else {
-		utils.Info("云端管理功能已禁用 (cloud_enabled: false)")
-	}
-
-	utils.Info("🔍 请打开需要下载的视频号页面进行下载")
-
 	// 启动对标雷达服务（默认关闭，按配置启用）
 	if app.Cfg.RadarEnabled {
 		app.RadarService.Start()
@@ -338,7 +305,7 @@ func (app *App) Run() {
 		if os_env == "windows" {
 			app.Sunny.ProcessAddName("WeChatAppEx.exe")
 			if ok := app.Sunny.StartProcess(); ok {
-				utils.Info("✓ 视频号注入引擎已就绪 (WeChatAppEx.exe)")
+				utils.Info("✓ 视频号引擎已就绪 (WeChatAppEx.exe)")
 			} else {
 				utils.Warn("⚠️ 注入引擎启动失败：可能需要 [管理员权限] 才能在视频号内显示按钮")
 			}
@@ -365,8 +332,6 @@ func (app *App) Run() {
 	}()
 
 	utils.Info("💡 服务正在运行，按 Ctrl+C 退出...")
-
-	// 启动时检查更新 - 已移动到 Run 函数开头
 
 	<-done
 
@@ -448,27 +413,6 @@ func (app *App) printEnvConfig() {
 		utils.PrintLabelValue("📥", "批量下载并发", app.Cfg.DownloadConcurrency)
 		utils.PrintSeparator()
 	}
-}
-
-func (app *App) printTitle() {
-	color.Set(color.FgCyan)
-	fmt.Println("")
-	fmt.Println(" ██╗    ██╗██╗  ██╗     ██████╗██╗  ██╗ █████╗ ███╗   ██╗███╗   ██╗███████╗██╗     ")
-	fmt.Println(" ██║    ██║╚██╗██╔╝    ██╔════╝██║  ██║██╔══██╗████╗  ██║████╗  ██║██╔════╝██║     ")
-	fmt.Println(" ██║ █╗ ██║ ╚███╔╝     ██║     ███████║███████║██╔██╗ ██║██╔██╗ ██║█████╗  ██║     ")
-	fmt.Println(" ██║███╗██║ ██╔██╗     ██║     ██╔══██║██╔══██║██║╚██╗██║██║╚██╗██║██╔══╝  ██║     ")
-	fmt.Println(" ╚███╔███╔╝██╔╝ ██╗    ╚██████╗██║  ██║██║  ██║██║ ╚████║██║ ╚████║███████╗███████╗")
-	fmt.Println("  ╚══╝╚══╝ ╚═╝  ╚═╝     ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝╚══════╝╚══════╝")
-	color.Unset()
-
-	color.Yellow("    微信视频号下载助手 v%s", app.Cfg.Version)
-	color.Yellow("    项目地址：https://github.com/nobiyou/wx_channel")
-	color.Green("    v%s 更新要点：", app.Cfg.Version)
-	color.Green("    • 详情页修复 - 兼容 Home 路径下的分享视频与个人页直达视频")
-	color.Green("    • 下载恢复 - 修复直达视频已拿到信息但下载按钮灰色不可用")
-	color.Green("    • 评论恢复 - 修复详情页模式下评论采集功能未就绪的问题")
-	color.Green("    • 稳定延续 - 延续新版页面、Hub 与雷达开关的适配优化")
-	fmt.Println()
 }
 
 // 隐式需要的辅助函数

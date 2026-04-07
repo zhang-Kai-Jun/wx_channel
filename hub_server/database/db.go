@@ -4,7 +4,6 @@ import (
 	"time"
 	"wx_channel/hub_server/models"
 
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 

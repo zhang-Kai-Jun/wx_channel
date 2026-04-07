@@ -187,7 +187,20 @@ window.__wx_api_client = {
       };
 
       ws.onmessage = function (event) {
-        if (token !== self.connectToken || self.ws !== ws) return;
+        // 最先打印，确保能看到所有消息（放在 return 检查之前）
+        try {
+          var preview = typeof event.data === 'string' ? event.data.substring(0, 300) : '[非字符串]';
+          console.log('[API客户端] ★★★ 收到原始数据:', preview);
+          console.log('[API客户端] token check: connectToken=%s, self.ws=%s, ws=%s, match=%s',
+            self.connectToken, self.ws ? 'exists' : 'null', ws ? 'exists' : 'null',
+            (token === self.connectToken && self.ws === ws) ? 'PASS' : 'FAIL');
+        } catch(e) {
+          console.log('[API客户端] ★★★ 收到原始数据: [解析失败]');
+        }
+        if (token !== self.connectToken || self.ws !== ws) {
+          console.warn('[API客户端] token 检查失败，跳过处理');
+          return;
+        }
         try {
           var msg = JSON.parse(event.data);
           self.handleMessage(msg);
@@ -239,12 +252,23 @@ window.__wx_api_client = {
 
   // 处理消息
   handleMessage: function (msg) {
+    // 添加详细日志
+    console.log('[API客户端] 收到 WebSocket 消息:', JSON.stringify(msg));
+
     if (msg.type === 'api_call') {
       this.handleAPICall(msg.data);
     } else if (msg.type === 'cmd') {
+      console.log('[API客户端] 收到 cmd 指令, data:', JSON.stringify(msg.data));
       this.handleCommand(msg.data);
     } else if (msg.type === 'pong') {
       this.lastHeartbeatTime = Date.now();
+    } else if (msg.type === 'task_progress' || msg.type === 'task_complete') {
+      // 任务进度/完成广播，转发给任务采集器
+      if (window.__wx_channels_search_task_collector) {
+        window.__wx_channels_search_task_collector._onBackendMessage(msg);
+      }
+    } else {
+      console.warn('[API客户端] 未知消息类型:', msg.type);
     }
   },
 
@@ -284,21 +308,87 @@ window.__wx_api_client = {
 
   // 处理指令
   handleCommand: function (data) {
-    console.log('[API客户端] 收到指令:', data);
+    console.log('[API客户端] ========== 处理指令 ==========');
+    console.log('[API客户端] 收到指令:', JSON.stringify(data));
+    console.log('[API客户端] window.__wx_channels_search_task_collector:', !!window.__wx_channels_search_task_collector);
 
-    if (data.action === 'start_comment_collection') {
-      if (typeof window.__wx_channels_start_comment_collection === 'function') {
-        console.log('[API客户端] 执行评论采集指令...');
-        window.__wx_channels_start_comment_collection();
-      } else {
-        console.warn('[API客户端] 评论采集函数未就绪');
+    try {
+      if (data.action === 'start_comment_collection') {
+        if (typeof window.__wx_channels_start_comment_collection === 'function') {
+          console.log('[API客户端] 执行评论采集指令...');
+          window.__wx_channels_start_comment_collection();
+        } else {
+          console.warn('[API客户端] 评论采集函数未就绪');
+        }
       }
-    }
 
-    if (data.action === 'download_progress') {
-      // 派发自定义事件，供 UI 组件消费
-      var event = new CustomEvent('wx_download_progress', { detail: data.payload });
-      document.dispatchEvent(event);
+      if (data.action === 'watch_video') {
+        // 监听视频（不滚动），等待开始滚动指令
+        var taskData = data.payload || data;
+        console.log('[API客户端] 执行监听视频任务:', taskData);
+
+        if (typeof window.__wx_channels_search_task_collector === 'object') {
+          window.__wx_channels_search_task_collector.watchVideo(taskData);
+        } else {
+          console.warn('[API客户端] 搜索任务采集器未就绪');
+        }
+      }
+
+      if (data.action === 'start_scroll') {
+        // 开始滚动
+        var taskData = data.payload || data;
+        console.log('[API客户端] 收到 start_scroll 指令:', taskData);
+
+        if (typeof window.__wx_channels_search_task_collector === 'object') {
+          window.__wx_channels_search_task_collector.startScroll(taskData.task_id);
+        } else {
+          console.warn('[API客户端] 搜索任务采集器未就绪');
+        }
+      }
+
+      if (data.action === 'pause_scroll') {
+        // 暂停滚动
+        var taskData = data.payload || data;
+        console.log('[API客户端] 暂停滚动:', taskData);
+
+        if (typeof window.__wx_channels_search_task_collector === 'object') {
+          window.__wx_channels_search_task_collector.pauseScroll(taskData.task_id);
+        } else {
+          console.warn('[API客户端] 搜索任务采集器未就绪');
+        }
+      }
+
+      if (data.action === 'resume_scroll') {
+        // 恢复滚动
+        var taskData = data.payload || data;
+        console.log('[API客户端] 恢复滚动:', taskData);
+
+        if (typeof window.__wx_channels_search_task_collector === 'object') {
+          window.__wx_channels_search_task_collector.resumeScroll(taskData.task_id);
+        } else {
+          console.warn('[API客户端] 搜索任务采集器未就绪');
+        }
+      }
+
+      if (data.action === 'stop_search_task') {
+        // 停止搜索关键词视频采集任务
+        var taskData = data.payload || data;
+        console.log('[API客户端] 停止搜索任务:', taskData);
+
+        if (typeof window.__wx_channels_search_task_collector === 'object') {
+          window.__wx_channels_search_task_collector.stopTask(taskData.task_id);
+        } else {
+          console.warn('[API客户端] 搜索任务采集器未就绪');
+        }
+      }
+
+      if (data.action === 'download_progress') {
+        // 派发自定义事件，供 UI 组件消费
+        var event = new CustomEvent('wx_download_progress', { detail: data.payload });
+        document.dispatchEvent(event);
+      }
+    } catch (err) {
+      console.error('[API客户端] 处理指令异常:', err);
     }
   },
 

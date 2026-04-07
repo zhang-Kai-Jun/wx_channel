@@ -97,11 +97,11 @@ go build -ldflags="-s -w -X main.Version=1.0.0 -X main.BuildTime=$(date +%Y%m%d%
         },
         "info": {
           "0409": {
-            "Comments": "视频号下载助手",
-            "CompanyName": "nobiyou",     // 公司名称
-            "FileDescription": "一个用于下载微信视频号内容的工具",
+            "Comments": "video_channel",
+            "CompanyName": "zhangkj",     // 公司名称
+            "FileDescription": "video_channel",
             "FileVersion": "1.0.0.0",
-            "ProductName": "视频号下载助手",
+            "ProductName": "video_channel",
             "ProductVersion": "1.0.0.0",
             "LegalCopyright": "© 2023-2025"
           }

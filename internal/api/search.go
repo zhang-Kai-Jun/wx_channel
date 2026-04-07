@@ -23,9 +23,11 @@ func NewSearchService(hub *websocket.Hub) *SearchService {
 
 // SearchContactRequest 搜索账号请求参数
 type SearchContactRequest struct {
-	Keyword  string `json:"keyword"`
-	Page     int    `json:"page"`
-	PageSize int    `json:"page_size"`
+	Keyword    string `json:"keyword"`
+	Type       int    `json:"type"`         // 1=User, 2=Live, 3=Video
+	NextMarker string `json:"next_marker"`   // 分页标记
+	Page       int    `json:"page"`
+	PageSize   int    `json:"page_size"`
 }
 
 // SearchContact 搜索账号
@@ -35,6 +37,8 @@ func (s *SearchService) SearchContact(w http.ResponseWriter, r *http.Request) {
 	// 支持 GET 和 POST
 	if r.Method == http.MethodGet {
 		req.Keyword = r.URL.Query().Get("keyword")
+		req.Type, _ = strconv.Atoi(r.URL.Query().Get("type"))
+		req.NextMarker = r.URL.Query().Get("next_marker")
 		req.Page, _ = strconv.Atoi(r.URL.Query().Get("page"))
 		req.PageSize, _ = strconv.Atoi(r.URL.Query().Get("page_size"))
 	} else if r.Method == http.MethodPost {
@@ -64,7 +68,9 @@ func (s *SearchService) SearchContact(w http.ResponseWriter, r *http.Request) {
 
 	// 调用前端 API
 	body := websocket.SearchContactBody{
-		Keyword: req.Keyword,
+		Keyword:    req.Keyword,
+		Type:       req.Type,
+		NextMarker: req.NextMarker,
 	}
 
 	data, err := s.hub.CallAPI("key:channels:contact_list", body, 60*time.Second)

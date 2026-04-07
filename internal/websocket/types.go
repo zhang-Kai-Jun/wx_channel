@@ -6,12 +6,17 @@ import json "github.com/json-iterator/go"
 type WSMessageType string
 
 const (
-	WSMessageTypeAPICall     WSMessageType = "api_call"
-	WSMessageTypeAPIResponse WSMessageType = "api_response"
-	WSMessageTypePing        WSMessageType = "ping"
-	WSMessageTypePong        WSMessageType = "pong"
-	WSMessageTypeCommand     WSMessageType = "cmd"
-	WSMessageTypeClientState WSMessageType = "client_state"
+	WSMessageTypeAPICall       WSMessageType = "api_call"
+	WSMessageTypeAPIResponse   WSMessageType = "api_response"
+	WSMessageTypePing          WSMessageType = "ping"
+	WSMessageTypePong          WSMessageType = "pong"
+	WSMessageTypeCommand       WSMessageType = "cmd"
+	WSMessageTypeClientState   WSMessageType = "client_state"
+	WSMessageTypeTaskStarted   WSMessageType = "task_started"
+	WSMessageTypeTaskProgress  WSMessageType = "task_progress"
+	WSMessageTypeTaskVideo    WSMessageType = "task_video"
+	WSMessageTypeTaskComplete  WSMessageType = "task_complete"
+	WSMessageTypeTaskError     WSMessageType = "task_error"
 )
 
 // WebSocket 消息
@@ -79,4 +84,46 @@ type ClientStatus struct {
 	SupportsSearch  bool            `json:"supports_search"`
 	SupportsFeed    bool            `json:"supports_feed"`
 	SupportsProfile bool            `json:"supports_profile"`
+}
+
+// TaskMessage 任务消息类型
+type TaskMessage struct {
+	Type string      `json:"type"` // task_started, task_progress, task_video, task_complete, task_error
+	Data interface{} `json:"data"`
+}
+
+// TaskStartedData 任务开始数据
+type TaskStartedData struct {
+	TaskID      string `json:"task_id"`
+	Keyword     string `json:"keyword"`
+	TargetCount int    `json:"target_count"`
+	TaskType    string `json:"task_type"`
+}
+
+// TaskProgressData 任务进度数据
+type TaskProgressData struct {
+	TaskID       string `json:"task_id"`
+	CurrentCount int    `json:"current_count"`
+	TargetCount  int    `json:"target_count"`
+	Status       string `json:"status"`
+}
+
+// TaskVideoData 任务视频数据
+type TaskVideoData struct {
+	TaskID string                 `json:"task_id"`
+	Video  map[string]interface{} `json:"video"`
+}
+
+// TaskCompleteData 任务完成数据（不包含视频列表，由调用方自行查询）
+type TaskCompleteData struct {
+	TaskID       string `json:"task_id"`
+	CurrentCount int    `json:"current_count"`
+	TargetCount  int    `json:"target_count"`
+	Status       string `json:"status"` // completed, completed_with_insufficient_data, failed
+}
+
+// TaskErrorData 任务错误数据
+type TaskErrorData struct {
+	TaskID  string `json:"task_id"`
+	Message string `json:"message"`
 }

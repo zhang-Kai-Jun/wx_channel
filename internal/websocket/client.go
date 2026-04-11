@@ -193,7 +193,8 @@ func (c *Client) ReadPump() {
 		if msg.Type == WSMessageTypeTaskProgress ||
 			msg.Type == WSMessageTypeTaskVideo ||
 			msg.Type == WSMessageTypeTaskComplete ||
-			msg.Type == WSMessageTypeTaskError {
+			msg.Type == WSMessageTypeTaskError ||
+			msg.Type == "browser_log" {
 
 			var taskMsg TaskMessage
 			if err := json.Unmarshal(message, &taskMsg); err != nil {

@@ -325,24 +325,28 @@ window.__wx_api_client = {
       if (data.action === 'watch_video') {
         // 监听视频（不滚动），等待开始滚动指令
         var taskData = data.payload || data;
-        console.log('[API客户端] 执行监听视频任务:', taskData);
+        console.log('[API客户端] ★★★ 收到 watch_video 指令:', taskData);
 
         if (typeof window.__wx_channels_search_task_collector === 'object') {
+          console.log('[API客户端] ★★★ 调用 watchVideo, taskId:', taskData.task_id);
           window.__wx_channels_search_task_collector.watchVideo(taskData);
+          console.log('[API客户端] ★★★ watchVideo 调用完成');
         } else {
-          console.warn('[API客户端] 搜索任务采集器未就绪');
+          console.error('[API客户端] 搜索任务采集器未就绪, __wx_channels_search_task_collector:', typeof window.__wx_channels_search_task_collector);
         }
       }
 
       if (data.action === 'start_scroll') {
         // 开始滚动
         var taskData = data.payload || data;
-        console.log('[API客户端] 收到 start_scroll 指令:', taskData);
+        console.log('[API客户端] ★★★ 收到 start_scroll 指令:', taskData);
 
         if (typeof window.__wx_channels_search_task_collector === 'object') {
+          console.log('[API客户端] ★★★ 调用 startScroll, taskId:', taskData.task_id);
           window.__wx_channels_search_task_collector.startScroll(taskData.task_id);
+          console.log('[API客户端] ★★★ startScroll 调用完成');
         } else {
-          console.warn('[API客户端] 搜索任务采集器未就绪');
+          console.error('[API客户端] 搜索任务采集器未就绪, __wx_channels_search_task_collector:', typeof window.__wx_channels_search_task_collector);
         }
       }
 

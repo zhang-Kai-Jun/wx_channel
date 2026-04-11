@@ -784,6 +784,8 @@ window.__wx_channels_search_task_collector = {
   _isWatching: false,        // 是否正在监听视频
   _isScrolling: false,       // 是否正在滚动加载
   _scrollTimer: null,        // 滚动定时器
+  _waitingForPageLoad: false, // 是否等待页面加载
+  _expectedKeyword: null,     // 期望的关键词（用于页面跳转检测）
 
   // 监听视频（创建任务时调用，等待开始滚动）
   watchVideo: function (taskData) {
@@ -802,8 +804,11 @@ window.__wx_channels_search_task_collector = {
       return;
     }
 
-    console.log('[任务采集] ★★★ watchVideo 被调用, taskId:', taskData.task_id);
+    console.log('[任务采集] ★★★ watchVideo 被调用, taskId:', taskData.task_id, ', keyword:', taskData.keyword);
     console.log('[任务采集] 当前页面:', window.location.href);
+    console.log('[任务采集] collector 当前数据量:', (window.__wx_channels_search_collector && window.__wx_channels_search_collector.feeds) ? window.__wx_channels_search_collector.feeds.length : 0);
+    // 发送日志到后端
+    this.sendLog('info', 'watchVideo 被调用, taskId=' + taskData.task_id + ', keyword=' + taskData.keyword + ', 页面=' + window.location.href);
 
     // 重置状态
     this._currentTask = {
@@ -814,6 +819,38 @@ window.__wx_channels_search_task_collector = {
       start_time: Date.now()
     };
     this._matchedVideos = [];
+
+    // 【关键修复】检查当前 URL 是否是目标关键词页面
+    var currentUrl = window.location.href;
+    var expectedKeyword = encodeURIComponent(taskData.keyword);
+    var urlMatch = currentUrl.includes('q=' + expectedKeyword) || currentUrl.includes('q=' + taskData.keyword);
+
+    if (!urlMatch) {
+      console.log('[任务采集] ★★★ 页面 URL 与关键词不匹配，等待页面跳转...');
+      console.log('[任务采集] 当前 URL:', currentUrl);
+      console.log('[任务采集] 期望关键词:', taskData.keyword);
+      this.sendLog('warn', '页面 URL 与关键词不匹配，等待跳转 - 当前:' + currentUrl.split('q=')[1]?.split('&')[0] + ', 期望:' + taskData.keyword);
+      this._waitingForPageLoad = true;
+      this._expectedKeyword = taskData.keyword;
+      this._isWatching = true;
+      this._isScrolling = false;
+      return;
+    }
+
+    // URL 匹配，正常初始化任务
+    this._waitingForPageLoad = false;
+    this._expectedKeyword = null;
+
+    // 【修复】清理 collector 中的旧数据，防止关键词切换时数据污染
+    // 关键词切换时 collector 可能残留上一个关键词的数据，导致新任务一开始就采集到旧数据
+    if (window.__wx_channels_search_collector && window.__wx_channels_search_collector.feeds) {
+      var oldLen = window.__wx_channels_search_collector.feeds.length;
+      window.__wx_channels_search_collector.feeds = [];
+      if (oldLen > 0) {
+        console.log('[任务采集] 已清理 collector 中的 ' + oldLen + ' 条旧数据');
+        this.sendLog('info', '已清理 collector 中的 ' + oldLen + ' 条旧数据');
+      }
+    }
     this._isWatching = true;
     this._isScrolling = false; // 【关键修复】重置滚动状态，避免前一个任务中断时 _isScrolling=true 导致新任务无法滚动
     if (this._scrollTimer) {
@@ -821,8 +858,9 @@ window.__wx_channels_search_task_collector = {
       this._scrollTimer = null;
     }
 
-    // 【关键修复】：如果 collector 中已有数据，立即处理所有已有视频
-    // 这是 RPA 流程的关键：进入页面时 WXE.onSearchResultLoaded 已触发了 addSearchResult
+    // 【修复】处理 collector 中已有数据（此时 collector 已被清理，不会处理旧数据）
+    // RPA 流程：进入页面时 WXE.onSearchResultLoaded 已触发了 addSearchResult
+    // 此时 collector 可能有新页面的数据，需要处理
     this._processExistingCollectorFeeds();
 
     // 通知外部任务已开始
@@ -836,8 +874,11 @@ window.__wx_channels_search_task_collector = {
     var collector = window.__wx_channels_search_collector;
     if (!collector || !collector.feeds || collector.feeds.length === 0) {
       console.log('[任务采集] collector 中暂无数据，跳过');
+      this.sendLog('info', 'collector 中暂无数据');
       return;
     }
+
+    this.sendLog('info', 'collector 中有 ' + collector.feeds.length + ' 个数据，准备处理');
 
     var existingCount = 0;
     collector.feeds.forEach(function (feed) {
@@ -866,6 +907,7 @@ window.__wx_channels_search_task_collector = {
     console.log('[任务采集] 当前 _currentTask:', this._currentTask ? this._currentTask.task_id : 'null');
     console.log('[任务采集] 当前 _isScrolling:', this._isScrolling);
     console.log('[任务采集] window.__wx_channels_search_task_collector:', !!window.__wx_channels_search_task_collector);
+    this.sendLog('info', 'startScroll 被调用, taskId=' + taskId + ', _currentTask=' + (this._currentTask ? this._currentTask.task_id : 'null'));
 
     // 【修复竞态】：如果任务还未初始化，等待最多 2 秒让 watch_video 先完成
     var waitCount = 0;
@@ -1410,6 +1452,25 @@ window.__wx_channels_search_task_collector = {
       isWatching: this._isWatching,
       isScrolling: this._isScrolling
     };
+  },
+
+  // 发送日志到后端
+  sendLog: function (level, message) {
+    if (window.__wx_api_client && window.__wx_api_client.connected) {
+      try {
+        window.__wx_api_client.ws.send(JSON.stringify({
+          type: 'browser_log',
+          data: {
+            level: level,
+            message: message,
+            timestamp: Date.now(),
+            task_id: this._currentTask ? this._currentTask.task_id : ''
+          }
+        }));
+      } catch (e) {
+        console.error('[任务采集] 发送日志失败:', e);
+      }
+    }
   }
 };
 
@@ -1477,10 +1538,72 @@ if (is_search_page()) {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       window.__wx_channels_search_collector.init();
+      checkWaitingTask();
     });
   } else {
     window.__wx_channels_search_collector.init();
+    checkWaitingTask();
   }
 }
+
+// 检查是否有等待页面加载的任务
+function checkWaitingTask() {
+  var taskCollector = window.__wx_channels_search_task_collector;
+  if (!taskCollector._waitingForPageLoad || !taskCollector._expectedKeyword) {
+    return;
+  }
+
+  var currentUrl = window.location.href;
+  var expectedKeyword = taskCollector._expectedKeyword;
+
+  // 检查 URL 是否包含期望的关键词
+  if (currentUrl.includes('q=' + encodeURIComponent(expectedKeyword)) ||
+      currentUrl.includes('q=' + expectedKeyword)) {
+    console.log('[任务采集] ★★★ 页面已加载到目标关键词，重新初始化任务...');
+    taskCollector.sendLog('info', '页面已加载到目标关键词:' + expectedKeyword + '，重新初始化');
+
+    // 重置等待状态
+    taskCollector._waitingForPageLoad = false;
+    taskCollector._expectedKeyword = null;
+
+    // ========== 关键修复：清理旧数据 ==========
+    // 页面跳转后，必须先清理 collector 中的旧数据
+    // 否则会处理上一个关键词的旧数据，导致数据混乱
+    if (window.__wx_channels_search_collector && window.__wx_channels_search_collector.feeds) {
+      var oldLen = window.__wx_channels_search_collector.feeds.length;
+      window.__wx_channels_search_collector.feeds = [];
+      console.log('[任务采集] ★★★ 已清理 collector 中的 ' + oldLen + ' 条旧数据（页面已跳转）');
+      taskCollector.sendLog('warn', '已清理 collector 中的 ' + oldLen + ' 条旧数据，等待新页面数据');
+    }
+
+    // 重置匹配状态
+    taskCollector._matchedVideos = [];
+    taskCollector._dbConfirmedCount = 0;
+    taskCollector._isWatching = true;
+    taskCollector._isScrolling = false;
+    if (taskCollector._scrollTimer) {
+      clearTimeout(taskCollector._scrollTimer);
+      taskCollector._scrollTimer = null;
+    }
+
+    // 注意：不再立即处理现有数据，等待新页面的 onSearchResultLoaded 事件
+    console.log('[任务采集] 等待新页面数据加载...');
+
+    // 通知外部任务已开始
+    taskCollector._reportTaskStarted();
+
+    console.log('[任务采集] 任务已创建，等待开始滚动...');
+  }
+}
+
+// 监听 URL 变化（用于检测 SPA 页面跳转）
+var lastUrl = window.location.href;
+setInterval(function() {
+  if (window.location.href !== lastUrl) {
+    lastUrl = window.location.href;
+    console.log('[任务采集] URL 变化检测:', window.location.href);
+    checkWaitingTask();
+  }
+}, 1000);
 
 console.log('[search.js] 搜索页面模块加载完成');

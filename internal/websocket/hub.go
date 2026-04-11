@@ -521,6 +521,29 @@ func (h *Hub) HandleTaskMessage(msg TaskMessage) {
 		if data, ok := msg.Data.(map[string]interface{}); ok {
 			h.handleTaskError(data)
 		}
+	case "browser_log":
+		// 处理浏览器日志
+		if data, ok := msg.Data.(map[string]interface{}); ok {
+			h.handleBrowserLog(data)
+		}
+	}
+}
+
+// handleBrowserLog 处理浏览器日志
+func (h *Hub) handleBrowserLog(data map[string]interface{}) {
+	level, _ := data["level"].(string)
+	message, _ := data["message"].(string)
+	timestamp, _ := data["timestamp"].(float64)
+	taskID, _ := data["task_id"].(string)
+
+	// 根据级别选择日志函数
+	switch level {
+	case "error":
+		utils.LogError("[浏览器日志] %s | task_id=%s | ts=%d", message, taskID, int64(timestamp))
+	case "warn":
+		utils.LogWarn("[浏览器日志] %s | task_id=%s | ts=%d", message, taskID, int64(timestamp))
+	default:
+		utils.LogInfo("[浏览器日志] %s | task_id=%s | ts=%d", message, taskID, int64(timestamp))
 	}
 }
 

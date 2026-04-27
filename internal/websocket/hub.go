@@ -155,6 +155,39 @@ func (h *Hub) ClientCount() int {
 	return len(h.clients)
 }
 
+// ReadyClientCount 返回支持指定 API key 的就绪客户端数量
+func (h *Hub) ReadyClientCount(key string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	count := 0
+	for client := range h.clients {
+		if client.SupportsKey(key) {
+			count++
+		}
+	}
+	return count
+}
+
+// GetClientPagePath 获取当前客户端的页面路径（返回最后一个就绪客户端的页面路径）
+func (h *Hub) GetClientPagePath() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	// 优先返回最后活跃的客户端的页面路径
+	if h.lastClient != nil {
+		if _, ok := h.clients[h.lastClient]; ok {
+			return h.lastClient.pagePath
+		}
+	}
+
+	// 否则返回任意一个客户端的页面路径
+	for client := range h.clients {
+		return client.pagePath
+	}
+	return ""
+}
+
 func (h *Hub) ClientStatuses() []ClientStatus {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -252,6 +285,23 @@ func (h *Hub) CallAPI(key string, body interface{}, timeout time.Duration) (json
 		utils.LogError("API 调用超时: ID=%s, Timeout=%v", reqID, timeout)
 		return nil, fmt.Errorf("request timeout after %v", timeout)
 	}
+}
+
+// SubmitResponse 提交 API 响应（供 HTTP 回调使用，内部调用 handleAPIResponse）
+func (h *Hub) SubmitResponse(resp APICallResponse) {
+	h.handleAPIResponse(resp)
+}
+
+// SubmitResponseByPayload 直接从 inject 的 sendResponseViaHTTP 负载中提取 ID 和响应数据
+// inject 发送的格式: { id: "123", data: { errCode, errMsg, data: { actual response } } }
+func (h *Hub) SubmitResponseByPayload(id string, errCode int, errMsg string, data json.RawMessage) {
+	resp := APICallResponse{
+		ID:      id,
+		ErrCode: errCode,
+		ErrMsg:  errMsg,
+		Data:    data,
+	}
+	h.handleAPIResponse(resp)
 }
 
 // handleAPIResponse 处理 API 响应

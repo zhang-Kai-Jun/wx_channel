@@ -182,7 +182,7 @@ func (app *App) Run() {
 	app.StaticFileHandler = handlers.NewStaticFileHandler()
 
 	// 初始化业务处理器
-	app.APIHandler = handlers.NewAPIHandler(app.Cfg)
+	app.APIHandler = handlers.NewAPIHandler(app.Cfg, app.WSHub)
 	app.UploadHandler = handlers.NewUploadHandler(app.Cfg, app.WSHub, app.GopeedService)
 	app.RecordHandler = handlers.NewRecordHandler(app.Cfg)
 	app.CommentHandler = handlers.NewCommentHandler(app.Cfg)

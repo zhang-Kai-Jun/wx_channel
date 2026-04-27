@@ -6,17 +6,17 @@ import json "github.com/json-iterator/go"
 type WSMessageType string
 
 const (
-	WSMessageTypeAPICall       WSMessageType = "api_call"
-	WSMessageTypeAPIResponse   WSMessageType = "api_response"
-	WSMessageTypePing          WSMessageType = "ping"
-	WSMessageTypePong          WSMessageType = "pong"
-	WSMessageTypeCommand       WSMessageType = "cmd"
-	WSMessageTypeClientState   WSMessageType = "client_state"
-	WSMessageTypeTaskStarted   WSMessageType = "task_started"
-	WSMessageTypeTaskProgress  WSMessageType = "task_progress"
+	WSMessageTypeAPICall      WSMessageType = "api_call"
+	WSMessageTypeAPIResponse  WSMessageType = "api_response"
+	WSMessageTypePing         WSMessageType = "ping"
+	WSMessageTypePong         WSMessageType = "pong"
+	WSMessageTypeCommand      WSMessageType = "cmd"
+	WSMessageTypeClientState  WSMessageType = "client_state"
+	WSMessageTypeTaskStarted  WSMessageType = "task_started"
+	WSMessageTypeTaskProgress WSMessageType = "task_progress"
 	WSMessageTypeTaskVideo    WSMessageType = "task_video"
-	WSMessageTypeTaskComplete  WSMessageType = "task_complete"
-	WSMessageTypeTaskError     WSMessageType = "task_error"
+	WSMessageTypeTaskComplete WSMessageType = "task_complete"
+	WSMessageTypeTaskError    WSMessageType = "task_error"
 )
 
 // WebSocket 消息
@@ -63,13 +63,13 @@ type FeedProfileBody struct {
 
 // ClientStateBody 前端客户端状态
 type ClientStateBody struct {
-	PagePath   string          `json:"pagePath"`
-	Href       string          `json:"href"`
-	APIReady   bool            `json:"apiReady"`
-	Methods    map[string]bool `json:"methods"`
-	Timestamp  int64           `json:"timestamp"`
-	UserAgent  string          `json:"userAgent,omitempty"`
-	Visible    bool            `json:"visible,omitempty"`
+	PagePath  string          `json:"pagePath"`
+	Href      string          `json:"href"`
+	APIReady  bool            `json:"apiReady"`
+	Methods   map[string]bool `json:"methods"`
+	Timestamp int64           `json:"timestamp"`
+	UserAgent string          `json:"userAgent,omitempty"`
+	Visible   bool            `json:"visible,omitempty"`
 }
 
 type ClientStatus struct {
@@ -126,4 +126,30 @@ type TaskCompleteData struct {
 type TaskErrorData struct {
 	TaskID  string `json:"task_id"`
 	Message string `json:"message"`
+}
+
+// DOMActionBody DOM 操作请求体
+type DOMActionBody struct {
+	Action  string `json:"action"`
+	Target  string `json:"target"`
+	Content string `json:"content"`
+	Index   int    `json:"index"`
+	URL     string `json:"url"`
+	TaskID  string `json:"task_id,omitempty"`
+}
+
+// DOMActionCallbackPayload HTTP 回调的响应负载（来自 inject 的 sendResponseViaHTTP）
+type DOMActionCallbackPayload struct {
+	ID  string `json:"id"`  // 请求 ID（与 APICallRequest.ID 对应）
+	Req struct {
+		Data struct {
+			ErrCode int             `json:"errCode"`
+			ErrMsg  string          `json:"errMsg"`
+			Data    json.RawMessage `json:"data"`
+		} `json:"data"`
+	} `json:"req,omitempty"` // inject 发来的原始结构
+	// 直接内嵌，方便直接 Unmarshal
+	ErrCode int             `json:"errCode,omitempty"`
+	ErrMsg  string          `json:"errMsg,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }

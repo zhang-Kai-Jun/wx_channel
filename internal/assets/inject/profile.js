@@ -394,7 +394,143 @@ window.__wx_channels_profile_collector = {
         }
       }
 
-      console.log('[Profile] ✅ 批量下载按钮已注入到操作区');
+      // 检查是否已有 DOM 按钮
+      if (container.querySelector('#wx-profile-dom-btn')) {
+        console.log('[Profile] ✅ DOM 按钮已存在');
+        return true;
+      }
+
+      // 创建获取 DOM 按钮
+      var domButton = document.createElement('button');
+      domButton.id = 'wx-profile-dom-btn';
+      domButton.type = 'button';
+
+      if (__wx_is_account_like_page__()) {
+        domButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+        domButton.style.marginLeft = '8px';
+        domButton.style.background = 'transparent';
+        domButton.style.color = 'inherit';
+        domButton.style.borderColor = 'transparent';
+        domButton.style.flexShrink = '0';
+        domButton.style.opacity = '0.88';
+        domButton.title = '获取当前页面 DOM';
+        domButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="mx-1 !h-4 !w-4"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg><div>11获取DOM</div>';
+        domButton.onmouseenter = function () {
+          domButton.style.opacity = '1';
+        };
+        domButton.onmouseleave = function () {
+          domButton.style.opacity = '0.88';
+        };
+      } else {
+        domButton.className = 'weui-btn_default relative flex h-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-md text-sm';
+        domButton.style.width = '80px';
+        domButton.style.marginLeft = '8px';
+        domButton.title = '获取当前页面 DOM';
+        domButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">11获取DOM</div>';
+      }
+
+      // 点击事件 - 下载 DOM
+      domButton.onclick = function () {
+        try {
+          // 获取完整 HTML
+          var pageHTML = document.documentElement.outerHTML;
+
+          // 创建 Blob 对象
+          var blob = new Blob([pageHTML], { type: 'text/plain;charset=utf-8' });
+
+          // 创建下载链接
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+
+          // 生成文件名
+          var pageTitle = document.title || 'page';
+          pageTitle = pageTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+          var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+
+          // 添加页面标识
+          var pageType = __wx_is_account_like_page__() ? 'like' : 'profile';
+          a.download = pageTitle + '_' + pageType + '_dom_' + timestamp + '.txt';
+
+          // 触发下载
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          __wx_log({ msg: 'DOM已下载: ' + a.download });
+          console.log('[profile.js] DOM已下载:', a.download);
+        } catch (e) {
+          console.error('[profile.js] 获取DOM失败:', e);
+          __wx_log({ msg: '获取DOM失败: ' + e.message });
+        }
+      };
+
+      // 在批量下载按钮之后添加 DOM 按钮
+      if (__wx_is_account_like_page__()) {
+        container.appendChild(domButton);
+      } else {
+        var shopWrapperDom = container.querySelector('.shop-btn__wrp');
+        if (shopWrapperDom && shopWrapperDom.parentNode === container) {
+          container.insertBefore(domButton, shopWrapperDom);
+        } else {
+          container.appendChild(domButton);
+        }
+      }
+
+      console.log('[Profile] ✅ DOM 按钮已注入到操作区');
+
+      // ===== 关闭页面按钮 =====
+      if (container.querySelector('#wx-profile-close-btn')) {
+        console.log('[Profile] ✅ 关闭页面按钮已存在');
+        return true;
+      }
+
+      var closeButton = document.createElement('button');
+      closeButton.id = 'wx-profile-close-btn';
+      closeButton.type = 'button';
+
+      if (__wx_is_account_like_page__()) {
+        closeButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+        closeButton.style.marginLeft = '8px';
+        closeButton.style.background = 'transparent';
+        closeButton.style.color = 'inherit';
+        closeButton.style.borderColor = 'transparent';
+        closeButton.style.flexShrink = '0';
+        closeButton.style.opacity = '0.88';
+        closeButton.title = '关闭当前页面';
+        closeButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="mx-1 !h-4 !w-4"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><div>关闭</div>';
+        closeButton.onmouseenter = function () {
+          closeButton.style.opacity = '1';
+        };
+        closeButton.onmouseleave = function () {
+          closeButton.style.opacity = '0.88';
+        };
+      } else {
+        closeButton.className = 'weui-btn_default relative flex h-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-md text-sm';
+        closeButton.style.width = '72px';
+        closeButton.style.marginLeft = '8px';
+        closeButton.title = '关闭当前页面';
+        closeButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">关闭</div>';
+      }
+
+      closeButton.onclick = function () {
+        __close_page__();
+      };
+
+      // 插入到 DOM 按钮之后
+      if (__wx_is_account_like_page__()) {
+        container.appendChild(closeButton);
+      } else {
+        var shopWrapperClose = container.querySelector('.shop-btn__wrp');
+        if (shopWrapperClose && shopWrapperClose.parentNode === container) {
+          container.insertBefore(closeButton, shopWrapperClose);
+        } else {
+          container.appendChild(closeButton);
+        }
+      }
+
+      console.log('[Profile] ✅ 关闭页面按钮已注入到操作区');
       return true;
     };
 
@@ -631,6 +767,13 @@ WXE.onInteractionedFeedsLoaded(function (payload) {
   console.log('[Profile] 成功处理', processedCount, '个赞和收藏视频');
 });
 
+// ==================== 关闭页面 ====================
+function __close_page__() {
+  try {
+    window.close();
+  } catch (e) {}
+}
+
 // ==================== 初始化 ====================
 
 // 检查是否是列表页
@@ -643,8 +786,39 @@ if (is_profile_page()) {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       window.__wx_channels_profile_collector.init();
+      // 加载 DOM 操作模块
+      loadDomModules();
     });
   } else {
     window.__wx_channels_profile_collector.init();
+    loadDomModules();
   }
+}
+
+// 加载 DOM 操作模块
+function loadDomModules() {
+  // 延迟加载，确保 api_client 已就绪
+  setTimeout(function() {
+    console.log('[Profile] 加载 DOM 操作模块...');
+
+    // 加载 DOM 解析器
+    if (!window.__wx_dom_parser__) {
+      var parserScript = document.createElement('script');
+      parserScript.src = '/__wx_channels_internal__/dom_parser.js';
+      parserScript.onload = function() {
+        console.log('[Profile] DOM 解析器加载完成');
+      };
+      document.head.appendChild(parserScript);
+    }
+
+    // 加载 DOM 操作器
+    if (!window.__wx_dom_operator__) {
+      var operatorScript = document.createElement('script');
+      operatorScript.src = '/__wx_channels_internal__/dom_operator.js';
+      operatorScript.onload = function() {
+        console.log('[Profile] DOM 操作器加载完成');
+      };
+      document.head.appendChild(operatorScript);
+    }
+  }, 3000);
 }

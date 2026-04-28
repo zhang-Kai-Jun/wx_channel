@@ -90,6 +90,12 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	// 会话重置 API（切换用户前调用，清理所有 WebSocket 连接和 pending 请求）
+	if path == "/__wx_channels_api/reset_session" {
+		h.HandleResetSession(Conn)
+		return true
+	}
+
 	if h.HandleProfile(Conn) {
 		return true
 	}
@@ -454,4 +460,43 @@ func (h *APIHandler) setCORSHeadersFromConn(Conn *SunnyNet.HttpConn, headers htt
 			}
 		}
 	}
+}
+
+// HandleResetSession 会话重置接口（POST /__wx_channels_api/reset_session）
+// 在切换用户前调用，关闭所有 WebSocket 连接并清理 Hub 状态
+// 确保下一个用户的操作不会受到前一个用户残留连接的影响
+func (h *APIHandler) HandleResetSession(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/reset_session" {
+		return
+	}
+
+	// 只允许 POST
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	// 检查 Hub 是否可用
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	utils.LogInfo("[HandleResetSession] 开始重置会话...")
+
+	// 执行完整的 Hub 重置
+	h.domActionHub.ResetSession()
+
+	// 返回成功
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, `{"success":true,"message":"session reset"}`, headers)
 }

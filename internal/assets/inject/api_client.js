@@ -593,6 +593,13 @@ window.__wx_api_client = {
           this.sendResponseViaHTTP(id, { success: true, message: '正在打开: ' + (body.url || '') });
           // 延迟执行导航
           setTimeout(function() {
+            // 导航前清理关键全局状态（应对 WeChatAppEx 不触发 beforeunload 的情况）
+            // 确保下一个用户不会受到前一个用户残留状态的影响
+            window.__wx_cached_cards = null;
+            window.__wx_current_feed = null;
+            // __wx_api_client 本身的连接会在 beforeunload 中关闭，connectToken 自增自动隔离旧消息
+            // __wx_channels_profile_collector 会在新页面重新初始化，不需要手动清理
+
             console.log('[API客户端] 执行页面导航到:', body.url);
             if (body.url && body.url.trim()) {
               window.location.href = body.url;

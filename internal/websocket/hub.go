@@ -426,6 +426,102 @@ func (h *Hub) ClearActiveTaskClient() {
 	utils.LogInfo("[Hub] 已清除活跃任务客户端")
 }
 
+// CloseAllClients 关闭所有客户端连接（用于会话重置）
+// 触发每个 client 的 unregister，Hub.Run() 随后从 clients map 中删除
+// 调用后会等待所有 unregister 处理完毕（最多 2 秒），确保 clients map 清空
+func (h *Hub) CloseAllClients() {
+	h.mu.Lock()
+	// 复制一份 client 列表，避免在持锁期间修改 map
+	clients := make([]*Client, 0, len(h.clients))
+	for client := range h.clients {
+		clients = append(clients, client)
+	}
+	h.mu.Unlock()
+
+	if len(clients) == 0 {
+		utils.LogInfo("[Hub] CloseAllClients: 无客户端需要关闭")
+		return
+	}
+
+	utils.LogInfo("[Hub] CloseAllClients: 准备关闭 %d 个客户端", len(clients))
+
+	// 先清除活跃客户端指针（不需要持锁，CearActiveTaskClient 内部会加锁）
+	h.ClearActiveTaskClient()
+
+	// 关闭所有 WebSocket 连接，触发 Client.Close()
+	// Client.Close() 会触发 Hub.Run() 的 unregister 通道
+	for _, client := range clients {
+		utils.LogInfo("[Hub] CloseAllClients: 关闭客户端 %s", client.RemoteAddr)
+		client.Close()
+	}
+
+	// 等待 unregister 处理完毕（Hub.Run 是单线程串行处理通道）
+	// 等待时间足够让 Hub.Run() 处理完所有 unregister
+	time.Sleep(2 * time.Second)
+
+	h.mu.RLock()
+	remaining := len(h.clients)
+	h.mu.RUnlock()
+
+	utils.LogInfo("[Hub] CloseAllClients: 完成，剩余客户端数=%d", remaining)
+}
+
+// ClearPendingRequests 清理所有 pending 的 API 请求通道
+// 旧导航操作的 goroutine（60s 超时）会收到零值响应并退出
+func (h *Hub) ClearPendingRequests() {
+	h.requestsMu.Lock()
+	defer h.requestsMu.Unlock()
+
+	count := len(h.requests)
+	if count == 0 {
+		utils.LogInfo("[Hub] ClearPendingRequests: 无 pending 请求")
+		return
+	}
+
+	utils.LogInfo("[Hub] ClearPendingRequests: 清理 %d 个 pending 请求", count)
+	for reqID, ch := range h.requests {
+		// 只从 map 删除，不关闭 channel
+		// 因为 CallAPI 的 defer 会在 goroutine 退出时关闭 channel
+		// 如果 defer 已经执行，则 ch 已经是关闭状态，delete 是安全操作
+		delete(h.requests, reqID)
+		_ = ch // 明确告知 ch 后续不再使用
+	}
+
+	utils.LogInfo("[Hub] ClearPendingRequests: 完成，已清理 %d 个请求", count)
+}
+
+// ResetSession 完整重置 Hub 状态（用于切换用户前）
+// 等效于 CloseAllClients + ClearPendingRequests，但不阻塞等待
+func (h *Hub) ResetSession() {
+	// 1. 关闭所有 WebSocket（异步，Client.Close() 触发 unregister）
+	h.mu.Lock()
+	clients := make([]*Client, 0, len(h.clients))
+	for client := range h.clients {
+		clients = append(clients, client)
+	}
+	h.mu.Unlock()
+
+	if len(clients) > 0 {
+		utils.LogInfo("[Hub] ResetSession: 关闭 %d 个客户端", len(clients))
+		for _, client := range clients {
+			client.Close()
+		}
+	}
+
+	// 2. 清除活跃客户端指针
+	h.ClearActiveTaskClient()
+
+	// 3. 清理 pending 请求（同步，立即关闭所有 channel）
+	h.ClearPendingRequests()
+
+	// 4. 清除 lastClient 引用（确保下次选到最新的）
+	h.mu.Lock()
+	h.lastClient = nil
+	h.mu.Unlock()
+
+	utils.LogInfo("[Hub] ResetSession: 完成")
+}
+
 // GetSearchClientCount 获取搜索页客户端数量（通过指针返回，协程安全）
 func (h *Hub) GetSearchClientCount(count *int) {
 	h.mu.RLock()

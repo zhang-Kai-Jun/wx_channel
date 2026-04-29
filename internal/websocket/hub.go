@@ -31,6 +31,12 @@ type Hub struct {
 	activeTaskClient   *Client
 	activeTaskClientMu sync.RWMutex
 
+	// 【新增】正在执行导航操作的客户端
+	// CallAPI("open_profile"/"enter_video") 时记录，页面切换完成后由 JS 通知清除
+	// 用于 waitForPageReady 正确查询执行导航的那个客户端的 pagePath
+	navigatingClient     *Client
+	navigatingClientMu   sync.RWMutex
+
 	// 负载均衡选择器
 	selector ClientSelector
 
@@ -79,6 +85,13 @@ func (h *Hub) Run() {
 				utils.LogInfo("WebSocket 客户端已断开: %s", addr)
 			}
 			h.mu.Unlock()
+			// 注销后也要清除 navigatingClient 引用（如果指向这个客户端）
+			h.navigatingClientMu.Lock()
+			if h.navigatingClient == client {
+				h.navigatingClient = nil
+				utils.LogInfo("[Hub] navigatingClient 因客户端注销已清除")
+			}
+			h.navigatingClientMu.Unlock()
 		}
 	}
 }
@@ -204,6 +217,24 @@ func (h *Hub) CallAPI(key string, body interface{}, timeout time.Duration) (json
 	client, err := h.GetClientForKey(key)
 	if err != nil {
 		return nil, err
+	}
+
+	// 【新增】如果是导航操作，记录该客户端为 navigatingClient
+	// 用于 waitForPageReady 时查询执行导航的那个客户端的 pagePath
+	if key == "key:channels:dom_action" {
+		if domReq, ok := body.(DOMActionBody); ok {
+			if domReq.Action == "open_profile" || domReq.Action == "enter_video" {
+				h.navigatingClientMu.Lock()
+				// 只记录仍在 clients map 中的客户端
+				h.mu.RLock()
+				if _, ok := h.clients[client]; ok {
+					h.navigatingClient = client
+					utils.LogInfo("[Hub] navigatingClient 已记录: action=%s, client=%s", domReq.Action, client.RemoteAddr)
+				}
+				h.mu.RUnlock()
+				h.navigatingClientMu.Unlock()
+			}
+		}
 	}
 
 	// 增加活跃请求计数
@@ -426,6 +457,39 @@ func (h *Hub) ClearActiveTaskClient() {
 	utils.LogInfo("[Hub] 已清除活跃任务客户端")
 }
 
+// GetNavigatingClientPagePath 返回正在执行导航的客户端的页面路径
+// 用于 waitForPageReady 判断导航是否完成
+func (h *Hub) GetNavigatingClientPagePath() string {
+	h.navigatingClientMu.RLock()
+	defer h.navigatingClientMu.RUnlock()
+
+	if h.navigatingClient == nil {
+		return ""
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	// 检查 navigatingClient 是否还在 clients 中（可能已断开）
+	if _, ok := h.clients[h.navigatingClient]; !ok {
+		return ""
+	}
+
+	return h.navigatingClient.pagePath
+}
+
+// ClearNavigatingClient 清除导航客户端引用
+// 由 JS 在导航完成后（inject 已上报新 pagePath）调用
+func (h *Hub) ClearNavigatingClient() {
+	h.navigatingClientMu.Lock()
+	defer h.navigatingClientMu.Unlock()
+
+	if h.navigatingClient != nil {
+		utils.LogInfo("[Hub] navigatingClient 已清除: %s", h.navigatingClient.RemoteAddr)
+		h.navigatingClient = nil
+	}
+}
+
 // CloseAllClients 关闭所有客户端连接（用于会话重置）
 // 触发每个 client 的 unregister，Hub.Run() 随后从 clients map 中删除
 // 调用后会等待所有 unregister 处理完毕（最多 2 秒），确保 clients map 清空
@@ -510,6 +574,9 @@ func (h *Hub) ResetSession() {
 
 	// 2. 清除活跃客户端指针
 	h.ClearActiveTaskClient()
+
+	// 2b. 清除导航客户端指针
+	h.ClearNavigatingClient()
 
 	// 3. 清理 pending 请求（同步，立即关闭所有 channel）
 	h.ClearPendingRequests()

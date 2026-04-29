@@ -101,12 +101,13 @@ func (api *TaskAPI) GetTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.Success(w, map[string]interface{}{
-		"task_id":       taskCtx.TaskID,
-		"keyword":       taskCtx.Keyword,
-		"target_count":  taskCtx.TargetCount,
-		"current_count": len(taskCtx.VideoList),
-		"status":        taskCtx.Status,
-		"video_list":    taskCtx.VideoList,
+		"success":        true,
+		"task_id":        taskCtx.TaskID,
+		"keyword":        taskCtx.Keyword,
+		"target_count":   taskCtx.TargetCount,
+		"current_count":  len(taskCtx.VideoList),
+		"status":         taskCtx.Status,
+		"video_list":     taskCtx.VideoList,
 	})
 }
 

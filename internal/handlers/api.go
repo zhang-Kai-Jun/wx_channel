@@ -96,6 +96,12 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	// 清除导航客户端引用（导航完成后 JS 调用）
+	if path == "/__wx_channels_api/clear_navigating" {
+		h.HandleClearNavigating(Conn)
+		return true
+	}
+
 	if h.HandleProfile(Conn) {
 		return true
 	}
@@ -329,6 +335,7 @@ func (h *APIHandler) HandleDOMActionHealth(Conn *SunnyNet.HttpConn) {
 	clientCount := 0
 	apiReady := false
 	clientPagePath := ""
+	navigatingClientPagePath := ""
 	if h.domActionHub != nil {
 		clientCount = h.domActionHub.ClientCount()
 		// 检查是否有已就绪的客户端（支持 DOM Action 的客户端）
@@ -336,17 +343,20 @@ func (h *APIHandler) HandleDOMActionHealth(Conn *SunnyNet.HttpConn) {
 		apiReady = readyCount > 0
 		// 获取当前客户端的页面路径
 		clientPagePath = h.domActionHub.GetClientPagePath()
+		// 获取正在执行导航的客户端的页面路径
+		navigatingClientPagePath = h.domActionHub.GetNavigatingClientPagePath()
 	}
 
 	result := map[string]interface{}{
-		"success":        true,
-		"status":         "healthy",
-		"time":           time.Now().Unix(),
-		"hub_ready":      hubReady,
-		"clients":        clientCount,
-		"clientCount":    clientCount,
-		"apiReady":       apiReady,
-		"clientPagePath": clientPagePath,
+		"success":                      true,
+		"status":                       "healthy",
+		"time":                         time.Now().Unix(),
+		"hub_ready":                    hubReady,
+		"clients":                      clientCount,
+		"clientCount":                  clientCount,
+		"apiReady":                     apiReady,
+		"clientPagePath":               clientPagePath,
+		"navigatingClientPagePath":     navigatingClientPagePath,
 	}
 
 	resultJSON, _ := json.Marshal(result)
@@ -499,4 +509,38 @@ func (h *APIHandler) HandleResetSession(Conn *SunnyNet.HttpConn) {
 	headers.Set("Content-Type", "application/json")
 	h.setCORSHeadersFromConn(Conn, headers)
 	Conn.StopRequest(200, `{"success":true,"message":"session reset"}`, headers)
+}
+
+// HandleClearNavigating 清除导航客户端引用（POST /__wx_channels_api/clear_navigating）
+// 导航完成后（inject 已上报新 pagePath），JS 调用此接口清除 navigatingClient
+func (h *APIHandler) HandleClearNavigating(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/clear_navigating" {
+		return
+	}
+
+	// 只允许 POST
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	// 检查 Hub 是否可用
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	h.domActionHub.ClearNavigatingClient()
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, `{"success":true}`, headers)
 }

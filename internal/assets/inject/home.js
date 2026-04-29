@@ -199,6 +199,7 @@ function __update_download_button_state() {
         downloadBtn.title = '当前页面不支持下载';
       }
     }
+    downloadBtn.style.display = 'none';
   }
 }
 

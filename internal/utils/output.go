@@ -8,22 +8,22 @@ import (
 
 // PrintSeparator 打印分隔线
 func PrintSeparator() {
-	color.Cyan("─────────────────────────────────────────────────────────────────")
+	// color.Cyan("─────────────────────────────────────────────────────────────────")
 }
 
 // PrintLabelValue 打印带标签和值的格式化输出
 func PrintLabelValue(icon string, label string, value interface{}) {
-	color.New(color.FgGreen).Printf("%-2s %-6s", icon, label+":")
-	fmt.Println(value)
+	// color.New(color.FgGreen).Printf("%-2s %-6s", icon, label+":")
+	// fmt.Println(value)
 }
 
 // PrintLabelValueWithColor 使用指定颜色打印标签和值
 func PrintLabelValueWithColor(icon string, label string, value interface{}, textColor *color.Color) {
-	if textColor == nil {
-		textColor = color.New(color.FgGreen)
-	}
-	textColor.Printf("%-2s %-6s", icon, label+":")
-	fmt.Println(value)
+	// if textColor == nil {
+	// 	textColor = color.New(color.FgGreen)
+	// }
+	// textColor.Printf("%-2s %-6s", icon, label+":")
+	// fmt.Println(value)
 }
 
 // FormatDuration 格式化视频时长为时分秒

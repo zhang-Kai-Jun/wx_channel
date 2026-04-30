@@ -1984,26 +1984,27 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 
 		console.log('[评论采集] 发送数据: ' + comments.length + ' 条评论 (期望总数: ' + totalExpected + ') | ID: ' + videoInfo.id + ' | 作者: ' + authorNickname);
 
-		fetch('/__wx_channels_api/save_comment_data', {
-			method: 'POST',
-			headers: {'Content-Type': 'application/json'},
-			body: JSON.stringify({
-				comments: comments,
-				videoId: videoInfo.id,
-				videoTitle: videoInfo.title,
-				originalCommentCount: totalExpected || 0,
-				timestamp: Date.now(),
-				isFullUpdate: true,
-				authorId: authorId,
-				authorNickname: authorNickname,
-				authorUsername: authorUsername,
-				authorHeadUrl: authorHeadUrl,
-				authorSignature: authorSignature,
-				profileUrl: authorUsername ? 'https://channels.weixin.qq.com/profile/' + authorUsername.replace(/@finder$/, '').replace(/@stranger$/, '') : ''
-			})
-		}).catch(function(err) {
-			console.error('[评论采集] 保存失败:', err);
-		});
+		// TODO: 暂时禁用保存到文件，仅保留日志输出
+		// fetch('/__wx_channels_api/save_comment_data', {
+		// 	method: 'POST',
+		// 	headers: {'Content-Type': 'application/json'},
+		// 	body: JSON.stringify({
+		// 		comments: comments,
+		// 		videoId: videoInfo.id,
+		// 		videoTitle: videoInfo.title,
+		// 		originalCommentCount: totalExpected || 0,
+		// 		timestamp: Date.now(),
+		// 		isFullUpdate: true,
+		// 		authorId: authorId,
+		// 		authorNickname: authorNickname,
+		// 		authorUsername: authorUsername,
+		// 		authorHeadUrl: authorHeadUrl,
+		// 		authorSignature: authorSignature,
+		// 		profileUrl: authorUsername ? 'https://channels.weixin.qq.com/profile/' + authorUsername.replace(/@finder$/, '').replace(/@stranger$/, '') : ''
+		// 	})
+		// }).catch(function(err) {
+		// 	console.error('[评论采集] 保存失败:', err);
+		// });
 	}
 
 	// 触发保存（带防抖）

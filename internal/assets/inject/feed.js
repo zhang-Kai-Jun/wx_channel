@@ -597,9 +597,21 @@ async function __insert_download_btn_to_feed_toolbar() {
       __handle_export_click();
     };
 
+    // 创建 Store 快照按钮
+    var storeSnapshotIconWrapper = __build_feed_header_icon(
+      'wx-feed-store-snapshot-icon',
+      'Store快照',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h6M9 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+    );
+
+    storeSnapshotIconWrapper.onclick = function () {
+      dumpAllPiniaStores();
+    };
+
     // Insert into container
     container.insertBefore(exportIconWrapper, container.firstChild);
-    container.insertBefore(downloadIconWrapper, container.firstChild);
+    container.insertBefore(storeSnapshotIconWrapper, exportIconWrapper);
+    container.insertBefore(downloadIconWrapper, storeSnapshotIconWrapper);
     container.insertBefore(domIconWrapper, container.firstChild);
     container.insertBefore(commentIconWrapper, container.firstChild);
     container.insertBefore(copyLinkIconWrapper, container.firstChild);
@@ -895,4 +907,57 @@ if (typeof WXE !== 'undefined') {
   WXE.onFetchFeedProfile(function (feed) {
     __remember_current_feed(feed, 'feed-profile');
   });
+}
+
+/**
+ * 遍历所有 Pinia Store 并发送到后端保存
+ */
+function dumpAllPiniaStores() {
+  var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+  var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
+  var appContext = vue && (vue.appContext || (vue.ctx && vue.ctx.appContext));
+  var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+  var pinia = globalProperties && globalProperties.$pinia;
+
+  if (!pinia || !pinia._s) {
+    console.warn('[Pinia Store] 未找到 Pinia Store');
+    __wx_log({ msg: '❌ 未找到 Pinia Store' });
+    return;
+  }
+
+  var stores = {};
+  var storeNames = [];
+  pinia._s.forEach(function (store, name) {
+    try {
+      var state = (store.$state && JSON.parse(JSON.stringify(store.$state))) || {};
+      stores[name] = state;
+      storeNames.push(name);
+    } catch (e) {
+      stores[name] = { '__error__': e.message };
+    }
+  });
+
+  console.log('[Pinia Store] 快照数据:', stores);
+  __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个)' });
+
+  var page = window.__wx_current_page__ || location.pathname || '';
+
+  fetch('/__wx_channels_api/dump_pinia_store', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stores: stores,
+      page: page,
+      url: location.href,
+      timestamp: Date.now()
+    })
+  }).then(function (res) { return res.json(); })
+    .then(function (data) {
+      console.log('[Pinia Store] 快照已保存:', data);
+      __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: ' + storeNames.join(', ') + ')' });
+    })
+    .catch(function (err) {
+      console.error('[Pinia Store] 保存失败:', err);
+      __wx_log({ msg: '❌ Store快照保存失败: ' + err.message });
+    });
 }

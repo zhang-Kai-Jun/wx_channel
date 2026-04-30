@@ -40,6 +40,10 @@ func (h *CommentHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 	if h.HandleSaveRawCommentAPI(Conn) {
 		return true
 	}
+	// 处理 Pinia Store 快照
+	if h.HandleDumpPiniaStore(Conn) {
+		return true
+	}
 	return false
 }
 
@@ -74,6 +78,98 @@ func (h *CommentHandler) HandleSaveRawCommentAPI(Conn *SunnyNet.HttpConn) bool {
 	headers.Set("Content-Type", "application/json")
 	Conn.Response.Body = io.NopCloser(strings.NewReader(`{"success":true}`))
 	return true
+}
+
+// HandleDumpPiniaStore 处理 Pinia Store 快照请求
+func (h *CommentHandler) HandleDumpPiniaStore(Conn *SunnyNet.HttpConn) bool {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/dump_pinia_store" {
+		return false
+	}
+
+	body, err := io.ReadAll(Conn.Request.Body)
+	if err != nil {
+		utils.HandleError(err, "读取 Pinia Store 快照请求体")
+		return true
+	}
+	defer Conn.Request.Body.Close()
+
+	var requestData struct {
+		Stores    map[string]interface{} `json:"stores"`
+		Page      string                 `json:"page"`
+		URL       string                 `json:"url"`
+		Timestamp int64                  `json:"timestamp"`
+	}
+	if err := json.Unmarshal(body, &requestData); err != nil {
+		utils.HandleError(err, "解析 Pinia Store 快照数据")
+		h.sendEmptyResponse(Conn)
+		return true
+	}
+
+	if len(requestData.Stores) == 0 {
+		utils.Warn("[Pinia Store] 快照数据为空，跳过保存")
+		h.sendEmptyResponse(Conn)
+		return true
+	}
+
+	snapshot := map[string]interface{}{
+		"page":      requestData.Page,
+		"url":       requestData.URL,
+		"timestamp": requestData.Timestamp,
+		"saved_at":  time.Now().Format(time.RFC3339),
+		"stores":    requestData.Stores,
+	}
+
+	savedPath, err := h.savePiniaStoreSnapshot(snapshot)
+	if err != nil {
+		utils.HandleError(err, "保存 Pinia Store 快照")
+		h.sendEmptyResponse(Conn)
+		return true
+	}
+
+	storeCount := len(requestData.Stores)
+	storeNames := make([]string, 0, len(requestData.Stores))
+	for name := range requestData.Stores {
+		storeNames = append(storeNames, name)
+	}
+	utils.LogInfo("[Pinia Store] 快照已保存 | 页面=%s | Store数=%d | Store列表=%v | 路径=%s",
+		requestData.Page, storeCount, storeNames, savedPath)
+
+	h.sendEmptyResponse(Conn)
+	return true
+}
+
+// savePiniaStoreSnapshot 保存 Pinia Store 快照到文件
+func (h *CommentHandler) savePiniaStoreSnapshot(snapshot map[string]interface{}) (string, error) {
+	baseDir, err := utils.GetBaseDir()
+	if err != nil {
+		return "", fmt.Errorf("获取基础目录失败: %v", err)
+	}
+
+	snapshotDir := filepath.Join(baseDir, h.getConfig().DownloadsDir, "comment_data", "store_snapshots")
+	if err := utils.EnsureDir(snapshotDir); err != nil {
+		return "", fmt.Errorf("创建快照目录失败: %v", err)
+	}
+
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	page := ""
+	if p, ok := snapshot["page"].(string); ok && p != "" {
+		page = strings.ReplaceAll(strings.ReplaceAll(p, "/", "_"), "webpages", "")
+		page = strings.Trim(page, "_")
+	}
+	filename := fmt.Sprintf("snapshot_%s_%s.json", page, timestamp)
+	targetPath := filepath.Join(snapshotDir, filename)
+
+	dataBytes, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("序列化快照数据失败: %v", err)
+	}
+
+	if err := os.WriteFile(targetPath, dataBytes, 0644); err != nil {
+		return "", fmt.Errorf("保存快照文件失败: %v", err)
+	}
+
+	return targetPath, nil
 }
 
 // saveRawCommentAPIData 保存原始评论API数据到文件
@@ -149,17 +245,19 @@ func (h *CommentHandler) HandleSaveCommentData(Conn *SunnyNet.HttpConn) bool {
 	}
 
 	var requestData struct {
-		Comments               []map[string]interface{} `json:"comments"`
-		VideoID                string                   `json:"videoId"`
-		VideoTitle             string                   `json:"videoTitle"`
-		OriginalCommentCount   int                      `json:"originalCommentCount"`
-		Timestamp              int64                    `json:"timestamp"`
-		RawAPIData             map[string]interface{}   `json:"rawApiData"` // 新增：原始API数据
-		// 新增：作者信息
-		AuthorID               string                   `json:"authorId"`
-		AuthorNickname         string                   `json:"authorNickname"`
-		ProfileURL             string                   `json:"profileUrl"`
-		Username              string                   `json:"username"` // 视频号ID
+		Comments             []map[string]interface{} `json:"comments"`
+		VideoID              string                   `json:"videoId"`
+		VideoTitle           string                   `json:"videoTitle"`
+		OriginalCommentCount int                      `json:"originalCommentCount"`
+		Timestamp            int64                    `json:"timestamp"`
+		RawAPIData           map[string]interface{}   `json:"rawApiData"`
+		AuthorID             string                   `json:"authorId"`
+		AuthorNickname       string                   `json:"authorNickname"`
+		ProfileURL           string                   `json:"profileUrl"`
+		Username             string                   `json:"username"`
+		AuthorUsername       string                   `json:"authorUsername"`
+		AuthorHeadURL        string                   `json:"authorHeadUrl"`
+		AuthorSignature      string                   `json:"authorSignature"`
 	}
 
 	body, err := io.ReadAll(Conn.Request.Body)
@@ -187,7 +285,7 @@ func (h *CommentHandler) HandleSaveCommentData(Conn *SunnyNet.HttpConn) bool {
 	}
 
 	// 保存评论数据
-	if err := h.saveCommentData(requestData.Comments, requestData.VideoID, requestData.VideoTitle, requestData.OriginalCommentCount, requestData.Timestamp, requestData.RawAPIData, requestData.AuthorID, requestData.AuthorNickname, requestData.ProfileURL, requestData.Username); err != nil {
+	if err := h.saveCommentData(requestData.Comments, requestData.VideoID, requestData.VideoTitle, requestData.OriginalCommentCount, requestData.Timestamp, requestData.RawAPIData, requestData.AuthorID, requestData.AuthorNickname, requestData.ProfileURL, requestData.Username, requestData.AuthorUsername, requestData.AuthorHeadURL, requestData.AuthorSignature); err != nil {
 		utils.HandleError(err, "保存评论数据")
 		h.sendErrorResponse(Conn, err)
 		return true
@@ -198,7 +296,7 @@ func (h *CommentHandler) HandleSaveCommentData(Conn *SunnyNet.HttpConn) bool {
 }
 
 // saveCommentData 保存评论数据到文件
-func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, videoID, videoTitle string, originalCommentCount int, timestamp int64, rawAPIData map[string]interface{}, authorID, authorNickname, profileURL, username string) error {
+func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, videoID, videoTitle string, originalCommentCount int, timestamp int64, rawAPIData map[string]interface{}, authorID, authorNickname, profileURL, username, authorUsername, authorHeadURL, authorSignature string) error {
 	if len(comments) == 0 {
 		return nil
 	}
@@ -251,12 +349,13 @@ func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, vide
 		"originalCommentCount": originalCommentCount,
 		"saved_at":             saveTime.Format(time.RFC3339),
 		"timestamp":            timestamp,
-		"rawApiData":           rawAPIData, // 保存原始API数据
-		// 新增：作者信息
+		"rawApiData":           rawAPIData,
 		"authorId":             authorID,
 		"authorNickname":       authorNickname,
+		"authorUsername":       authorUsername,
+		"authorHeadUrl":        authorHeadURL,
+		"authorSignature":      authorSignature,
 		"profileUrl":           profileURL,
-		"username":             username, // 视频号ID
 	}
 
 	// 保存JSON数据

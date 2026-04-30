@@ -466,7 +466,7 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 			const coverUrl = profile.thumbUrl || profile.fullThumbUrl || profile.coverUrl;
 			
 			if (!coverUrl) {
-				alert("未找到封面图片");
+				// alert("未找到封面图片");
 				return;
 			}
 			
@@ -518,7 +518,7 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 							msg: '❌ ' + errorMsg
 						});
 					}
-					alert('保存封面失败: ' + errorMsg);
+					// alert('保存封面失败: ' + errorMsg);
 				}
 			})
 			.catch(error => {
@@ -528,10 +528,10 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 						msg: '❌ 保存封面失败: ' + error.message
 					});
 				}
-				alert("保存封面失败: " + error.message);
+				// alert("保存封面失败: " + error.message);
 			});
 		} else {
-			alert("未找到视频信息");
+			// alert("未找到视频信息");
 		}
 	};
 	</script>`
@@ -1710,36 +1710,156 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		return extractCommentPayloadFromDOM();
 	}
 
-	// 格式化评论数据，使其符合后端 API 要求
+	// 从所有 Pinia store 中查找 flowCommentList 的原始引用（保留所有字段）
+	function findFlowCommentListInStores() {
+		try {
+			var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+			if (!app) return null;
+			var vue = app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component);
+			if (!vue) return null;
+			var appContext = vue.appContext || (vue.ctx && vue.ctx.appContext);
+			if (!appContext || !appContext.config || !appContext.config.globalProperties) return null;
+			var pinia = appContext.config.globalProperties.$pinia;
+			if (!pinia || !pinia._s) return null;
+
+			var stores = pinia._s;
+			var iterator = stores.keys();
+			var result = iterator.next();
+			while (!result.done) {
+				var id = result.value;
+				var s = stores.get(id);
+				if (!s) { result = iterator.next(); continue; }
+
+				var home = s.home || (s.$state && s.$state.home);
+				var flowCommentList = null;
+				if (home && home.flowCommentList) {
+					flowCommentList = home.flowCommentList;
+				} else if (s.flowCommentList) {
+					flowCommentList = s.flowCommentList;
+				}
+
+				if (flowCommentList && flowCommentList.dataList && flowCommentList.dataList.items && flowCommentList.dataList.items.length) {
+					return { store: s, home: home, flowCommentList: flowCommentList };
+				}
+
+				// 也检查 store.$state
+				var state = s.$state || s;
+				if (state.home && state.home.flowCommentList && state.home.flowCommentList.dataList && state.home.flowCommentList.dataList.items && state.home.flowCommentList.dataList.items.length) {
+					return { store: s, home: state.home, flowCommentList: state.home.flowCommentList };
+				}
+
+				result = iterator.next();
+			}
+		} catch (e) {
+			console.warn('[评论采集] 遍历Pinia stores查找flowCommentList失败:', e);
+		}
+		return null;
+	}
+
+	// 直接从 Store flowCommentList 读取评论（保留所有原始字段）
+	// 替代 extractCommentPayload，适用于 home.flowCommentList.dataList 结构
+	function extractStoreComments(store) {
+		var found = findFlowCommentListInStores();
+		if (!found) return null;
+
+		var fcl = found.flowCommentList;
+		var dataList = fcl.dataList;
+		if (!dataList || !Array.isArray(dataList.items) || !dataList.items.length) return null;
+
+		var buffers = dataList.buffers || {};
+		var lastBuffer = buffers.lastBuffer || buffers.nextBuffer || '';
+
+		// 优先从 flowCommentList.commentCount 获取总数
+		var total = fcl.commentCount || 0;
+		// 其次从 store.feed 或 home.feed 获取
+		if (!total) {
+			var feed = found.home && found.home.feed;
+			if (!feed && found.store) {
+				feed = found.store.feed || (found.store.home && found.store.home.feed);
+			}
+			if (feed && feed.commentCount !== undefined) total = feed.commentCount;
+		}
+
+		return {
+			items: dataList.items,
+			total: total,
+			buffer: lastBuffer,
+			hasMore: !!lastBuffer,
+			store: found.store,
+			home: found.home
+		};
+	}
+
+	// 格式化评论数据：直接保留 Store 原始字段（新增字段如 authorReactionInfo, contentInfo, reportJson, username 等）
 	function formatComments(items) {
 		if (!items || !Array.isArray(items)) return [];
-		
+
 		function formatItem(item) {
-			// 递归处理子回复
 			var levelTwo = [];
-			var replyList = getReplyList(item);
-			if (replyList && replyList.length) {
+			var replyList = item.levelTwoComment;
+			if (replyList && Array.isArray(replyList) && replyList.length) {
 				levelTwo = replyList.map(formatItem);
 			}
-			
+
+			// IP 属地优先使用 ipRegionInfo
+			var ipLocation = '';
+			if (item.ipRegionInfo && item.ipRegionInfo.regionText) {
+				ipLocation = item.ipRegionInfo.regionText;
+			}
+
 			return {
-				id: item.id || item.commentId,
+				// 基础字段（兼容旧结构）
+				id: item.commentId || item.id || '',
 				content: item.content || item.text || '',
 				createTime: item.createtime || item.createTime || item.create_time || item.time || '',
 				likeCount: item.likeCount || item.like_num || item.diggCount || 0,
 				nickname: item.nickname || (item.author && item.author.nickname) || (item.userInfo && item.userInfo.nickname) || '',
 				headUrl: item.headUrl || (item.author && item.author.headUrl) || (item.userInfo && (item.userInfo.avatar || item.userInfo.headUrl)) || '',
-				ipLocation: item.ipLocation || '',
-				// 新增：回复引用信息 (支持三级回复)
-				replyCommentId: item.replyCommentId || (item.replyComment && item.replyComment.id) || (item.replyInfo && item.replyInfo.commentId) || '', 
+				ipLocation: ipLocation,
+				replyCommentId: item.replyCommentId || (item.replyComment && item.replyComment.id) || (item.replyInfo && item.replyInfo.commentId) || '',
 				replyNickname: item.replyNickname || (item.replyComment && item.replyComment.nickname) || (item.replyInfo && item.replyInfo.nickname) || '',
-				// 递归包含子回复
 				levelTwoComment: levelTwo,
-				expandCommentCount: item.expandCommentCount || item.replyCount || item.commentCount || replyList.length || 0,
-				authorLiked: !!item.authorLiked
+				expandCommentCount: item.expandCommentCount || item.replyCount || item.commentCount || (replyList && replyList.length) || 0,
+				authorLiked: !!(item.authorLiked || (item.authorReactionInfo && item.authorReactionInfo.authorLikeTime)),
+
+				// 完整保留 Store 原始字段（新增高价值字段）
+				commentId: item.commentId || item.id || '',
+				contentType: item.contentType,
+				createtime: item.createtime || '',
+				dislikeCount: item.dislikeCount || 0,
+				displayFlag: item.displayFlag,
+				extFlag: item.extFlag,
+				continueFlag: item.continueFlag,
+				upContinueFlag: item.upContinueFlag,
+				likeFlag: item.likeFlag,
+
+				// 用户信息（完整保留）
+				username: item.username || (item.authorContact && item.authorContact.username) || '',
+				authorContact: item.authorContact || null,
+
+				// IP 信息
+				ipRegionInfo: item.ipRegionInfo || null,
+
+				// 内容详情（表情包、图片等）
+				contentInfo: item.contentInfo || null,
+
+				// 作者是否点赞该评论
+				authorReactionInfo: item.authorReactionInfo || null,
+
+				// 推荐系统数据
+				reportJson: item.reportJson || '',
+				searchKeywordInfo: item.searchKeywordInfo || [],
+				interactionLabelList: item.interactionLabelList || [],
+				mentionedUserInfo: item.mentionedUserInfo || [],
+
+				// 二级回复引用内容（被回复的那条评论内容）
+				replyContent: item.replyContent || '',
+
+				// 分页标记
+				lastBuffer: item.lastBuffer || ''
 			};
 		}
-		
+
 		return items.map(formatItem);
 	}
 
@@ -1810,9 +1930,35 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 	// 保存评论数据到后端
 	function saveComments(comments, totalExpected) {
 		if (!comments || comments.length === 0) return;
-		
-		var store = findFeedStore();
-		var videoInfo = getVideoInfo(store);
+
+		var videoInfo = { id: '', title: '' };
+
+		// 先从 extractStoreComments 获取 store（包含 feed.contact）
+		var storeData = findFlowCommentListInStores();
+		var feed = null;
+		if (storeData) {
+			feed = storeData.home && storeData.home.feed;
+			if (!feed) feed = storeData.store && (storeData.store.feed || (storeData.store.home && storeData.store.home.feed));
+		}
+
+		// 获取视频ID和标题
+		var currentProfile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+		if (currentProfile) {
+			videoInfo.id = currentProfile.id || currentProfile.objectId || '';
+			videoInfo.title = currentProfile.title || currentProfile.description || currentProfile.desc || '';
+		}
+		if (!videoInfo.id && feed) {
+			videoInfo.id = feed.id || feed.objectId || '';
+		}
+		if (!videoInfo.title && feed && feed.objectDesc) {
+			videoInfo.title = feed.objectDesc.description || feed.objectDesc.desc || '';
+		}
+		if (!videoInfo.id) {
+			var activeFeedNode = document.querySelector('[id^="flow-feed-"]');
+			if (activeFeedNode && activeFeedNode.id) videoInfo.id = activeFeedNode.id.replace(/^flow-feed-/, '');
+		}
+		if (!videoInfo.title) videoInfo.title = document.title || '';
+		if (videoInfo.title === '视频号') videoInfo.title = '';
 
 		// 如果 ID 变了，说明切换了视频，重置计数
 		if (videoInfo.id && currentFeedId && videoInfo.id !== currentFeedId) {
@@ -1821,7 +1967,22 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		}
 		currentFeedId = videoInfo.id;
 
-		console.log('[评论采集] 发送数据: ' + comments.length + ' 条评论 (期望总数: ' + totalExpected + ') | ID: ' + videoInfo.id);
+		// 从 feed.contact 提取作者信息
+		var authorNickname = '';
+		var authorUsername = '';
+		var authorHeadUrl = '';
+		var authorSignature = '';
+		var authorId = videoInfo.id;
+
+		if (feed) {
+			var contact = feed.contact || {};
+			authorNickname = contact.nickname || '';
+			authorUsername = contact.username || '';
+			authorHeadUrl = contact.headUrl || '';
+			authorSignature = contact.signature || '';
+		}
+
+		console.log('[评论采集] 发送数据: ' + comments.length + ' 条评论 (期望总数: ' + totalExpected + ') | ID: ' + videoInfo.id + ' | 作者: ' + authorNickname);
 
 		fetch('/__wx_channels_api/save_comment_data', {
 			method: 'POST',
@@ -1832,7 +1993,13 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 				videoTitle: videoInfo.title,
 				originalCommentCount: totalExpected || 0,
 				timestamp: Date.now(),
-				isFullUpdate: true
+				isFullUpdate: true,
+				authorId: authorId,
+				authorNickname: authorNickname,
+				authorUsername: authorUsername,
+				authorHeadUrl: authorHeadUrl,
+				authorSignature: authorSignature,
+				profileUrl: authorUsername ? 'https://channels.weixin.qq.com/profile/' + authorUsername.replace(/@finder$/, '').replace(/@stranger$/, '') : ''
 			})
 		}).catch(function(err) {
 			console.error('[评论采集] 保存失败:', err);
@@ -2007,29 +2174,28 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 
 	// 主逻辑：订阅 Store 变化
 	function initObserver() {
-		var store = findFeedStore();
-		if (!store) {
+		var storeData = findFlowCommentListInStores();
+		if (!storeData) {
 			setTimeout(initObserver, 1000);
 			return;
 		}
-		
-		// 暴露 store 以便调试
-		window.__wx_feed_store = store;
+
+		window.__wx_feed_store = storeData.store;
 		console.log('[评论采集] Store 连接成功!');
-		// if (store.commentList) {
-		// 	console.log('[评论采集] commentList Keys:', Object.keys(store.commentList));
-		// }
-		
-		// 订阅变化
-		store.$subscribe(function(mutation, state) {
-			var payload = extractCommentPayload(state, false) || extractCommentPayload(store, false);
+
+		// 优先使用直接读取，保留原始字段
+		storeData.store.$subscribe(function(mutation, state) {
+			var payload = extractStoreComments(storeData.store);
+			if (!payload || !payload.items || !payload.items.length) {
+				payload = extractCommentPayload(state, false) || extractCommentPayload(storeData.store, false);
+			}
 			if (payload && payload.items && payload.items.length) {
 				var items = payload.items;
-				
 				var total = payload.total || 0;
-				if (!total && store.feed && store.feed.commentCount !== undefined) total = store.feed.commentCount;
-				
-				// 只要数量变化，就触发（防抖）保存
+				if (!total && storeData.home && storeData.home.feed && storeData.home.feed.commentCount !== undefined) {
+					total = storeData.home.feed.commentCount;
+				}
+
 				var currentLoadedCount = getCommentStats(items).total;
 				if (currentLoadedCount !== lastCommentCount) {
 					var stats = getCommentStats(items);
@@ -2037,15 +2203,14 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 					lastCommentCount = currentLoadedCount;
 					noChangeCount = 0;
 					updateProgressHint(stats.total, total, '已加载');
-					
 					var formatted = formatComments(items);
 					triggerSave(formatted, total);
 				} else {
-				    noChangeCount++;
+					noChangeCount++;
 				}
 			}
 		}, { detached: true });
-		
+
 		isCollecting = true;
 		startAutoScroll();
 	}
@@ -2260,168 +2425,154 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 	window.__wx_channels_start_comment_collection = function() {
 		console.log('[评论采集] 初始化采集...');
 		lastProgressText = '';
-		
-		var store = findFeedStore();
-		var domPayload = extractCommentPayloadFromDOM();
-		if (!store) {
-			if (domPayload && domPayload.items && domPayload.items.length) {
-				console.warn('[评论采集] 未找到Store，切换到DOM采集模式');
-				store = null;
-			} else {
-				console.warn('[评论采集] 未找到Store');
-				setTimeout(initObserver, 400);
+
+		// 直接从所有 Pinia store 查找 flowCommentList（优先走这条路）
+		var storeData = findFlowCommentListInStores();
+		var payload = storeData ? extractStoreComments(storeData.store) : null;
+		var storeForLoadMore = storeData ? storeData.store : findFeedStore();
+
+		// 如果直接读取失败，降级到旧的 extractCommentPayload
+		if (!payload || !payload.items || !payload.items.length) {
+			var domPayload = extractCommentPayloadFromDOM();
+			var storePayload = storeForLoadMore ? extractCommentPayload(storeForLoadMore, false) : null;
+			payload = domPayload || storePayload;
+
+			if (!payload || !payload.items || !payload.items.length) {
+				// 等待评论区初始化
+				var waitCount = 0;
+				var waitTimer = setInterval(function() {
+					waitCount++;
+					var sd = findFlowCommentListInStores();
+					var p = sd ? extractStoreComments(sd.store) : null;
+					if (!p || !p.items || !p.items.length) {
+						var s = findFeedStore();
+						var dp = extractCommentPayloadFromDOM();
+						var sp = s ? extractCommentPayload(s, false) : null;
+						p = dp || sp;
+					}
+					if (p && p.items && p.items.length) {
+						clearInterval(waitTimer);
+						window.__wx_channels_start_comment_collection();
+						return;
+					}
+					if (waitCount >= 20) {
+						clearInterval(waitTimer);
+						// alert('未检测到评论数据，请先打开评论区后重试');
+					}
+				}, 300);
 				return;
+			} else {
+				console.log('[评论采集] 使用降级模式获取评论数据');
 			}
 		}
-		
+
 		// 强制触发一次加载更多
-		if (store) {
-			tryTriggerStoreLoadMore(store);
-		}
-		
-		var payload = domPayload || (store && extractCommentPayload(store, false));
-		if (!payload || !payload.items || !payload.items.length) {
-			console.warn('[评论采集] 评论数据暂未就绪，等待评论区初始化...');
-			var waitCount = 0;
-			var waitTimer = setInterval(function() {
-				waitCount++;
-				var nextStore = findFeedStore() || store;
-				if (nextStore) {
-					tryTriggerStoreLoadMore(nextStore);
-				}
-				var nextDomPayload = extractCommentPayloadFromDOM();
-				var nextPayload = nextDomPayload || (nextStore && extractCommentPayload(nextStore, false));
-				if (nextPayload && nextPayload.items && nextPayload.items.length) {
-					clearInterval(waitTimer);
-					window.__wx_channels_start_comment_collection();
-					return;
-				}
-				if (waitCount >= 20) {
-					clearInterval(waitTimer);
-					alert('未检测到评论数据，请先打开评论区后重试');
-				}
-			}, 300);
-			return;
+		if (storeForLoadMore) {
+			tryTriggerStoreLoadMore(storeForLoadMore);
 		}
 
 		if (payload && payload.items && payload.items.length) {
 			var items = payload.items;
-			
-			// 尝试多处获取总数
+
+			// 优先从 flowCommentList.commentCount 获取总数
 			var total = payload.total || 0;
-			if (!total && store.feed && store.feed.commentCount !== undefined) total = store.feed.commentCount;
-			else if (!total && store.profile && store.profile.commentCount !== undefined) total = store.profile.commentCount;
-			
+			// 其次从 store.feed 获取
+			if (!total && storeData) {
+				var feed = (storeData.home && storeData.home.feed) || (storeData.store && (storeData.store.feed || (storeData.store.home && storeData.store.home.feed)));
+				if (feed && feed.commentCount !== undefined) total = feed.commentCount;
+			}
+
 			var stats = getCommentStats(items);
-			
-			// 获取分页标记
 			var lastBuffer = payload.buffer || '';
-			
 			var hasMore = !!lastBuffer;
+
 			console.log('[评论采集] 采集概况: 已加载' + stats.total + '/' + total + ' (一级:' + stats.topLevel + ', 二级:' + stats.replies + ') | hasMore:' + hasMore);
 			updateProgressHint(stats.total, total, hasMore ? '准备继续加载' : '已全部加载');
-			
+
 			var formatted = formatComments(items);
-			// 只有在没有更多或者用户取消采集时才保存
-			// saveComments(formatted, total); 
-			
+
 			if (hasMore || stats.total < total) {
-			    // 如果还有更多，默认继续自动采集，避免嵌入式页面的 confirm 阻塞流程
 				updateProgressHint(stats.total, total, '开始自动采集');
 				if (typeof __wx_log === 'function') {
 					__wx_log({ msg: '💬 已发现 ' + stats.total + '/' + total + ' 条评论，开始自动继续采集...' });
 				}
-			        var sameCountRetries = 0;
-			        var loadLoop = setInterval(function() {
-			        	var currentDomPayload = extractCommentPayloadFromDOM();
-			        	var currentPayload = currentDomPayload || (store && extractCommentPayload(store, false));
-			        	if (!currentPayload || !currentPayload.items) {
-			        		console.warn('[评论采集] 当前评论数据容器未找到，继续重试...');
-			        		if (store) {
-			        			tryTriggerStoreLoadMore(store);
-			        		}
-			        		scrollCommentList();
-			        		return;
-			        	}
-			            // 更新 buffer 获取逻辑
-			            var currentStats = getCommentStats(currentPayload.items);
-			            
-			            // 终止条件1: 已加载数达到或超过总数 (无论是否有 Buffer)
-			            if (currentStats.total >= total) {
-			                console.log('[评论采集] 数量已达标，采集完成');
-			                updateProgressHint(currentStats.total, total, '采集完成');
-			                clearInterval(loadLoop);
-							
-							// 强制保存最终结果
-							var finalItems = currentPayload.items;
-							var finalFormatted = formatComments(finalItems);
-							saveComments(finalFormatted, total);
+				var sameCountRetries = 0;
+				var loadLoop = setInterval(function() {
+					// 优先从 flowCommentList 直接读取
+					var currentSD = findFlowCommentListInStores();
+					var currentPayload = currentSD ? extractStoreComments(currentSD.store) : null;
+					var currentStore = currentSD ? currentSD.store : findFeedStore();
 
-							// 输出详细的二级回复报告
-							verifyCommentAllExpanded(finalItems);
+					// 降级到旧方式
+					if (!currentPayload || !currentPayload.items || !currentPayload.items.length) {
+						var currentDomPayload = extractCommentPayloadFromDOM();
+						var currentStorePayload = currentStore ? extractCommentPayload(currentStore, false) : null;
+						currentPayload = currentDomPayload || currentStorePayload;
+					}
 
+					if (!currentPayload || !currentPayload.items) {
+						console.warn('[评论采集] 当前评论数据容器未找到，继续重试...');
+						if (currentStore) tryTriggerStoreLoadMore(currentStore);
+						scrollCommentList();
+						return;
+					}
+
+					var currentStats = getCommentStats(currentPayload.items);
+
+					// 终止条件: 已加载数达到或超过总数
+					if (currentStats.total >= total) {
+						console.log('[评论采集] 数量已达标，采集完成');
+						updateProgressHint(currentStats.total, total, '采集完成');
+						clearInterval(loadLoop);
+						var finalFormatted = formatComments(currentPayload.items);
+						saveComments(finalFormatted, total);
+						verifyCommentAllExpanded(currentPayload.items);
+						if (typeof __wx_log === 'function') {
+							__wx_log({ msg: '✅ 评论采集完成：' + currentStats.total + '/' + total });
+						}
+						return;
+					}
+
+					// 检查是否卡死
+					if (currentStats.total === stats.total) {
+						sameCountRetries++;
+						expandSecondaryComments();
+						if (sameCountRetries > 10) {
+							clearInterval(loadLoop);
+							updateProgressHint(currentStats.total, total, '重试结束，保存当前结果');
+							var finalFormatted2 = formatComments(currentPayload.items);
+							saveComments(finalFormatted2, total);
+							verifyCommentAllExpanded(currentPayload.items);
+							var msg = '采集停止：多次重试无新增数据。\n' +
+								'当前: ' + currentStats.total + '/' + total + '\n';
+							if (currentStats.missingReplies > 0) {
+								msg += '\n⚠️ 仍有约 ' + currentStats.missingReplies + ' 条二级回复可能未展开。';
+							}
+							msg += '\n(已尝试自动保存当前数据)';
 							if (typeof __wx_log === 'function') {
-								__wx_log({ msg: '✅ 评论采集完成：' + currentStats.total + '/' + total });
+								__wx_log({ msg: '⚠️ ' + msg.replace(/\n/g, ' | ') });
 							}
-			                return;
-			            }
-			            
-			            // 检查是否卡死 (增加重试次数到 10)
-			            if (currentStats.total === stats.total) { // stats.total 是上一次循环的值
-			                sameCountRetries++;
-			                
-							// 在重试期间尝试展开二级评论
-							expandSecondaryComments();
+							return;
+						}
+					} else {
+						stats = currentStats;
+						sameCountRetries = 0;
+						updateProgressHint(currentStats.total, total, '继续加载中');
+						var expandedCount = expandSecondaryComments();
+						if (expandedCount > 0) {
+							console.log('[评论采集] 正在展开 ' + expandedCount + ' 个回复，暂停主列表滚动...');
+							return;
+						}
+					}
 
-			                if (sameCountRetries > 10) {
-			                    clearInterval(loadLoop);
-								updateProgressHint(currentStats.total, total, '重试结束，保存当前结果');
-								
-								// 强制保存最终结果 (即使是不完整的)
-								var finalItems = currentPayload.items;
-								var finalFormatted = formatComments(finalItems);
-								saveComments(finalFormatted, total);
+					console.log('[评论采集] 采集中... ' + currentStats.total + '/' + total);
 
-								// 输出详细的二级回复报告
-								verifyCommentAllExpanded(finalItems);
+					if (currentStore) tryTriggerStoreLoadMore(currentStore);
+					if (!scrollCommentList()) {
+						updateProgressHint(currentStats.total, total, '等待评论侧栏继续加载');
+					}
 
-								var msg = '采集停止：多次重试无新增数据。\n' +
-								          '当前: ' + currentStats.total + '/' + total + '\n';
-								
-								if (currentStats.missingReplies > 0) {
-									msg += '\n⚠️ 仍有约 ' + currentStats.missingReplies + ' 条二级回复可能未展开。';
-								}
-								msg += '\n(已尝试自动保存当前数据)';
-								if (typeof __wx_log === 'function') {
-									__wx_log({ msg: '⚠️ ' + msg.replace(/\n/g, ' | ') });
-								}
-			                    return;
-			                }
-			            } else {
-			                stats = currentStats; // 更新基准
-			                sameCountRetries = 0; // 重置计数
-							updateProgressHint(currentStats.total, total, '继续加载中');
-							
-							// 策略调整：优先处理二级评论展开，必须等所有展开点完再滚动
-							// 这样可以防止滚动过快导致"查看更多"按钮消失或未被点击
-							var expandedCount = expandSecondaryComments();
-							if (expandedCount > 0) {
-								console.log('[评论采集] 正在展开 ' + expandedCount + ' 个回复，暂停主列表滚动...');
-								return; // 跳过本次循环的后续步骤 (Scroll/LoadMore)
-							}
-			            }
-			            
-			            console.log('[评论采集] 采集中... ' + currentStats.total + '/' + total);
-			            
-			            // 触发加载 (API + 滚动)
-			            if (store) {
-			            	tryTriggerStoreLoadMore(store);
-			            }
-			            if (!scrollCommentList()) {
-			            	updateProgressHint(currentStats.total, total, '等待评论侧栏继续加载');
-			            }
-						
-			        }, 1500 + Math.random() * 1000); // 1.5-2.5秒间隔
+				}, 1500 + Math.random() * 1000);
 			} else {
 				saveComments(formatted, total);
 				if (typeof __wx_log === 'function') {
@@ -2673,7 +2824,7 @@ window.__wx_channels_enable_log_interception__ = ` + enableLogInterception + `;
 				});
 				
 				if (logText === '') {
-					alert('日志为空，无需复制');
+					// alert('日志为空，无需复制');
 					return;
 				}
 				
@@ -2695,7 +2846,7 @@ window.__wx_channels_enable_log_interception__ = ` + enableLogInterception + `;
 				}
 			} catch (error) {
 				console.error('复制日志失败:', error);
-				alert('复制失败: ' + error.message);
+				// alert('复制失败: ' + error.message);
 			}
 		};
 		
@@ -2716,11 +2867,11 @@ window.__wx_channels_enable_log_interception__ = ` + enableLogInterception + `;
 						copyBtn.textContent = '复制';
 					}, 2000);
 				} else {
-					alert('复制失败，请手动选择文本复制');
+					// alert('复制失败，请手动选择文本复制');
 				}
 			} catch (err) {
 				console.error('复制失败:', err);
-				alert('复制失败: ' + err.message);
+				// alert('复制失败: ' + err.message);
 			}
 			document.body.removeChild(textArea);
 		}
@@ -2753,7 +2904,7 @@ window.__wx_channels_enable_log_interception__ = ` + enableLogInterception + `;
 				});
 				
 				if (logText === '') {
-					alert('日志为空，无需导出');
+					// alert('日志为空，无需导出');
 					return;
 				}
 				
@@ -2775,7 +2926,7 @@ window.__wx_channels_enable_log_interception__ = ` + enableLogInterception + `;
 				}, 2000);
 			} catch (error) {
 				console.error('导出日志失败:', error);
-				alert('导出失败: ' + error.message);
+				// alert('导出失败: ' + error.message);
 			}
 		};
 		

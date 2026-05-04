@@ -461,36 +461,45 @@ async function __insert_download_btn_to_feed_toolbar() {
       __start_feed_comment_collection_with_open_panel();
     };
 
-    // 创建复制链接按钮
-    var copyLinkIconWrapper = __build_feed_header_icon(
-      'wx-feed-copy-link-icon',
-      '复制链接',
-      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M7.75 11.25a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5ZM4.75 8A2.25 2.25 0 0 0 2.5 10.25v4.5A2.25 2.25 0 0 0 4.75 17h4.5a2.25 2.25 0 0 0 2.25-2.25V15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.75 4.75A2.25 2.25 0 0 1 10 2.5h7.5A2.25 2.25 0 0 1 19.75 4.75v7.5A2.25 2.25 0 0 1 17.5 14.5H15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
-    );
+    // 创建复制链接按钮（文字形式）
+    var copyLinkIconWrapper = document.createElement('div');
+    copyLinkIconWrapper.id = 'wx-feed-copy-link-icon';
+    copyLinkIconWrapper.className = 'relative flex-shrink-0 cursor-pointer';
+    copyLinkIconWrapper.title = '复制链接';
+    copyLinkIconWrapper.style.cssText = [
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'color:rgba(255,255,255,0.5)',
+      'transition:color 0.2s ease, opacity 0.2s ease',
+      'margin-right:16px',
+      'font-size:14px',
+      'padding:0 8px',
+      'height:28px',
+      'border-radius:4px',
+      'background:rgba(255,255,255,0.1)'
+    ].join(';');
+    copyLinkIconWrapper.textContent = '复制链接';
+    copyLinkIconWrapper.onmouseenter = function () {
+      copyLinkIconWrapper.style.color = 'rgba(255,255,255,0.82)';
+      copyLinkIconWrapper.style.background = 'rgba(255,255,255,0.2)';
+    };
+    copyLinkIconWrapper.onmouseleave = function () {
+      copyLinkIconWrapper.style.color = 'rgba(255,255,255,0.5)';
+      copyLinkIconWrapper.style.background = 'rgba(255,255,255,0.1)';
+    };
 
     copyLinkIconWrapper.onclick = function () {
-      // 从本地存储获取profile数据
-      var profile = __wx_channels_store__ && __wx_channels_store__.profile;
-
-      // 如果本地没有，尝试从API获取
-      if (!profile || !profile.id) {
-        fetch('/__wx_channels_api/get_current_profile', {
-          method: 'GET',
-          headers: { 'X-Local-Auth': 'local-dev' }
-        }).then(function (res) { return res.json(); })
-          .then(function (data) {
-            if (data && data.id) {
-              __copy_video_ids_to_clipboard(data);
-            } else {
-              // 降级：复制URL
-              __copy_to_clipboard(window.location.href);
-            }
-          }).catch(function () {
-            __copy_to_clipboard(window.location.href);
-          });
-      } else {
-        __copy_video_ids_to_clipboard(profile);
-      }
+      var paramsToKeep = ["oid", "nid", "fromSubPage", "context_id"];
+      var u = new URL(window.location.href);
+      var base = u.origin + u.pathname;
+      var filteredParams = new URLSearchParams();
+      paramsToKeep.forEach(function (key) {
+        var val = u.searchParams.get(key);
+        if (val) filteredParams.set(key, val);
+      });
+      var trimmedUrl = base + "?" + filteredParams.toString();
+      __copy_to_clipboard(trimmedUrl);
     };
 
     // 复制到剪贴板函数
@@ -524,16 +533,6 @@ async function __insert_download_btn_to_feed_toolbar() {
       }
       document.body.removeChild(textArea);
     }
-
-    // 复制视频ID到剪贴板
-    function __copy_video_ids_to_clipboard(profile) {
-      var id = profile.id || '';
-      var nonceId = profile.nonce_id || '';
-      var copyText = 'id: ' + id + '\nnonce_id: ' + nonceId;
-
-      console.log('[feed.js] 复制视频ID:', copyText);
-      __copy_to_clipboard(copyText);
-    };
 
     // 创建获取DOM按钮
     var domIconWrapper = __build_feed_header_icon(

@@ -130,12 +130,23 @@ type TaskErrorData struct {
 
 // DOMActionBody DOM 操作请求体
 type DOMActionBody struct {
-	Action  string `json:"action"`
-	Target  string `json:"target"`
-	Content string `json:"content"`
-	Index   int    `json:"index"`
-	URL     string `json:"url"`
-	TaskID  string `json:"task_id,omitempty"`
+	Action      string   `json:"action"`
+	Target      string   `json:"target"`
+	Content     string   `json:"content"`
+	Index       int      `json:"index"`
+	URL         string   `json:"url"`
+	TaskID      string   `json:"task_id,omitempty"`
+	// 精准匹配专用字段
+	TargetNum      int      `json:"target_num,omitempty"`
+	TriggerWords   []string `json:"trigger_words,omitempty"`
+	IpFilter       string   `json:"ip_filter,omitempty"`
+	TimeFilter     *struct {
+		Enabled bool   `json:"enabled"`
+		Value   int    `json:"value"`
+		Unit    string `json:"unit"`
+	} `json:"time_filter,omitempty"`
+	BlockWords     []string `json:"block_words,omitempty"`
+	DedupUsernames []string `json:"dedup_usernames,omitempty"`
 }
 
 // DOMActionCallbackPayload HTTP 回调的响应负载（来自 inject 的 sendResponseViaHTTP）

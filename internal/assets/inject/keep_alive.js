@@ -226,8 +226,8 @@ window.__wx_keep_alive = {
 
     // 定期刷新页面（最后的保活手段）
     startAutoRefresh: function () {
-        // 每 15 分钟刷新一次页面，防止内存溢出
-        const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 分钟
+        // 每 180 分钟刷新一次页面，防止内存溢出
+        const REFRESH_INTERVAL = 180 * 60 * 1000; // 180 分钟
 
         this.refreshTimer = setInterval(() => {
             const now = Date.now();

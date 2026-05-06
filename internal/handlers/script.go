@@ -256,9 +256,9 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 		utils.LogFileInfo("[脚本] Account Like页面 - 注入基础脚本以兼容公共 JS 事件")
 
 	case "/web/pages/feed":
-		// Feed页面（视频详情）：注入视频缓存监控和评论采集脚本
-		pageSpecificScripts = h.getVideoCacheNotificationScript() + h.getCommentCaptureScript()
-		utils.LogFileInfo("[脚本] Feed页面 - 注入视频缓存监控和评论采集脚本")
+		// Feed页面（视频详情）：注入视频缓存监控、评论采集、精准匹配脚本、获取评论脚本
+		pageSpecificScripts = h.getVideoCacheNotificationScript() + h.getCommentCaptureScript() + h.getVideoCommentsMatchingScript() + h.getFetchVideoCommentsScript()
+		utils.LogFileInfo("[脚本] Feed页面 - 注入视频缓存监控、评论采集、精准匹配和获取评论脚本")
 
 	case "/web/pages/s":
 		// 搜索页面：注入搜索模块
@@ -1769,7 +1769,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		var buffers = dataList.buffers || {};
 		var lastBuffer = buffers.lastBuffer || buffers.nextBuffer || '';
 
-		// 优先从 flowCommentList.commentCount 获取总数
+		// 优先从 flowCommentList.commentCount 获取总数（备用）
 		var total = fcl.commentCount || 0;
 		// 其次从 store.feed 或 home.feed 获取
 		if (!total) {
@@ -1780,11 +1780,48 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			if (feed && feed.commentCount !== undefined) total = feed.commentCount;
 		}
 
+		// 计算当前已加载的评论总数（一级 + 二级）
+		if (!window.__sph_lastTotalCount) window.__sph_lastTotalCount = 0;
+		var currentTotalCount = 0;
+		for (var i = 0; i < dataList.items.length; i++) {
+			currentTotalCount++;
+			if (dataList.items[i].levelTwoComment && Array.isArray(dataList.items[i].levelTwoComment)) {
+				currentTotalCount += dataList.items[i].levelTwoComment.length;
+			}
+		}
+		var prevTotal = window.__sph_lastTotalCount;
+		var isGrowing = prevTotal > 0 && currentTotalCount > prevTotal;
+
+		// 连续无增长计数器（用于防止网络波动导致误判）
+		if (!window.__sph_noGrowthCount) window.__sph_noGrowthCount = 0;
+
+		// hasMore 判断：只依赖增量判断和无增长兜底
+		// 不使用 fcl.commentCount 作为 platformTotal（它可能是当前分页数而非总数，容易误判）
+		var hasMore = true;
+		if (currentTotalCount < prevTotal) {
+			// 数量变小（视频切换等异常），重置追踪，继续等待加载
+			hasMore = !!lastBuffer;
+			window.__sph_noGrowthCount = 0;
+		} else if (!isGrowing && prevTotal > 0 && currentTotalCount === prevTotal) {
+			// 数量停止增长，累计计数器
+			window.__sph_noGrowthCount++;
+			// 连续15次无增长才判定为结束（给网络波动留有余地）
+			if (window.__sph_noGrowthCount >= 15) {
+				hasMore = false;
+			}
+		} else {
+			// 有增量，重置计数器
+			window.__sph_noGrowthCount = 0;
+		}
+
+		// 无论是否有更多，都更新追踪状态
+		window.__sph_lastTotalCount = currentTotalCount;
+
 		return {
 			items: dataList.items,
 			total: total,
 			buffer: lastBuffer,
-			hasMore: !!lastBuffer,
+			hasMore: hasMore,
 			store: found.store,
 			home: found.home
 		};
@@ -2421,7 +2458,15 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		}
 		return count;
 	}
-	
+
+	// 暴露辅助函数到全局，供 __sph_fetch_video_comments 调用（同一个 script 块内共享作用域）
+	window.__sph_findFlowCommentListInStores = findFlowCommentListInStores;
+	window.__sph_extractStoreComments = extractStoreComments;
+	window.__sph_tryTriggerStoreLoadMore = tryTriggerStoreLoadMore;
+	window.__sph_scrollCommentList = scrollCommentList;
+	window.__sph_expandSecondaryComments = expandSecondaryComments;
+	window.__sph_formatComments = formatComments;
+
 	// 暴露手动启动函数 (供按钮调用)
 	window.__wx_channels_start_comment_collection = function() {
 		console.log('[评论采集] 初始化采集...');
@@ -2594,7 +2639,445 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 </script>`
 }
 
-// getLogPanelScript 获取日志面板脚本，用于在页面上显示日志（替代控制台）
+// getVideoCommentsMatchingScript 获取精准作品评论匹配脚本
+// 边滚动边过滤模式：打开评论区 → 逐批读取评论 → 过滤 → 够数即停
+func (h *ScriptHandler) getVideoCommentsMatchingScript() string {
+	return `<script>
+(function() {
+	'use strict';
+
+	// ============================================================
+	// 精准作品匹配：评论采集 + 过滤 + 够数即停
+	// ============================================================
+
+	window.__sph_get_video_comments = function(options) {
+		var targetNum = options.target_num || 0;
+		var triggerWords = options.trigger_words || [];
+		var ipFilter = options.ip_filter || '';
+		var timeFilter = options.time_filter || {};
+		var blockWords = options.block_words || [];
+		var dedupUsers = options.dedup_usernames || [];
+		var timeout = (options.timeout || 120) * 1000;
+		var taskId = options.task_id || '';
+		var onProgress = options.on_progress || function(){};
+		var onComplete = options.on_complete || function(){};
+
+		var startTime = Date.now();
+		var collectedUsers = [];          // 有效用户列表
+		var seenUsernames = {};           // username 去重映射
+		var commentCount = 0;             // 当前已加载评论数
+		var sameCountRetries = 0;          // 连续无增长计数
+		var scrollTimer = null;
+		var isRunning = false;
+
+		// ---------- 过滤函数 ----------
+
+		function matchTriggerWord(content) {
+			if (!triggerWords || triggerWords.length === 0) return true;
+			var lower = (content || '').toLowerCase();
+			for (var i = 0; i < triggerWords.length; i++) {
+				var w = (triggerWords[i] || '').toLowerCase();
+				if (w && lower.indexOf(w) >= 0) return true;
+			}
+			return false;
+		}
+
+		function matchIpFilter(ipLocation) {
+			if (!ipFilter || !ipFilter.trim()) return true;
+			var targets = ipFilter.split(',').map(function(s){ return s.trim().toLowerCase(); }).filter(function(s){ return s; });
+			if (targets.length === 0) return true;
+			var loc = (ipLocation || '').toLowerCase();
+			for (var i = 0; i < targets.length; i++) {
+				if (loc.indexOf(targets[i]) >= 0) return true;
+			}
+			return false;
+		}
+
+		function matchTimeFilter(createTime) {
+			if (!timeFilter || !timeFilter.enabled) return true;
+			// createTime 格式: "3小时前" / "昨天" / "2024-01-01" 等
+			var now = Date.now();
+			var commentTs = parseCommentTime(createTime);
+			if (!commentTs) return true; // 无法解析时间，不过滤
+			var diffMs = now - commentTs;
+			if (timeFilter.unit === 'hour') {
+				return diffMs <= timeFilter.value * 3600000;
+			}
+			if (timeFilter.unit === 'day') {
+				return diffMs <= timeFilter.value * 86400000;
+			}
+			if (timeFilter.unit === 'week') {
+				return diffMs <= timeFilter.value * 604800000;
+			}
+			return true;
+		}
+
+		function parseCommentTime(timeStr) {
+			if (!timeStr) return null;
+			var str = timeStr.trim();
+			var m;
+			// "3小时前"
+			m = str.match(/^(\d+)\s*小时前$/);
+			if (m) return Date.now() - parseInt(m[1]) * 3600000;
+			// "2天前"
+			m = str.match(/^(\d+)\s*天前$/);
+			if (m) return Date.now() - parseInt(m[1]) * 86400000;
+			// "昨天 HH:mm"
+			if (str.indexOf('昨天') >= 0) {
+				var t = str.replace('昨天', '').trim();
+				var d = new Date();
+				d.setDate(d.getDate() - 1);
+				var parts = t.match(/(\d+):(\d+)/);
+				if (parts) { d.setHours(parseInt(parts[1]), parseInt(parts[2]), 0, 0); return d.getTime(); }
+				return d.setHours(0,0,0,0);
+			}
+			// "2024-01-01" / "2024/01/01"
+			m = str.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+			if (m) {
+				var dt = new Date(parseInt(m[1]), parseInt(m[2])-1, parseInt(m[3]));
+				if (!isNaN(dt)) return dt.getTime();
+			}
+			// 尝试 Date.parse
+			var ts = Date.parse(str);
+			return isNaN(ts) ? null : ts;
+		}
+
+		function matchBlockWords(content, nickname) {
+			if (!blockWords || blockWords.length === 0) return false;
+			var text = ((content || '') + ' ' + (nickname || '')).toLowerCase();
+			for (var i = 0; i < blockWords.length; i++) {
+				var w = (blockWords[i] || '').toLowerCase();
+				if (w && text.indexOf(w) >= 0) return true;
+			}
+			return false;
+		}
+
+		function isDuplicateUser(username) {
+			if (!username || !username.trim()) return false;
+			return !!seenUsernames[username];
+		}
+
+		function markUserSeen(username) {
+			if (username && username.trim()) seenUsernames[username] = true;
+		}
+
+		// ---------- 数据读取（复用现有采集脚本逻辑） ----------
+
+		function readCurrentComments() {
+			var storeData = findFlowCommentListInStores();
+			var payload = storeData ? extractStoreComments(storeData.store) : null;
+			if (!payload || !payload.items || !payload.items.length) {
+				var domPayload = extractCommentPayloadFromDOM();
+				var storePayload = storeData ? extractCommentPayload(storeData.store, false) : null;
+				payload = domPayload || storePayload;
+			}
+			if (!payload || !payload.items || !payload.items.length) return null;
+			return {
+				items: payload.items,
+				total: payload.total || 0,
+				store: storeData ? storeData.store : null
+			};
+		}
+
+		// ---------- 过滤单条评论 ----------
+
+		function filterComment(item) {
+			var raw = item;
+			var content = raw.content || raw.text || '';
+			var nickname = raw.nickname || (raw.author && raw.author.nickname) || '';
+			var ipLocation = '';
+			if (raw.ipRegionInfo && raw.ipRegionInfo.regionText) {
+				ipLocation = raw.ipRegionInfo.regionText;
+			}
+			var createTime = raw.createtime || raw.createTime || raw.create_time || '';
+
+			// 1. 触发词匹配
+			if (!matchTriggerWord(content)) return null;
+
+			// 2. IP 属地过滤
+			if (!matchIpFilter(ipLocation)) return null;
+
+			// 3. 时间过滤
+			if (!matchTimeFilter(createTime)) return null;
+
+			// 4. 屏蔽词过滤
+			if (matchBlockWords(content, nickname)) return null;
+
+			// 5. 去重（基于 username）
+			var username = raw.username || (raw.authorContact && raw.authorContact.username) || '';
+			if (isDuplicateUser(username)) return null;
+			markUserSeen(username);
+
+			// 提取用户信息
+			var user = {
+				uid: raw.commentId || raw.id || '',
+				username: username,
+				nickname: nickname,
+				headUrl: raw.headUrl || (raw.author && raw.author.headUrl) || '',
+				content: content,
+				ipLocation: ipLocation,
+				createTime: createTime,
+				likeCount: raw.likeCount || raw.like_num || 0,
+				replyCount: raw.levelTwoComment ? raw.levelTwoComment.length : 0,
+				authorLiked: !!(raw.authorLiked || (raw.authorReactionInfo && raw.authorReactionInfo.authorLikeTime)),
+				// 原始数据完整保留
+				_raw: raw
+			};
+
+			return user;
+		}
+
+		// ---------- 过滤一批评论 ----------
+
+		function filterComments(items) {
+			var newUsers = [];
+			var newUsernames = [];
+			for (var i = 0; i < items.length; i++) {
+				var user = filterComment(items[i]);
+				if (user) {
+					newUsers.push(user);
+					newUsernames.push(user.username);
+					// 同时过滤二级评论
+					var level2 = items[i].levelTwoComment;
+					if (level2 && Array.isArray(level2)) {
+						for (var j = 0; j < level2.length; j++) {
+							var sub = filterComment(level2[j]);
+							if (sub) {
+								newUsers.push(sub);
+								newUsernames.push(sub.username);
+							}
+						}
+					}
+				}
+			}
+			return { users: newUsers, usernames: newUsernames };
+		}
+
+		// ---------- 滚动加载 ----------
+
+		function triggerScroll() {
+			var storeData = findFlowCommentListInStores();
+			var store = storeData ? storeData.store : null;
+			if (store) {
+				tryTriggerStoreLoadMore(store);
+			}
+			// 尝试滚动评论区容器
+			var scrolled = scrollCommentList();
+			if (!scrolled) {
+				window.scrollTo(0, document.body.scrollHeight);
+			}
+		}
+
+		// ---------- 主循环 ----------
+
+		function mainLoop() {
+			if (!isRunning) return;
+
+			// 超时检查
+			if (Date.now() - startTime > timeout) {
+				console.log('[精准匹配] 超时退出:', timeout / 1000, 's');
+				stop();
+				onComplete({ reason: 'timeout', users: collectedUsers, total: collectedUsers.length, target_num: targetNum });
+				return;
+			}
+
+			var data = readCurrentComments();
+			if (!data || !data.items) {
+				// 未找到数据，尝试触发滚动
+				triggerScroll();
+				scheduleNext(1500);
+				return;
+			}
+
+			var newCount = data.items.length;
+
+			// 评论数没有增加
+			if (newCount <= commentCount) {
+				sameCountRetries++;
+				expandSecondaryComments();
+				if (sameCountRetries > 10) {
+					console.log('[精准匹配] 评论已耗尽，停止采集');
+					stop();
+					onComplete({ reason: 'exhausted', users: collectedUsers, total: collectedUsers.length, target_num: targetNum, comment_count: commentCount });
+					return;
+				}
+				triggerScroll();
+				scheduleNext(1500);
+				return;
+			}
+
+			// 有新增评论，进行过滤
+			sameCountRetries = 0;
+			commentCount = newCount;
+
+			var filtered = filterComments(data.items);
+			if (filtered.users.length > 0) {
+				collectedUsers = collectedUsers.concat(filtered.users);
+				// 去重 collectedUsers（理论上上面的 markUserSeen 已经处理，但双重保险）
+				var seen = {};
+				var unique = [];
+				for (var k = 0; k < collectedUsers.length; k++) {
+					var u = collectedUsers[k];
+					var key = u.username || u.uid || k;
+					if (!seen[key]) {
+						seen[key] = true;
+						unique.push(u);
+					}
+				}
+				collectedUsers = unique;
+			}
+
+			var progress = {
+				comment_count: commentCount,
+				user_count: collectedUsers.length,
+				target_num: targetNum,
+				percent: targetNum > 0 ? Math.min(100, Math.round(collectedUsers.length / targetNum * 100)) : 0
+			};
+			onProgress(progress);
+
+			console.log('[精准匹配] 评论:', commentCount, '| 有效用户:', collectedUsers.length, '/', targetNum);
+
+			// 检查是否够数
+			if (targetNum > 0 && collectedUsers.length >= targetNum) {
+				console.log('[精准匹配] 达到目标数量，停止采集');
+				stop();
+				onComplete({ reason: 'target_reached', users: collectedUsers, total: collectedUsers.length, target_num: targetNum, comment_count: commentCount });
+				return;
+			}
+
+			// 未达目标，继续滚动
+			triggerScroll();
+			scheduleNext(1500);
+		}
+
+		function scheduleNext(delay) {
+			if (!isRunning) return;
+			scrollTimer = setTimeout(mainLoop, delay);
+		}
+
+		function stop() {
+			isRunning = false;
+			if (scrollTimer) {
+				clearTimeout(scrollTimer);
+				scrollTimer = null;
+			}
+		}
+
+		// ---------- 启动 ----------
+
+		console.log('[精准匹配] 启动采集, 目标:', targetNum, '触发词:', triggerWords);
+		isRunning = true;
+
+		// ---------- 打开评论区面板 ----------
+		// 复用 feed.js 的 __try_open_feed_comment_panel 逻辑
+		function __sph_try_open_comment_panel() {
+			// Level 1: 检查评论区是否已存在
+			var selectors = [
+				'.comment-list', '.comment-panel', '.comment-drawer',
+				'[class*="comment-panel"]', '[class*="comment-drawer"]', '[class*="comment-list"]'
+			];
+			for (var i = 0; i < selectors.length; i++) {
+				var el = document.querySelector(selectors[i]);
+				if (el && el.offsetParent !== null) {
+					console.log('[精准匹配] 评论区已打开');
+					return true;
+				}
+			}
+
+			// Level 2: 查找并点击评论按钮
+			var commentBtns = document.querySelectorAll('[aria-label^="评论"]');
+			for (var j = 0; j < commentBtns.length; j++) {
+				var label = commentBtns[j].getAttribute('aria-label') || '';
+				if (commentBtns[j].offsetParent !== null) {
+					try { commentBtns[j].click(); } catch(e) {}
+					console.log('[精准匹配] 点击评论按钮:', label);
+					return true;
+				}
+			}
+
+			// Level 3: 通过 Pinia Store 打开评论区
+			try {
+				var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+				if (app) {
+					var vue = app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component);
+					var pinia = vue && vue.appContext && vue.appContext.config && vue.appContext.config.globalProperties && vue.appContext.config.globalProperties.$pinia;
+					if (pinia && pinia._s && typeof pinia._s.forEach === 'function') {
+						var methodNames = ['openComment', 'openCommentPanel', 'showCommentPanel', 'toggleCommentPanel', 'onClickComment', 'handleCommentClick'];
+						pinia._s.forEach(function(store) {
+							for (var m = 0; m < methodNames.length; m++) {
+								if (typeof store[methodNames[m]] === 'function') {
+									try { store[methodNames[m]](); } catch(_e) {}
+								}
+							}
+						});
+					}
+				}
+			} catch(e) {}
+
+			return false;
+		}
+
+		// 尝试打开评论区（最多等 5 秒）
+		__sph_try_open_comment_panel();
+		var panelOpened = false;
+		var __panelWait = function __panelWaitFn(waitCount) {
+			if (waitCount >= 10) { console.log('[精准匹配] 等待评论区超时'); return; }
+			var textarea = document.querySelector('textarea.weui-textarea');
+			var commentList = document.querySelector('.comment-list, .comment-panel, .comment-drawer, [class*="comment-panel"]');
+			if (textarea || commentList) {
+				panelOpened = true;
+				console.log('[精准匹配] 评论区面板已打开');
+				return;
+			}
+			setTimeout(function() { __panelWaitFn(waitCount + 1); }, 500);
+		};
+		setTimeout(function() { __panelWait(0); }, 100);
+
+		// 等待评论数据加载（最多等 3 秒）
+		var __loadWait = function __loadWaitFn(waitCount) {
+			if (waitCount >= 6) { console.log('[精准匹配] 等待评论数据超时'); return; }
+			var init = readCurrentComments();
+			if (init && init.items && init.items.length > 0) {
+				console.log('[精准匹配] 评论数据已就绪:', init.items.length, '条');
+				return;
+			}
+			setTimeout(function() { __loadWaitFn(waitCount + 1); }, 500);
+		};
+		setTimeout(function() { __loadWait(0); }, 500);
+
+		// 尝试直接读取一次
+		var initial = readCurrentComments();
+		if (initial && initial.items && initial.items.length > 0) {
+			commentCount = initial.items.length;
+			var filtered = filterComments(initial.items);
+			if (filtered.users.length > 0) {
+				collectedUsers = collectedUsers.concat(filtered.users);
+				var seen = {}; var unique = [];
+				for (var k = 0; k < collectedUsers.length; k++) {
+					var u2 = collectedUsers[k];
+					var key = u2.username || u2.uid || k;
+					if (!seen[key]) { seen[key] = true; unique.push(u2); }
+				}
+				collectedUsers = unique;
+			}
+			onProgress({ comment_count: commentCount, user_count: collectedUsers.length, target_num: targetNum });
+			if (targetNum > 0 && collectedUsers.length >= targetNum) {
+				stop();
+				onComplete({ reason: 'target_reached', users: collectedUsers, total: collectedUsers.length, target_num: targetNum, comment_count: commentCount });
+				return;
+			}
+		}
+
+		// 触发一次加载更多再开始循环
+		triggerScroll();
+		scheduleNext(2000);
+	};
+
+})();
+</script>`
+}
+
+// getLogPanelScript 获取日志面板脚本
 func (h *ScriptHandler) getLogPanelScript() string {
 	// 根据配置决定是否显示日志按钮
 	showLogButton := "false"
@@ -3351,3 +3834,83 @@ func (h *ScriptHandler) saveJavaScriptFile(path string, content []byte) {
 
 	utils.LogInfo("[JS保存] ✅ 已保存: %s/%s", pageType, fileName)
 }
+
+// getFetchVideoCommentsScript 获取获取评论脚本（无状态，每次调用读取当前页+触发一次滚动）
+// Node.js 端循环调用此函数，边滚动边过滤
+func (h *ScriptHandler) getFetchVideoCommentsScript() string {
+	return `<script>
+(function() {
+	'use strict';
+
+	// ============================================================
+	// 获取评论（无状态版）
+	// 每次调用：
+	//   1. 如果评论区未打开，尝试打开
+	//   2. 读取当前所有已加载的评论
+	//   3. 触发一次加载更多
+	//   4. 返回评论数据
+	// ============================================================
+
+	window.__sph_fetch_video_comments = function(options) {
+		var panelOpened = false;
+		var selectors = ['.comment-list', '.comment-panel', '.comment-drawer', '[class*="comment-panel"]', '[class*="comment-drawer"]'];
+		for (var si = 0; si < selectors.length; si++) {
+			var el = document.querySelector(selectors[si]);
+			if (el && el.offsetParent !== null) { panelOpened = true; break; }
+		}
+		if (!panelOpened) {
+			var cBtns = document.querySelectorAll('[aria-label^="评论"]');
+			for (var ci = 0; ci < cBtns.length; ci++) {
+				if (cBtns[ci].offsetParent !== null) {
+					try { cBtns[ci].click(); } catch(e) {}
+					break;
+				}
+			}
+		}
+
+		var payload = null;
+		var found = window.__sph_findFlowCommentListInStores ? window.__sph_findFlowCommentListInStores() : null;
+		if (found && window.__sph_extractStoreComments) {
+			payload = window.__sph_extractStoreComments(found.store || found);
+		}
+
+		var commentCount = 0;
+		var total = 0;
+		var buffer = '';
+		var hasMore = true; // 默认 true：数据未就绪时不误判退出，由平台数据决定是否真的还有更多
+		var formatted = [];
+
+		if (payload && payload.items && payload.items.length) {
+			commentCount = payload.items.length;
+			total = payload.total || 0;
+			buffer = payload.buffer || '';
+			hasMore = !!payload.hasMore;
+			formatted = (window.__sph_formatComments || function(x){return x;})(payload.items);
+		}
+
+		if (commentCount > 0) {
+			var storeForMore = window.__sph_findFlowCommentListInStores ? window.__sph_findFlowCommentListInStores() : null;
+			if (storeForMore && window.__sph_tryTriggerStoreLoadMore) { window.__sph_tryTriggerStoreLoadMore(storeForMore.store || storeForMore); }
+			if (window.__sph_scrollCommentList) { window.__sph_scrollCommentList(); }
+			if (window.__sph_expandSecondaryComments) { window.__sph_expandSecondaryComments(); }
+		}
+
+		return {
+			panel_ready: panelOpened,
+			items: formatted,
+			total: total,
+			comment_count: commentCount,
+			has_more: hasMore,
+			buffer: buffer,
+			raw_items: payload && payload.items ? payload.items : []
+		};
+	};
+
+	// 导出到全局（供 api_client 调用）
+	window.__sph_fetch_video_comments_ready = true;
+
+})();
+</script>`
+}
+
+// getLogPanelScript 获取日志面板脚本

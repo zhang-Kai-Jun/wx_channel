@@ -465,7 +465,7 @@ async function __insert_download_btn_to_feed_toolbar() {
     var copyLinkIconWrapper = document.createElement('div');
     copyLinkIconWrapper.id = 'wx-feed-copy-link-icon';
     copyLinkIconWrapper.className = 'relative flex-shrink-0 cursor-pointer';
-    copyLinkIconWrapper.title = '复制链接';
+    copyLinkIconWrapper.title = '视频链接';
     copyLinkIconWrapper.style.cssText = [
       'display:flex',
       'align-items:center',
@@ -490,7 +490,7 @@ async function __insert_download_btn_to_feed_toolbar() {
     };
 
     copyLinkIconWrapper.onclick = function () {
-      var paramsToKeep = ["oid", "nid", "fromSubPage", "context_id"];
+      var paramsToKeep = ["oid", "nid", "fromSubPage", "context_id", "eid"];
       var u = new URL(window.location.href);
       var base = u.origin + u.pathname;
       var filteredParams = new URLSearchParams();

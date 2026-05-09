@@ -252,7 +252,6 @@ window.__wx_api_client = {
 
   // 处理消息
   handleMessage: function (msg) {
-    // 添加详细日志
     console.log('[API客户端] 收到 WebSocket 消息:', JSON.stringify(msg));
 
     if (msg.type === 'api_call') {
@@ -263,7 +262,6 @@ window.__wx_api_client = {
     } else if (msg.type === 'pong') {
       this.lastHeartbeatTime = Date.now();
     } else if (msg.type === 'task_progress' || msg.type === 'task_complete') {
-      // 任务进度/完成广播，转发给任务采集器
       if (window.__wx_channels_search_task_collector) {
         window.__wx_channels_search_task_collector._onBackendMessage(msg);
       }
@@ -320,6 +318,113 @@ window.__wx_api_client = {
         } else {
           console.warn('[API客户端] 评论采集函数未就绪');
         }
+      }
+
+      // 精准作品匹配：评论采集 + 边滚动边过滤
+      if (data.action === 'finderGetVideoComments') {
+        var taskData = data.payload || data;
+        console.log('[API客户端] ★★★ 收到 finderGetVideoComments 指令:', JSON.stringify(taskData).substring(0, 200));
+
+        if (typeof window.__sph_get_video_comments !== 'function') {
+          console.error('[API客户端] __sph_get_video_comments 函数未就绪');
+          if (window.__wx_api_client && window.__wx_api_client.connected) {
+            window.__wx_api_client.ws.send(JSON.stringify({
+              type: 'task_complete',
+              data: {
+                task_id: taskData.task_id,
+                success: false,
+                errMsg: '__sph_get_video_comments 函数未就绪',
+                users: [],
+                total: 0
+              }
+            }));
+          }
+          return;
+        }
+
+        window.__sph_get_video_comments({
+          target_num: taskData.target_num || 0,
+          trigger_words: taskData.trigger_words || [],
+          ip_filter: taskData.ip_filter || '',
+          time_filter: taskData.time_filter || {},
+          block_words: taskData.block_words || [],
+          dedup_usernames: taskData.dedup_usernames || [],
+          timeout: taskData.timeout || 120,
+          task_id: taskData.task_id || '',
+
+          on_progress: function(progress) {
+            console.log('[API客户端] ★★★ 采集进度:', progress);
+            if (window.__wx_api_client && window.__wx_api_client.connected) {
+              window.__wx_api_client.ws.send(JSON.stringify({
+                type: 'task_progress',
+                data: {
+                  task_id: taskData.task_id,
+                  comment_count: progress.comment_count,
+                  user_count: progress.user_count,
+                  target_num: progress.target_num,
+                  percent: progress.percent
+                }
+              }));
+            }
+            // 同时通过 HTTP 回调通知 Go Hub（供 Node.js hubClient 轮询）
+            window.__wx_api_client.sendMatchingProgress(taskData.task_id, progress);
+          },
+
+          on_complete: function(result) {
+            console.log('[API客户端] ★★★ 采集完成:', result);
+            if (window.__wx_api_client && window.__wx_api_client.connected) {
+              window.__wx_api_client.ws.send(JSON.stringify({
+                type: 'task_complete',
+                data: {
+                  task_id: taskData.task_id,
+                  success: true,
+                  reason: result.reason,
+                  users: result.users,
+                  total: result.total,
+                  target_num: result.target_num,
+                  comment_count: result.comment_count || 0
+                }
+              }));
+            }
+          }
+        });
+        return;
+      }
+
+      // 无状态获取评论：每次调用读取当前评论+触发一次滚动
+      if (data.action === 'fetch_video_comments') {
+        console.log('[API客户端] ★★★ 收到 fetch_video_comments 指令');
+
+        if (typeof window.__sph_fetch_video_comments !== 'function') {
+          console.error('[API客户端] __sph_fetch_video_comments 函数未就绪');
+          // 通过 HTTP 回调通知失败
+          window.__wx_api_client.sendFetchCommentsCallback(data.task_id || '', {
+            success: false,
+            message: '__sph_fetch_video_comments 函数未就绪',
+            result: null
+          });
+          return;
+        }
+
+        try {
+          var result = window.__sph_fetch_video_comments({});
+          console.log('[API客户端] ★★★ 获取评论结果:', result ? result.comment_count + '条' : '空');
+
+          // 通过 HTTP 回调把结果写入 Go 缓存（Node.js 轮询获取）
+          window.__wx_api_client.sendFetchCommentsCallback(data.task_id || '', {
+            success: true,
+            message: 'ok',
+            result: result
+          });
+        } catch (err) {
+          console.error('[API客户端] fetch_video_comments 执行异常:', err);
+          window.__wx_api_client.sendFetchCommentsCallback(data.task_id || '', {
+            success: false,
+            message: err.message,
+            result: null
+          });
+        }
+        return;
       }
 
       if (data.action === 'watch_video') {
@@ -477,11 +582,13 @@ window.__wx_api_client = {
       var startTime = Date.now();
 
       while ((!window.WXU || !window.WXU.API || !window.WXU.API2) && (Date.now() - startTime < maxWait)) {
-        console.log('[API客户端] 等待 WXU.API 初始化...');
+        var wxReady = !!(window.WXU && window.WXU.API && window.WXU.API2);
+        console.log('[API客户端] ★★★ [诊断] 等待 WXU.API 初始化... WXU=' + (typeof window.WXU) + ', API=' + (window.WXU ? typeof window.WXU.API : 'n/a') + ', API2=' + (window.WXU ? typeof window.WXU.API2 : 'n/a') + ', elapsed=' + (Date.now() - startTime) + 'ms');
         await new Promise(function (resolve) { setTimeout(resolve, 500); });
       }
 
       if (!window.WXU || !window.WXU.API || !window.WXU.API2) {
+        console.error('[API客户端] ★★★ [诊断] WXU.API 初始化超时，未就绪');
         resp({
           errCode: 1,
           errMsg: 'WXU.API 未初始化，请刷新页面重试'
@@ -629,6 +736,50 @@ window.__wx_api_client = {
           }, 100);
           return;
         }
+        // 无状态获取评论：读取当前评论 + 触发滚动
+        if (body.action === 'fetch_video_comments') {
+          var fvcTaskId = body.task_id || '';
+          var fvcResult = null;
+
+          try {
+            // 等待 Pinia Store 就绪（最多 3 次，每次等 500ms）
+            var maxRetries = 3;
+            var retryDelay = 500;
+            for (var attempt = 1; attempt <= maxRetries; attempt++) {
+              if (typeof window.__sph_fetch_video_comments === 'function') {
+                fvcResult = window.__sph_fetch_video_comments({});
+                // 函数执行成功，退出重试循环
+                break;
+              }
+              if (attempt < maxRetries) {
+                await new Promise(function(r) { setTimeout(r, retryDelay); });
+              }
+            }
+
+            if (fvcResult === null) {
+              // 多次重试后函数仍不存在，说明评论区还未初始化。
+              // has_more=true 告诉 Node.js 继续轮询，而不是误判退出
+              fvcResult = { panel_ready: false, items: [], total: 0, comment_count: 0, has_more: true, buffer: '', raw_items: [] };
+              console.warn('[API客户端] __sph_fetch_video_comments 未就绪，has_more=true 等待初始化');
+            }
+          } catch (err) {
+            console.error('[API客户端] __sph_fetch_video_comments 执行异常:', err.message);
+            fvcResult = { panel_ready: false, items: [], total: 0, comment_count: 0, has_more: true, buffer: '', raw_items: [], _error: err.message };
+          } finally {
+            // 无论成功/失败/异常，都必须发回调，保证 Hub 缓存有数据
+            clearTimeout(fvcTimeout);
+            resp({ success: !fvcResult._error, result: fvcResult });
+            self.sendFetchCommentsCallback(fvcTaskId, {
+              success: !fvcResult._error,
+              message: fvcResult._error || 'ok',
+              result: fvcResult
+            });
+          }
+          return;
+        }
+
+        var fvcTimeout;
+
         try {
           var result = await this.executeDomAction(body, id);
           if (result) {
@@ -1552,7 +1703,6 @@ window.__wx_api_client = {
 
   // 通过 HTTP 回调发送响应（WebSocket 断开时的备选方案）
   sendResponseViaHTTP: function (id, responseData) {
-    var self = this;
     var callbackUrl = 'http://127.0.0.1:2025/__wx_channels_api/response_callback';
 
     var payload = {
@@ -1578,6 +1728,108 @@ window.__wx_api_client = {
       }
     }).catch(function(err) {
       console.error('[API客户端] HTTP 回调失败:', err.message);
+    });
+  },
+
+  // 通过 HTTP 回调发送精准匹配任务完成结果
+  // Node.js hubClient 通过 GET /matching_result 轮询 Go HTTP 服务获取结果，
+  // 因此浏览器端必须通过 HTTP POST 将结果写入 Go 的 Hub 缓存。
+  sendMatchingCallback: function (taskID, result) {
+    var callbackUrl = 'http://127.0.0.1:2025/__wx_channels_api/matching_callback';
+    var payload = {
+      task_id: taskID,
+      success: result.success !== false,
+      reason: result.reason || '',
+      users: result.users || [],
+      total: result.total || 0,
+      target_num: result.target_num || 0,
+      comment_count: result.comment_count || 0
+    };
+
+    fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+      signal: AbortSignal.timeout(5000)
+    }).then(function(response) {
+      if (response.ok) {
+        console.log('[API客户端] matching_callback 发送成功: task_id=' + taskID);
+      } else {
+        console.error('[API客户端] matching_callback 发送失败:', response.status);
+      }
+    }).catch(function(err) {
+      console.error('[API客户端] matching_callback 失败:', err.message);
+    });
+  },
+
+  // 通过 HTTP 回调发送精准匹配任务进度更新
+  sendMatchingProgress: function (taskID, progress) {
+    var callbackUrl = 'http://127.0.0.1:2025/__wx_channels_api/matching_progress';
+    var payload = {
+      task_id: taskID,
+      comment_count: progress.comment_count || 0,
+      user_count: progress.user_count || 0,
+      target_num: progress.target_num || 0,
+      percent: progress.percent || 0
+    };
+
+    fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+      signal: AbortSignal.timeout(5000)
+    }).catch(function(err) {
+      console.error('[API客户端] matching_progress 失败:', err.message);
+    });
+  },
+
+  // 通过 HTTP 回调发送 fetch_video_comments 结果（Node.js 通过轮询 fetch_comments_result 获取）
+  sendFetchCommentsCallback: function (taskID, data) {
+    var callbackUrl = 'https://127.0.0.1:2025/__wx_channels_api/fetch_comments_callback';
+    var result = data.result || data || {};
+    var payload = {
+      task_id: taskID,
+      success: data.success !== false,
+      message: data.message || '',
+      result: {
+        panel_ready: !!result.panel_ready,
+        items: result.items || null,
+        total: result.total || 0,
+        comment_count: result.comment_count || 0,
+        has_more: !!result.has_more,
+        buffer: result.buffer || '',
+        raw_items: result.raw_items || []
+      }
+    };
+
+    console.log('[API客户端] ★★★ [诊断] sendFetchCommentsCallback 即将发送:');
+    console.log('[API客户端] ★★★ [诊断]   task_id:', taskID);
+    console.log('[API客户端] ★★★ [诊断]   success:', payload.success);
+    console.log('[API客户端] ★★★ [诊断]   panel_ready:', payload.result.panel_ready);
+    console.log('[API客户端] ★★★ [诊断]   comment_count:', payload.result.comment_count);
+    console.log('[API客户端] ★★★ [诊断]   has_more:', payload.result.has_more);
+    console.log('[API客户端] ★★★ [诊断]   raw_items 条数:', (payload.result.raw_items || []).length);
+    console.log('[API客户端] ★★★ [诊断]   POST 到:', callbackUrl);
+
+    fetch(callbackUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+      signal: AbortSignal.timeout(5000)
+    }).then(function(response) {
+      if (response.ok) {
+        console.log('[API客户端] ★★★ [诊断] HTTP POST 成功: task_id=' + taskID + ', HTTP=' + response.status);
+      } else {
+        console.error('[API客户端] ★★★ [诊断] HTTP POST 失败: task_id=' + taskID + ', HTTP=' + response.status);
+        response.text().then(function(text) {
+          console.error('[API客户端] ★★★ [诊断]   响应体:', text);
+        });
+      }
+    }).catch(function(err) {
+      console.error('[API客户端] ★★★ [诊断] HTTP POST 异常: task_id=' + taskID + ', err=' + err.message);
     });
   },
 

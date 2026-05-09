@@ -102,6 +102,36 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	// 精准匹配任务结果回调
+	if path == "/__wx_channels_api/matching_callback" {
+		h.HandleMatchingCallback(Conn)
+		return true
+	}
+
+	// 精准匹配任务进度回调
+	if path == "/__wx_channels_api/matching_progress" {
+		h.HandleMatchingProgress(Conn)
+		return true
+	}
+
+	// 精准匹配任务结果轮询
+	if path == "/__wx_channels_api/matching_result" {
+		h.HandleGetMatchingResult(Conn)
+		return true
+	}
+
+	// fetch_video_comments 评论采集结果回调（inject 采集完成后调用）
+	if path == "/__wx_channels_api/fetch_comments_callback" {
+		h.HandleFetchCommentsCallback(Conn)
+		return true
+	}
+
+	// fetch_video_comments 评论采集结果轮询（Node.js 轮询获取）
+	if path == "/__wx_channels_api/fetch_comments_result" {
+		h.HandleGetFetchCommentsResult(Conn)
+		return true
+	}
+
 	if h.HandleProfile(Conn) {
 		return true
 	}
@@ -222,6 +252,18 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 		Content string `json:"content"`
 		Index   int    `json:"index"`
 		URL     string `json:"url"`
+		TaskID  string `json:"task_id"`
+		// 精准匹配专用字段
+		TargetNum      int      `json:"target_num"`
+		TriggerWords   []string `json:"trigger_words"`
+		IpFilter      string   `json:"ip_filter"`
+		TimeFilter    *struct {
+			Enabled bool   `json:"enabled"`
+			Value   int    `json:"value"`
+			Unit    string `json:"unit"`
+		} `json:"time_filter"`
+		BlockWords     []string `json:"block_words"`
+		DedupUsernames []string `json:"dedup_usernames"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		headers := http.Header{}
@@ -249,11 +291,18 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	// 通过 WebSocket 调用前端 DOM 操作 API
 	domReq := websocket.DOMActionBody{
-		Action:  req.Action,
-		Target:  req.Target,
-		Content: req.Content,
-		Index:   req.Index,
-		URL:     req.URL,
+		Action:      req.Action,
+		Target:      req.Target,
+		Content:     req.Content,
+		Index:       req.Index,
+		URL:         req.URL,
+		TaskID:      req.TaskID,
+		TargetNum:   req.TargetNum,
+		TriggerWords: req.TriggerWords,
+		IpFilter:   req.IpFilter,
+		TimeFilter:  req.TimeFilter,
+		BlockWords:  req.BlockWords,
+		DedupUsernames: req.DedupUsernames,
 	}
 
 	// 【关键修复】导航操作（open_profile / enter_video）触发页面跳转，
@@ -275,6 +324,59 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 		headers.Set("Content-Type", "application/json")
 		h.setCORSHeadersFromConn(Conn, headers)
 		Conn.StopRequest(200, `{"success":true,"message":"navigating"}`, headers)
+		return
+	}
+
+	// 【fetch_video_comments 特殊处理】
+	// inject 通过 HTTP POST /fetch_comments_callback 异步回调，不走 WebSocket 响应路径。
+	// 因此 Go 发送指令后立即返回，Node.js 通过轮询 /fetch_comments_result 获取结果。
+	if req.Action == "fetch_video_comments" {
+		go func() {
+			utils.LogInfo("[DOMAction] fetch_video_comments 启动后台 CallAPI, task_id=%s", req.TaskID)
+			wsRespData, err := h.domActionHub.CallAPI("key:channels:dom_action", domReq, 30*time.Second)
+			if err != nil {
+				utils.LogError("[DOMAction] fetch_video_comments 后台 CallAPI 异常: %v", err)
+				return
+			}
+			utils.LogInfo("[DOMAction] fetch_video_comments 后台 CallAPI 完成, task_id=%s", req.TaskID)
+
+			// inject 通过 resp() 发来的 WebSocket 响应数据写入缓存
+			// inject 发送: { success, result: { panel_ready, comment_count, has_more, items, ... } }
+			var wsResp struct {
+				Success bool `json:"success"`
+				Result  struct {
+					PanelReady   bool        `json:"panel_ready"`
+					Items        interface{} `json:"items"`
+					Total        int         `json:"total"`
+					CommentCount int         `json:"comment_count"`
+					HasMore      bool        `json:"has_more"`
+					Buffer       string      `json:"buffer"`
+					RawItems     interface{} `json:"raw_items"`
+				} `json:"result"`
+			}
+			if parseErr := json.Unmarshal(wsRespData, &wsResp); parseErr != nil {
+				utils.LogError("[DOMAction] 解析 fetch_video_comments 响应失败: %v", parseErr)
+				return
+			}
+			h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
+				Success:       wsResp.Success,
+				PanelReady:   wsResp.Result.PanelReady,
+				Items:        wsResp.Result.Items,
+				Total:        wsResp.Result.Total,
+				CommentCount: wsResp.Result.CommentCount,
+				HasMore:      wsResp.Result.HasMore,
+				Buffer:       wsResp.Result.Buffer,
+				RawItems:     wsResp.Result.RawItems,
+				ReceivedAt:   time.Now().Unix(),
+			})
+			utils.LogInfo("[DOMAction] 评论数据已写入缓存: task_id=%s, panel_ready=%v, comment_count=%d",
+				req.TaskID, wsResp.Result.PanelReady, wsResp.Result.CommentCount)
+		}()
+		// HTTP 立即返回，让 Node.js 开始轮询
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(200, `{"success":true,"message":"fetch_video_comments sent"}`, headers)
 		return
 	}
 
@@ -544,3 +646,334 @@ func (h *APIHandler) HandleClearNavigating(Conn *SunnyNet.HttpConn) {
 	h.setCORSHeadersFromConn(Conn, headers)
 	Conn.StopRequest(200, `{"success":true}`, headers)
 }
+
+// HandleMatchingCallback 处理精准匹配任务的结果回调（inject 采集完成后调用）
+// POST /__wx_channels_api/matching_callback
+// Body: { "task_id": "xxx", "success": true, "reason": "target_reached", "users": [...], "total": 5, "target_num": 10, "comment_count": 200 }
+func (h *APIHandler) HandleMatchingCallback(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/matching_callback" {
+		return
+	}
+
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	body, err := io.ReadAll(Conn.Request.Body)
+	if err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+	_ = Conn.Request.Body.Close()
+
+	var payload struct {
+		TaskID     string        `json:"task_id"`
+		Success    bool          `json:"success"`
+		Reason     string        `json:"reason"`
+		Users      []interface{} `json:"users"`
+		Total      int           `json:"total"`
+		TargetNum  int           `json:"target_num"`
+		CommentCount int         `json:"comment_count"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+
+	if payload.TaskID == "" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "task_id is required")), headers)
+		return
+	}
+
+	// 存储到 Hub 的匹配结果缓存
+	h.domActionHub.SetMatchingResult(payload.TaskID, map[string]interface{}{
+		"success":       payload.Success,
+		"reason":        payload.Reason,
+		"users":         payload.Users,
+		"total":         payload.Total,
+		"target_num":    payload.TargetNum,
+		"comment_count": payload.CommentCount,
+		"timestamp":     time.Now().Unix(),
+	})
+
+	utils.LogInfo("[MatchingCallback] 收到匹配结果: task_id=%s, success=%v, total=%d, reason=%s",
+		payload.TaskID, payload.Success, payload.Total, payload.Reason)
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, `{"success":true}`, headers)
+}
+
+// HandleMatchingProgress 处理精准匹配任务的进度回调（inject 采集过程中调用）
+// POST /__wx_channels_api/matching_progress
+// Body: { "task_id": "xxx", "comment_count": 100, "user_count": 5, "target_num": 10, "percent": 50 }
+func (h *APIHandler) HandleMatchingProgress(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/matching_progress" {
+		return
+	}
+
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	body, err := io.ReadAll(Conn.Request.Body)
+	if err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+	_ = Conn.Request.Body.Close()
+
+	var payload struct {
+		TaskID      string `json:"task_id"`
+		CommentCount int    `json:"comment_count"`
+		UserCount   int    `json:"user_count"`
+		TargetNum   int    `json:"target_num"`
+		Percent     int    `json:"percent"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+
+	if payload.TaskID == "" {
+		return
+	}
+
+	// 更新 Hub 的匹配进度缓存
+	h.domActionHub.SetMatchingProgress(payload.TaskID, map[string]interface{}{
+		"comment_count": payload.CommentCount,
+		"user_count":   payload.UserCount,
+		"target_num":   payload.TargetNum,
+		"percent":      payload.Percent,
+		"timestamp":    time.Now().Unix(),
+	})
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, `{"success":true}`, headers)
+}
+
+// HandleGetMatchingResult 获取精准匹配任务的结果（Node.js 轮询）
+// GET /__wx_channels_api/matching_result?task_id=xxx
+func (h *APIHandler) HandleGetMatchingResult(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/matching_result" {
+		return
+	}
+
+	if Conn.Request.Method != "GET" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use GET")), headers)
+		return
+	}
+
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	taskID := Conn.Request.URL.Query().Get("task_id")
+	if taskID == "" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "task_id is required")), headers)
+		return
+	}
+
+	result := h.domActionHub.GetMatchingResult(taskID)
+	progress := h.domActionHub.GetMatchingProgress(taskID)
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+
+	responseData := map[string]interface{}{
+		"done":     result != nil,
+		"result":   result,
+		"progress": progress,
+	}
+	dataJSON, _ := json.Marshal(responseData)
+	Conn.StopRequest(200, string(dataJSON), headers)
+}
+
+// HandleFetchCommentsCallback 处理 fetch_video_comments 的结果回调（inject 采集完成后调用）
+// POST /__wx_channels_api/fetch_comments_callback
+// Body: { "task_id": "xxx", "success": true, "message": "ok", "result": { panel_ready, items, total, comment_count, has_more, buffer, raw_items } }
+func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/fetch_comments_callback" {
+		return
+	}
+
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	body, err := io.ReadAll(Conn.Request.Body)
+	if err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+	_ = Conn.Request.Body.Close()
+
+	var payload struct {
+		TaskID  string `json:"task_id"`
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Result  struct {
+			PanelReady   bool          `json:"panel_ready"`
+			Items        interface{}   `json:"items"`
+			Total        int           `json:"total"`
+			CommentCount int           `json:"comment_count"`
+			HasMore      bool          `json:"has_more"`
+			Buffer       string        `json:"buffer"`
+			RawItems     interface{}   `json:"raw_items"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+
+	if payload.TaskID == "" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "task_id is required")), headers)
+		return
+	}
+
+	// 存储到 Hub 的缓存
+	h.domActionHub.SetFetchCommentsResult(payload.TaskID, &websocket.FetchCommentsData{
+		Success:       payload.Success,
+		Message:      payload.Message,
+		PanelReady:   payload.Result.PanelReady,
+		Items:        payload.Result.Items,
+		Total:        payload.Result.Total,
+		CommentCount: payload.Result.CommentCount,
+		HasMore:      payload.Result.HasMore,
+		Buffer:       payload.Result.Buffer,
+		RawItems:     payload.Result.RawItems,
+		ReceivedAt:   time.Now().Unix(),
+	})
+
+	utils.LogInfo("[FetchCommentsCallback] 收到评论采集结果: task_id=%s, success=%v, panel_ready=%v, comment_count=%d",
+		payload.TaskID, payload.Success, payload.Result.PanelReady, payload.Result.CommentCount)
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, `{"success":true}`, headers)
+}
+
+// HandleGetFetchCommentsResult 获取 fetch_video_comments 的结果（Node.js 轮询）
+// GET /__wx_channels_api/fetch_comments_result?task_id=xxx
+func (h *APIHandler) HandleGetFetchCommentsResult(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/fetch_comments_result" {
+		return
+	}
+
+	if Conn.Request.Method != "GET" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use GET")), headers)
+		return
+	}
+
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	taskID := Conn.Request.URL.Query().Get("task_id")
+	if taskID == "" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "task_id is required")), headers)
+		return
+	}
+
+	result := h.domActionHub.GetFetchCommentsResult(taskID)
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+
+	var responseData map[string]interface{}
+	if result != nil {
+		responseData = map[string]interface{}{
+			"success":       result.Success,
+			"message":      result.Message,
+			"panel_ready":  result.PanelReady,
+			"items":        result.Items,
+			"total":        result.Total,
+			"comment_count": result.CommentCount,
+			"has_more":     result.HasMore,
+			"buffer":       result.Buffer,
+			"raw_items":    result.RawItems,
+		}
+	} else {
+		responseData = map[string]interface{}{
+			"success": false,
+		}
+	}
+
+	dataJSON, _ := json.Marshal(responseData)
+	Conn.StopRequest(200, string(dataJSON), headers)
+}
+

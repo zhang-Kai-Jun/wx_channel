@@ -37,6 +37,18 @@ type Hub struct {
 	navigatingClient     *Client
 	navigatingClientMu   sync.RWMutex
 
+	// 精准匹配任务结果缓存（taskID → result）
+	matchingResults   map[string]map[string]interface{}
+	matchingResultsMu sync.RWMutex
+
+	// 精准匹配任务进度缓存（taskID → progress）
+	matchingProgress   map[string]map[string]interface{}
+	matchingProgressMu sync.RWMutex
+
+	// fetch_video_comments 结果缓存（taskID → result）
+	fetchCommentsResult   map[string]*FetchCommentsData
+	fetchCommentsResultMu sync.RWMutex
+
 	// 负载均衡选择器
 	selector ClientSelector
 
@@ -47,12 +59,15 @@ type Hub struct {
 // NewHub 创建新的 Hub
 func NewHub(taskService *database.SearchTaskService) *Hub {
 	return &Hub{
-		clients:     make(map[*Client]bool),
-		register:    make(chan *Client),
-		unregister:  make(chan *Client),
-		requests:    make(map[string]chan APICallResponse),
-		selector:    NewLeastConnectionSelector(),
-		TaskService: taskService,
+		clients:               make(map[*Client]bool),
+		register:              make(chan *Client),
+		unregister:            make(chan *Client),
+		requests:              make(map[string]chan APICallResponse),
+		selector:              NewLeastConnectionSelector(),
+		TaskService:           taskService,
+		matchingResults:       make(map[string]map[string]interface{}),
+		matchingProgress:      make(map[string]map[string]interface{}),
+		fetchCommentsResult:   make(map[string]*FetchCommentsData),
 	}
 }
 
@@ -887,4 +902,60 @@ func (h *Hub) handleTaskError(data map[string]interface{}) {
 // GetTaskService 获取任务服务
 func (h *Hub) GetTaskService() *database.SearchTaskService {
 	return h.TaskService
+}
+
+// SetMatchingResult 设置精准匹配任务结果
+func (h *Hub) SetMatchingResult(taskID string, result map[string]interface{}) {
+	h.matchingResultsMu.Lock()
+	defer h.matchingResultsMu.Unlock()
+	h.matchingResults[taskID] = result
+}
+
+// GetMatchingResult 获取精准匹配任务结果
+func (h *Hub) GetMatchingResult(taskID string) map[string]interface{} {
+	h.matchingResultsMu.RLock()
+	defer h.matchingResultsMu.RUnlock()
+	return h.matchingResults[taskID]
+}
+
+// SetMatchingProgress 设置精准匹配任务进度
+func (h *Hub) SetMatchingProgress(taskID string, progress map[string]interface{}) {
+	h.matchingProgressMu.Lock()
+	defer h.matchingProgressMu.Unlock()
+	h.matchingProgress[taskID] = progress
+}
+
+// GetMatchingProgress 获取精准匹配任务进度
+func (h *Hub) GetMatchingProgress(taskID string) map[string]interface{} {
+	h.matchingProgressMu.RLock()
+	defer h.matchingProgressMu.RUnlock()
+	return h.matchingProgress[taskID]
+}
+
+// FetchCommentsData 评论采集结果数据结构
+type FetchCommentsData struct {
+	Success      bool        `json:"success"`
+	Message     string      `json:"message"`
+	PanelReady  bool        `json:"panel_ready"`
+	Items       interface{} `json:"items"`
+	Total       int         `json:"total"`
+	CommentCount int        `json:"comment_count"`
+	HasMore     bool        `json:"has_more"`
+	Buffer      string      `json:"buffer"`
+	RawItems    interface{} `json:"raw_items"`
+	ReceivedAt  int64       `json:"received_at"`
+}
+
+// SetFetchCommentsResult 设置 fetch_video_comments 结果
+func (h *Hub) SetFetchCommentsResult(taskID string, data *FetchCommentsData) {
+	h.fetchCommentsResultMu.Lock()
+	defer h.fetchCommentsResultMu.Unlock()
+	h.fetchCommentsResult[taskID] = data
+}
+
+// GetFetchCommentsResult 获取 fetch_video_comments 结果
+func (h *Hub) GetFetchCommentsResult(taskID string) *FetchCommentsData {
+	h.fetchCommentsResultMu.RLock()
+	defer h.fetchCommentsResultMu.RUnlock()
+	return h.fetchCommentsResult[taskID]
 }

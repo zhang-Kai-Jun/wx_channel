@@ -357,7 +357,7 @@ function __remember_current_feed(feed, reason) {
 }
 
 function __sync_feed_profile_with_runtime(forceLog) {
-  // showFeedDebugInfo('🔍 同步视频信息中... (runtime)');
+  showFeedDebugInfo('🔍 同步视频信息中... (runtime)');
 
   console.log('[feed.js] __sync_feed_profile_with_runtime 开始执行, forceLog:', forceLog);
 
@@ -365,7 +365,7 @@ function __sync_feed_profile_with_runtime(forceLog) {
   console.log('[feed.js] runtimeFeed:', runtimeFeed ? '找到' : '未找到');
   if (runtimeFeed) {
     console.log('[feed.js] runtimeFeed 内容:', runtimeFeed.objectDesc ? runtimeFeed.objectDesc.media : '无 media');
-    // showFeedDebugInfo('✅ 从页面获取到视频信息');
+    showFeedDebugInfo('✅ 从页面获取到视频信息');
     return __remember_current_feed(runtimeFeed, forceLog ? 'runtime' : '');
   }
 
@@ -375,7 +375,7 @@ function __sync_feed_profile_with_runtime(forceLog) {
     window.__wx_channels_store__.profile = fallback;
     __wx_feed_runtime_state.activeFeedId = fallback.id || __get_active_feed_id();
     console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
-    // showFeedDebugInfo('✅ 从DOM元素获取到视频信息');
+    showFeedDebugInfo('✅ 从DOM元素获取到视频信息');
     if (forceLog) {
       console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
     }
@@ -383,7 +383,7 @@ function __sync_feed_profile_with_runtime(forceLog) {
   }
 
   console.log('[feed.js] 最终 profile:', window.__wx_channels_store__ && window.__wx_channels_store__.profile);
-  // showFeedDebugInfo('⚠️ 未能获取到视频信息，请尝试重新播放视频');
+  showFeedDebugInfo('⚠️ 未能获取到视频信息，请尝试重新播放视频');
   return window.__wx_channels_store__ && window.__wx_channels_store__.profile;
 }
 
@@ -425,10 +425,33 @@ function __start_feed_slide_monitor() {
     __wx_feed_runtime_state.activeFeedId = activeFeedId;
     console.log('[feed.js] 检测到当前视频切换:', activeFeedId);
 
+    // 视频切换时，重新注入按钮（因为Vue可能会重新渲染工具栏）
+    __insert_download_btn_to_feed_toolbar().then(function(success) {
+      if (success) {
+        console.log('[feed.js] 视频切换后按钮已重新注入');
+      }
+    });
+
     setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 80);
     setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 320);
     setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 900);
   }, 500);
+
+  // 持续监控工具栏按钮是否存在，如果不存在则重新注入
+  // 这样可以应对Vue随时重新渲染工具栏的情况
+  setInterval(function() {
+    var container = document.querySelector('header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center') ||
+      document.querySelector('header.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center') ||
+      document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center');
+
+    if (!container) return;
+
+    var btns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon');
+    if (btns.length < 2) {
+      console.log('[feed.js] 检测到按钮消失，尝试重新注入...');
+      __insert_download_btn_to_feed_toolbar();
+    }
+  }, 2000);
 }
 
 /** 注入Feed页面顶部工具栏按钮 */
@@ -442,12 +465,16 @@ async function __insert_download_btn_to_feed_toolbar() {
 
   var tryInject = function () {
     var container = findToolbarContainer();
-    if (!container) return false;
+    if (!container) {
+      console.log('[feed.js] 工具栏容器不存在');
+      return false;
+    }
 
-    // 检查是否已存在
-    if (container.querySelector('#wx-feed-comment-icon') || container.querySelector('#wx-feed-download-icon')) {
-      console.log('[feed.js] 工具栏按钮已存在');
-      return true;
+    // 每次都移除可能存在的旧按钮，确保全新注入
+    var oldBtns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon, #wx-feed-copy-link-icon, #wx-feed-dom-icon, #wx-feed-export-icon, #wx-feed-store-snapshot-icon');
+    if (oldBtns.length > 0) {
+      console.log('[feed.js] 移除旧的工具栏按钮 (' + oldBtns.length + '个)');
+      oldBtns.forEach(function(btn) { btn.remove(); });
     }
 
     // 创建评论图标
@@ -456,44 +483,50 @@ async function __insert_download_btn_to_feed_toolbar() {
       '采集评论',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.85 18.825L3 20.1l1.275-3.85A7.95 7.95 0 0 1 4 14.15c0-4.28 3.57-7.75 8-7.75s8 3.47 8 7.75-3.57 7.75-8 7.75c-.73 0-1.44-.1-2.1-.3a8.23 8.23 0 0 1-3.05-1.775Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
     );
-    commentIconWrapper.style.display = 'none';
 
     commentIconWrapper.onclick = function () {
       __start_feed_comment_collection_with_open_panel();
     };
 
-    // 创建复制链接按钮
-    var copyLinkIconWrapper = __build_feed_header_icon(
-      'wx-feed-copy-link-icon',
-      '复制链接',
-      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M7.75 11.25a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5ZM4.75 8A2.25 2.25 0 0 0 2.5 10.25v4.5A2.25 2.25 0 0 0 4.75 17h4.5a2.25 2.25 0 0 0 2.25-2.25V15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.75 4.75A2.25 2.25 0 0 1 10 2.5h7.5A2.25 2.25 0 0 1 19.75 4.75v7.5A2.25 2.25 0 0 1 17.5 14.5H15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
-    );
-    copyLinkIconWrapper.style.display = 'none';
-
+    // 创建复制链接按钮（文字形式）
+    var copyLinkIconWrapper = document.createElement('div');
+    copyLinkIconWrapper.id = 'wx-feed-copy-link-icon';
+    copyLinkIconWrapper.className = 'relative flex-shrink-0 cursor-pointer';
+    copyLinkIconWrapper.title = '视频链接';
+    copyLinkIconWrapper.style.cssText = [
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'color:rgba(255,255,255,0.5)',
+      'transition:color 0.2s ease, opacity 0.2s ease',
+      'margin-right:16px',
+      'font-size:14px',
+      'padding:0 8px',
+      'height:28px',
+      'border-radius:4px',
+      'background:rgba(255,255,255,0.1)'
+    ].join(';');
+    copyLinkIconWrapper.textContent = '复制链接';
+    copyLinkIconWrapper.onmouseenter = function () {
+      copyLinkIconWrapper.style.color = 'rgba(255,255,255,0.82)';
+      copyLinkIconWrapper.style.background = 'rgba(255,255,255,0.2)';
+    };
+    copyLinkIconWrapper.onmouseleave = function () {
+      copyLinkIconWrapper.style.color = 'rgba(255,255,255,0.5)';
+      copyLinkIconWrapper.style.background = 'rgba(255,255,255,0.1)';
+    };
 
     copyLinkIconWrapper.onclick = function () {
-      // 从本地存储获取profile数据
-      var profile = __wx_channels_store__ && __wx_channels_store__.profile;
-
-      // 如果本地没有，尝试从API获取
-      if (!profile || !profile.id) {
-        fetch('/__wx_channels_api/get_current_profile', {
-          method: 'GET',
-          headers: { 'X-Local-Auth': 'local-dev' }
-        }).then(function (res) { return res.json(); })
-          .then(function (data) {
-            if (data && data.id) {
-              __copy_video_ids_to_clipboard(data);
-            } else {
-              // 降级：复制URL
-              __copy_to_clipboard(window.location.href);
-            }
-          }).catch(function () {
-            __copy_to_clipboard(window.location.href);
-          });
-      } else {
-        __copy_video_ids_to_clipboard(profile);
-      }
+      var paramsToKeep = ["oid", "nid", "fromSubPage", "context_id", "eid"];
+      var u = new URL(window.location.href);
+      var base = u.origin + u.pathname;
+      var filteredParams = new URLSearchParams();
+      paramsToKeep.forEach(function (key) {
+        var val = u.searchParams.get(key);
+        if (val) filteredParams.set(key, val);
+      });
+      var trimmedUrl = base + "?" + filteredParams.toString();
+      __copy_to_clipboard(trimmedUrl);
     };
 
     // 复制到剪贴板函数
@@ -528,23 +561,12 @@ async function __insert_download_btn_to_feed_toolbar() {
       document.body.removeChild(textArea);
     }
 
-    // 复制视频ID到剪贴板
-    function __copy_video_ids_to_clipboard(profile) {
-      var id = profile.id || '';
-      var nonceId = profile.nonce_id || '';
-      var copyText = 'id: ' + id + '\nnonce_id: ' + nonceId;
-
-      console.log('[feed.js] 复制视频ID:', copyText);
-      __copy_to_clipboard(copyText);
-    };
-
     // 创建获取DOM按钮
     var domIconWrapper = __build_feed_header_icon(
       'wx-feed-dom-icon',
       '获取DOM',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>'
     );
-    domIconWrapper.style.display = 'none';
 
     domIconWrapper.onclick = function () {
       try {
@@ -585,8 +607,6 @@ async function __insert_download_btn_to_feed_toolbar() {
       '下载视频',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>'
     );
-    downloadIconWrapper.style.display = 'none';
-
 
     downloadIconWrapper.onclick = function () {
       __handle_feed_download_click();
@@ -598,16 +618,26 @@ async function __insert_download_btn_to_feed_toolbar() {
       '导出CSV',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M8 3.75h5.25L18 8.5v11.75H8c-1.1 0-2-.9-2-2V5.75c0-1.1.9-2 2-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M13 3.75V8.5h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M9.5 12.5h5M9.5 15.5h5M9.5 18.5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>'
     );
-    exportIconWrapper.style.display = 'none';
-
 
     exportIconWrapper.onclick = function () {
       __handle_export_click();
     };
 
+    // 创建 Store 快照按钮
+    var storeSnapshotIconWrapper = __build_feed_header_icon(
+      'wx-feed-store-snapshot-icon',
+      'Store快照',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h6M9 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+    );
+
+    storeSnapshotIconWrapper.onclick = function () {
+      dumpAllPiniaStores();
+    };
+
     // Insert into container
     container.insertBefore(exportIconWrapper, container.firstChild);
-    container.insertBefore(downloadIconWrapper, container.firstChild);
+    container.insertBefore(storeSnapshotIconWrapper, exportIconWrapper);
+    container.insertBefore(downloadIconWrapper, storeSnapshotIconWrapper);
     container.insertBefore(domIconWrapper, container.firstChild);
     container.insertBefore(commentIconWrapper, container.firstChild);
     container.insertBefore(copyLinkIconWrapper, container.firstChild);
@@ -620,26 +650,73 @@ async function __insert_download_btn_to_feed_toolbar() {
   // 立即尝试注入
   if (tryInject()) return true;
 
-  // 如果失败，使用 MutationObserver 监听 DOM 变化
+  // 如果失败，使用 MutationObserver 监听 DOM 变化 + 定时器重试
   return new Promise(function (resolve) {
+    var retryCount = 0;
+    var maxRetries = 20;
+    var retryInterval = 300;
+
+    // 使用 MutationObserver 监听 DOM 变化
     var observer = new MutationObserver(function (mutations, obs) {
       if (tryInject()) {
         obs.disconnect();
+        clearInterval(retryTimer);
         resolve(true);
+        return;
       }
+      // 即使有 DOM 变化也继续尝试
+      retryCount++;
     });
 
     observer.observe(document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style']
     });
 
-    // 5秒后超时
+    // 使用定时器定期重试（更可靠）
+    var retryTimer = setInterval(function() {
+      retryCount++;
+      if (tryInject()) {
+        observer.disconnect();
+        clearInterval(retryTimer);
+        resolve(true);
+        return;
+      }
+      if (retryCount >= maxRetries) {
+        observer.disconnect();
+        clearInterval(retryTimer);
+        console.log('[feed.js] 工具栏按钮注入失败，已重试' + maxRetries + '次');
+        resolve(false);
+      }
+    }, retryInterval);
+
+    // 监听页面可见性变化（从后台切回时重新尝试）
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'visible') {
+        retryCount = 0; // 重置计数器
+      }
+    });
+
+    // 监听滚动结束事件
+    var scrollTimer = null;
+    window.addEventListener('scroll', function() {
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(function() {
+        retryCount = 0; // 重置计数器
+        tryInject(); // 立即尝试注入
+      }, 500);
+    });
+
+    // 10秒后超时
     setTimeout(function () {
       observer.disconnect();
-      console.log('[feed.js] 工具栏按钮注入超时');
+      clearInterval(retryTimer);
+      window.removeEventListener('scroll', null); // 清理监听器
+      console.log('[feed.js] 工具栏按钮注入超时（10秒）');
       resolve(false);
-    }, 5000);
+    }, 10000);
   });
 }
 
@@ -813,7 +890,7 @@ function __show_feed_download_options(profile) {
 
 /** Feed页面按钮注入入口 */
 async function __insert_download_btn_to_feed_page() {
-  console.log('[feed.js] Feed页面按钮到顶部工具栏...');
+  console.log('[feed.js] 开始注入Feed页面按钮到顶部工具栏...');
   __start_feed_slide_monitor();
 
   var success = await __insert_download_btn_to_feed_toolbar();
@@ -823,8 +900,42 @@ async function __insert_download_btn_to_feed_page() {
     return true;
   }
 
-  console.log('[feed.js] 未找到Feed页面工具栏');
-  return false;
+  console.log('[feed.js] 首次注入失败，开始重试机制...');
+
+  // 重试机制：每隔500ms重试一次，最多重试10次
+  var retries = 0;
+  var maxRetries = 10;
+
+  return new Promise(function(resolve) {
+    var retryTimer = setInterval(async function() {
+      retries++;
+      console.log('[feed.js] 重试注入 (' + retries + '/' + maxRetries + ')...');
+
+      var retrySuccess = await __insert_download_btn_to_feed_toolbar();
+      if (retrySuccess) {
+        clearInterval(retryTimer);
+        setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 120);
+        setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 500);
+        resolve(true);
+        return;
+      }
+
+      if (retries >= maxRetries) {
+        clearInterval(retryTimer);
+        console.log('[feed.js] 重试' + maxRetries + '次后仍未找到Feed页面工具栏');
+        resolve(false);
+      }
+    }, 500);
+
+    // 总超时15秒
+    setTimeout(function() {
+      clearInterval(retryTimer);
+      if (retries < maxRetries) {
+        console.log('[feed.js] 注入超时');
+      }
+      resolve(false);
+    }, 15000);
+  });
 }
 
 /** Feed页面导出按钮点击处理 */
@@ -903,4 +1014,57 @@ if (typeof WXE !== 'undefined') {
   WXE.onFetchFeedProfile(function (feed) {
     __remember_current_feed(feed, 'feed-profile');
   });
+}
+
+/**
+ * 遍历所有 Pinia Store 并发送到后端保存
+ */
+function dumpAllPiniaStores() {
+  var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+  var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
+  var appContext = vue && (vue.appContext || (vue.ctx && vue.ctx.appContext));
+  var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+  var pinia = globalProperties && globalProperties.$pinia;
+
+  if (!pinia || !pinia._s) {
+    console.warn('[Pinia Store] 未找到 Pinia Store');
+    __wx_log({ msg: '❌ 未找到 Pinia Store' });
+    return;
+  }
+
+  var stores = {};
+  var storeNames = [];
+  pinia._s.forEach(function (store, name) {
+    try {
+      var state = (store.$state && JSON.parse(JSON.stringify(store.$state))) || {};
+      stores[name] = state;
+      storeNames.push(name);
+    } catch (e) {
+      stores[name] = { '__error__': e.message };
+    }
+  });
+
+  console.log('[Pinia Store] 快照数据:', stores);
+  __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个)' });
+
+  var page = window.__wx_current_page__ || location.pathname || '';
+
+  fetch('/__wx_channels_api/dump_pinia_store', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stores: stores,
+      page: page,
+      url: location.href,
+      timestamp: Date.now()
+    })
+  }).then(function (res) { return res.json(); })
+    .then(function (data) {
+      console.log('[Pinia Store] 快照已保存:', data);
+      __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: ' + storeNames.join(', ') + ')' });
+    })
+    .catch(function (err) {
+      console.error('[Pinia Store] 保存失败:', err);
+      __wx_log({ msg: '❌ Store快照保存失败: ' + err.message });
+    });
 }

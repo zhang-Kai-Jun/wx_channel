@@ -425,10 +425,33 @@ function __start_feed_slide_monitor() {
     __wx_feed_runtime_state.activeFeedId = activeFeedId;
     console.log('[feed.js] 检测到当前视频切换:', activeFeedId);
 
+    // 视频切换时，重新注入按钮（因为Vue可能会重新渲染工具栏）
+    __insert_download_btn_to_feed_toolbar().then(function(success) {
+      if (success) {
+        console.log('[feed.js] 视频切换后按钮已重新注入');
+      }
+    });
+
     setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 80);
     setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 320);
     setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 900);
   }, 500);
+
+  // 持续监控工具栏按钮是否存在，如果不存在则重新注入
+  // 这样可以应对Vue随时重新渲染工具栏的情况
+  setInterval(function() {
+    var container = document.querySelector('header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center') ||
+      document.querySelector('header.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center') ||
+      document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center');
+
+    if (!container) return;
+
+    var btns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon');
+    if (btns.length < 2) {
+      console.log('[feed.js] 检测到按钮消失，尝试重新注入...');
+      __insert_download_btn_to_feed_toolbar();
+    }
+  }, 2000);
 }
 
 /** 注入Feed页面顶部工具栏按钮 */
@@ -442,12 +465,16 @@ async function __insert_download_btn_to_feed_toolbar() {
 
   var tryInject = function () {
     var container = findToolbarContainer();
-    if (!container) return false;
+    if (!container) {
+      console.log('[feed.js] 工具栏容器不存在');
+      return false;
+    }
 
-    // 检查是否已存在
-    if (container.querySelector('#wx-feed-comment-icon') || container.querySelector('#wx-feed-download-icon')) {
-      console.log('[feed.js] 工具栏按钮已存在');
-      return true;
+    // 每次都移除可能存在的旧按钮，确保全新注入
+    var oldBtns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon, #wx-feed-copy-link-icon, #wx-feed-dom-icon, #wx-feed-export-icon, #wx-feed-store-snapshot-icon');
+    if (oldBtns.length > 0) {
+      console.log('[feed.js] 移除旧的工具栏按钮 (' + oldBtns.length + '个)');
+      oldBtns.forEach(function(btn) { btn.remove(); });
     }
 
     // 创建评论图标
@@ -623,26 +650,73 @@ async function __insert_download_btn_to_feed_toolbar() {
   // 立即尝试注入
   if (tryInject()) return true;
 
-  // 如果失败，使用 MutationObserver 监听 DOM 变化
+  // 如果失败，使用 MutationObserver 监听 DOM 变化 + 定时器重试
   return new Promise(function (resolve) {
+    var retryCount = 0;
+    var maxRetries = 20;
+    var retryInterval = 300;
+
+    // 使用 MutationObserver 监听 DOM 变化
     var observer = new MutationObserver(function (mutations, obs) {
       if (tryInject()) {
         obs.disconnect();
+        clearInterval(retryTimer);
         resolve(true);
+        return;
       }
+      // 即使有 DOM 变化也继续尝试
+      retryCount++;
     });
 
     observer.observe(document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style']
     });
 
-    // 5秒后超时
+    // 使用定时器定期重试（更可靠）
+    var retryTimer = setInterval(function() {
+      retryCount++;
+      if (tryInject()) {
+        observer.disconnect();
+        clearInterval(retryTimer);
+        resolve(true);
+        return;
+      }
+      if (retryCount >= maxRetries) {
+        observer.disconnect();
+        clearInterval(retryTimer);
+        console.log('[feed.js] 工具栏按钮注入失败，已重试' + maxRetries + '次');
+        resolve(false);
+      }
+    }, retryInterval);
+
+    // 监听页面可见性变化（从后台切回时重新尝试）
+    document.addEventListener('visibilitychange', function() {
+      if (document.visibilityState === 'visible') {
+        retryCount = 0; // 重置计数器
+      }
+    });
+
+    // 监听滚动结束事件
+    var scrollTimer = null;
+    window.addEventListener('scroll', function() {
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(function() {
+        retryCount = 0; // 重置计数器
+        tryInject(); // 立即尝试注入
+      }, 500);
+    });
+
+    // 10秒后超时
     setTimeout(function () {
       observer.disconnect();
-      console.log('[feed.js] 工具栏按钮注入超时');
+      clearInterval(retryTimer);
+      window.removeEventListener('scroll', null); // 清理监听器
+      console.log('[feed.js] 工具栏按钮注入超时（10秒）');
       resolve(false);
-    }, 5000);
+    }, 10000);
   });
 }
 
@@ -826,8 +900,42 @@ async function __insert_download_btn_to_feed_page() {
     return true;
   }
 
-  console.log('[feed.js] 未找到Feed页面工具栏');
-  return false;
+  console.log('[feed.js] 首次注入失败，开始重试机制...');
+
+  // 重试机制：每隔500ms重试一次，最多重试10次
+  var retries = 0;
+  var maxRetries = 10;
+
+  return new Promise(function(resolve) {
+    var retryTimer = setInterval(async function() {
+      retries++;
+      console.log('[feed.js] 重试注入 (' + retries + '/' + maxRetries + ')...');
+
+      var retrySuccess = await __insert_download_btn_to_feed_toolbar();
+      if (retrySuccess) {
+        clearInterval(retryTimer);
+        setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 120);
+        setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 500);
+        resolve(true);
+        return;
+      }
+
+      if (retries >= maxRetries) {
+        clearInterval(retryTimer);
+        console.log('[feed.js] 重试' + maxRetries + '次后仍未找到Feed页面工具栏');
+        resolve(false);
+      }
+    }, 500);
+
+    // 总超时15秒
+    setTimeout(function() {
+      clearInterval(retryTimer);
+      if (retries < maxRetries) {
+        console.log('[feed.js] 注入超时');
+      }
+      resolve(false);
+    }, 15000);
+  });
 }
 
 /** Feed页面导出按钮点击处理 */

@@ -1227,6 +1227,116 @@ window.__wx_api_client = {
         return await _executeWithRetry(followAttempt, 'do_follow');
       }
 
+      // do_follow_on_profile 操作 - 在主页执行关注（用于用户无视频时）
+      if (action === 'do_follow_on_profile') {
+        console.log('[API客户端] do_follow_on_profile 开始');
+
+        var followAttempt = async function() {
+          // 判断按钮是否表示已关注状态
+          function isFollowedState(text) {
+            return (text || '').includes('已关注') || (text || '').includes('互相关注');
+          }
+
+          // 辅助函数：收集容器内所有关注相关的按钮
+          function collectFollowBtns(container) {
+            if (!container) return [];
+            var result = [];
+            var allBtns = container.querySelectorAll('button');
+            for (var i = 0; i < allBtns.length; i++) {
+              var t = (allBtns[i].innerText || '').trim();
+              if (t === '关注' || isFollowedState(t)) result.push(allBtns[i]);
+            }
+            return result;
+          }
+
+          var profileBtn = null;
+
+          // 第一层：.opr-area（主页固定头部，精确优先）
+          var oprArea = document.querySelector('.opr-area');
+          if (oprArea) {
+            var oprBtns = oprArea.querySelectorAll('button');
+            for (var m = 0; m < oprBtns.length; m++) {
+              var mt = (oprBtns[m].innerText || '').trim();
+              if (mt === '关注' || isFollowedState(mt)) {
+                profileBtn = oprBtns[m];
+                break;
+              }
+            }
+          }
+
+          // 第二层：.floating-avatar-area（浮动头部）
+          if (!profileBtn) {
+            var floatingArea = document.querySelector('.floating-avatar-area');
+            if (floatingArea) {
+              var floatBtns = floatingArea.querySelectorAll('button');
+              for (var n = 0; n < floatBtns.length; n++) {
+                var nt = (floatBtns[n].innerText || '').trim();
+                if (nt === '关注' || isFollowedState(nt)) {
+                  profileBtn = floatBtns[n];
+                  break;
+                }
+              }
+            }
+          }
+
+          // 第三层兜底：全局遍历页面所有按钮
+          if (!profileBtn) {
+            var allBtns = document.querySelectorAll('button');
+            for (var j = 0; j < allBtns.length; j++) {
+              var bt = (allBtns[j].innerText || '').trim();
+              if (bt === '关注' || isFollowedState(bt)) {
+                profileBtn = allBtns[j];
+                break;
+              }
+            }
+          }
+
+          if (!profileBtn) {
+            console.log('[API客户端] do_follow_on_profile 未找到关注相关按钮');
+            return { success: false, message: '未找到主页关注按钮' };
+          }
+
+          var text = (profileBtn.innerText || '').trim();
+          console.log('[API客户端] 主页关注按钮文本:', text);
+
+          // 已关注状态 → 直接返回成功
+          if (isFollowedState(text)) {
+            console.log('[API客户端] 该作者已关注，跳过');
+            return { success: true, isFollowed: true, message: '该作者已关注' };
+          }
+
+          // 未关注 → 执行点击
+          if (text === '关注') {
+            profileBtn.click();
+            console.log('[API客户端] 主页关注按钮已点击');
+            await new Promise(function(resolve) { setTimeout(resolve, 1500); });
+
+            var textAfter = (profileBtn.innerText || '').trim();
+            var followed = isFollowedState(textAfter);
+            console.log('[API客户端] 点击后按钮文本:', textAfter, 'followed:', followed);
+
+            if (followed) {
+              return { success: true, isFollowed: true, message: '主页关注成功' };
+            } else {
+              return { success: false, isFollowed: false, message: '主页关注失败，按钮状态未变化' };
+            }
+          }
+
+          // 兜底：文字既不是"关注"也不是"已关注"，尝试点击
+          profileBtn.click();
+          console.log('[API客户端] 主页按钮（非标准文字）已点击:', text);
+          await new Promise(function(resolve) { setTimeout(resolve, 1500); });
+          var textAfter2 = (profileBtn.innerText || '').trim();
+          var followed2 = isFollowedState(textAfter2);
+          if (followed2) {
+            return { success: true, isFollowed: true, message: '主页关注成功' };
+          }
+          return { success: false, isFollowed: false, message: '主页关注失败，按钮状态未变化' };
+        };
+
+        return await _executeWithRetry(followAttempt, 'do_follow_on_profile');
+      }
+
       // do_comment 操作 - 执行评论（带重试机制）
       if (action === 'do_comment') {
         var commentText = body.content || '';

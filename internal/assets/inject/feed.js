@@ -471,7 +471,7 @@ async function __insert_download_btn_to_feed_toolbar() {
     }
 
     // 每次都移除可能存在的旧按钮，确保全新注入
-    var oldBtns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon, #wx-feed-copy-link-icon, #wx-feed-dom-icon, #wx-feed-export-icon, #wx-feed-store-snapshot-icon');
+    var oldBtns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon, #wx-feed-copy-link-icon, #wx-feed-dom-icon, #wx-feed-export-icon, #wx-feed-store-snapshot-icon, #wx-feed-comment-snapshot-icon, #wx-feed-comment-count-icon');
     if (oldBtns.length > 0) {
       console.log('[feed.js] 移除旧的工具栏按钮 (' + oldBtns.length + '个)');
       oldBtns.forEach(function(btn) { btn.remove(); });
@@ -619,7 +619,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M8 3.75h5.25L18 8.5v11.75H8c-1.1 0-2-.9-2-2V5.75c0-1.1.9-2 2-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M13 3.75V8.5h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M9.5 12.5h5M9.5 15.5h5M9.5 18.5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>'
     );
 
-    exportIconWrapper.onclick = function () {
+    exportIconWrapper.onclick = function () { 
       __handle_export_click();
     };
 
@@ -634,10 +634,102 @@ async function __insert_download_btn_to_feed_toolbar() {
       dumpAllPiniaStores();
     };
 
+    // 创建评论快照按钮（采集评论 → 等待稳定 → Store快照）
+    var commentSnapshotIconWrapper = __build_feed_header_icon(
+      'wx-feed-comment-snapshot-icon',
+      '评论快照',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h6M9 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="17" cy="17" r="4" fill="currentColor"/></svg>'
+    );
+
+    commentSnapshotIconWrapper.onclick = function () {
+      var originalWxLog = typeof __wx_log === 'function' ? __wx_log : null;
+      var snapshotSaved = false;
+
+      function onCollectionDone() {
+        if (snapshotSaved) return;
+        snapshotSaved = true;
+        var savedWxLog = originalWxLog;
+        if (savedWxLog) __wx_log = savedWxLog;
+        dumpAllPiniaStores().then(function (path) {
+          if (savedWxLog) savedWxLog({ msg: '📸 评论快照已保存: ' + (path || '(空)') });
+          else console.log('[评论快照] 最终JSON路径: ' + (path || '(空)'));
+        });
+      }
+
+      __wx_log = function (data) {
+        if (originalWxLog) originalWxLog(data);
+        if (snapshotSaved) return;
+        var msg = data && data.msg;
+        if (!msg) return;
+        if (msg.indexOf('✅ 评论采集完成') !== -1 || msg.indexOf('⚠️ 采集停止') !== -1 || msg.indexOf('✅ 评论已保存') !== -1) {
+          console.log('[评论快照] 检测到采集完成信号: ' + msg);
+          onCollectionDone();
+        }
+      };
+
+      __wx_log({ msg: '📸 评论快照: 开始采集评论...' });
+      __start_feed_comment_collection_with_open_panel();
+    };
+
+    // 创建评论总数按钮
+    var commentCountIconWrapper = __build_feed_header_icon(
+      'wx-feed-comment-count-icon',
+      '评论总数',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 20v-8m0 0V4m0 8h8m-8 0H4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    );
+
+    commentCountIconWrapper.onclick = function () {
+      var commentCount = 0;
+      try {
+        var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+        var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
+        var appContext = vue && (vue.appContext || (vue.ctx && vue.ctx.appContext));
+        var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+        var pinia = globalProperties && globalProperties.$pinia;
+        if (!pinia || !pinia._s) { console.log(commentCount); return; }
+
+        var stores = pinia._s;
+        var iterator = stores.keys();
+        var result = iterator.next();
+
+        while (!result.done) {
+          var id = result.value;
+          var s = stores.get(id);
+          if (!s) { result = iterator.next(); continue; }
+
+          var home = s.home || (s.$state && s.$state.home);
+          var flowCommentList = null;
+          if (home && home.flowCommentList) {
+            flowCommentList = home.flowCommentList;
+          } else if (s.flowCommentList) {
+            flowCommentList = s.flowCommentList;
+          }
+
+          if (flowCommentList && flowCommentList.commentCount !== undefined) {
+            commentCount = flowCommentList.commentCount;
+            break;
+          }
+
+          var state = s.$state || s;
+          if (state.home && state.home.flowCommentList && state.home.flowCommentList.commentCount !== undefined) {
+            commentCount = state.home.flowCommentList.commentCount;
+            break;
+          }
+
+          result = iterator.next();
+        }
+      } catch (e) {}
+      __wx_log({ msg: '� 评论总数: ' + commentCount });
+
+      console.log(commentCount);
+    };
+
     // Insert into container
     container.insertBefore(exportIconWrapper, container.firstChild);
-    container.insertBefore(storeSnapshotIconWrapper, exportIconWrapper);
-    container.insertBefore(downloadIconWrapper, storeSnapshotIconWrapper);
+    container.insertBefore(commentSnapshotIconWrapper, exportIconWrapper);
+    container.insertBefore(storeSnapshotIconWrapper, commentSnapshotIconWrapper);
+    container.insertBefore(commentCountIconWrapper, storeSnapshotIconWrapper);
+    container.insertBefore(downloadIconWrapper, commentCountIconWrapper);
     container.insertBefore(domIconWrapper, container.firstChild);
     container.insertBefore(commentIconWrapper, container.firstChild);
     container.insertBefore(copyLinkIconWrapper, container.firstChild);
@@ -1020,51 +1112,57 @@ if (typeof WXE !== 'undefined') {
  * 遍历所有 Pinia Store 并发送到后端保存
  */
 function dumpAllPiniaStores() {
-  var app = document.querySelector('[data-v-app]') || document.getElementById('app');
-  var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
-  var appContext = vue && (vue.appContext || (vue.ctx && vue.ctx.appContext));
-  var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
-  var pinia = globalProperties && globalProperties.$pinia;
+  return new Promise(function (resolve) {
+    var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+    var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
+    var appContext = vue && (vue.appContext || (vue.ctx && vue.ctx.appContext));
+    var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+    var pinia = globalProperties && globalProperties.$pinia;
 
-  if (!pinia || !pinia._s) {
-    console.warn('[Pinia Store] 未找到 Pinia Store');
-    __wx_log({ msg: '❌ 未找到 Pinia Store' });
-    return;
-  }
-
-  var stores = {};
-  var storeNames = [];
-  pinia._s.forEach(function (store, name) {
-    try {
-      var state = (store.$state && JSON.parse(JSON.stringify(store.$state))) || {};
-      stores[name] = state;
-      storeNames.push(name);
-    } catch (e) {
-      stores[name] = { '__error__': e.message };
+    if (!pinia || !pinia._s) {
+      console.warn('[Pinia Store] 未找到 Pinia Store');
+      __wx_log({ msg: '❌ 未找到 Pinia Store' });
+      resolve('');
+      return;
     }
-  });
 
-  console.log('[Pinia Store] 快照数据:', stores);
-  __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个)' });
-
-  var page = window.__wx_current_page__ || location.pathname || '';
-
-  fetch('/__wx_channels_api/dump_pinia_store', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      stores: stores,
-      page: page,
-      url: location.href,
-      timestamp: Date.now()
-    })
-  }).then(function (res) { return res.json(); })
-    .then(function (data) {
-      console.log('[Pinia Store] 快照已保存:', data);
-      __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: ' + storeNames.join(', ') + ')' });
-    })
-    .catch(function (err) {
-      console.error('[Pinia Store] 保存失败:', err);
-      __wx_log({ msg: '❌ Store快照保存失败: ' + err.message });
+    var stores = {};
+    var storeNames = [];
+    pinia._s.forEach(function (store, name) {
+      try {
+        var state = (store.$state && JSON.parse(JSON.stringify(store.$state))) || {};
+        stores[name] = state;
+        storeNames.push(name);
+      } catch (e) {
+        stores[name] = { '__error__': e.message };
+      }
     });
+
+    console.log('[Pinia Store] 快照数据:', stores);
+    __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个)' });
+
+    var page = window.__wx_current_page__ || location.pathname || '';
+
+    fetch('/__wx_channels_api/dump_pinia_store', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stores: stores,
+        page: page,
+        url: location.href,
+        timestamp: Date.now()
+      })
+    }).then(function (res) { return res.json(); })
+      .then(function (data) {
+        var jsonPath = (data && data.path) ? data.path : '';
+        console.log('[Pinia Store] 快照已保存:', data);
+        __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: ' + storeNames.join(', ') + ')' });
+        resolve(jsonPath);
+      })
+      .catch(function (err) {
+        console.error('[Pinia Store] 保存失败:', err);
+        __wx_log({ msg: '❌ Store快照保存失败: ' + err.message });
+        resolve('');
+      });
+  });
 }

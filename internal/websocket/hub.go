@@ -49,6 +49,10 @@ type Hub struct {
 	fetchCommentsResult   map[string]*FetchCommentsData
 	fetchCommentsResultMu sync.RWMutex
 
+	// 评论快照采集状态缓存（taskID → CommentSnapshotStatus）
+	commentSnapshotStatus   map[string]*CommentSnapshotStatus
+	commentSnapshotStatusMu sync.RWMutex
+
 	// 负载均衡选择器
 	selector ClientSelector
 
@@ -68,6 +72,7 @@ func NewHub(taskService *database.SearchTaskService) *Hub {
 		matchingResults:       make(map[string]map[string]interface{}),
 		matchingProgress:      make(map[string]map[string]interface{}),
 		fetchCommentsResult:   make(map[string]*FetchCommentsData),
+		commentSnapshotStatus: make(map[string]*CommentSnapshotStatus),
 	}
 }
 
@@ -946,6 +951,19 @@ type FetchCommentsData struct {
 	ReceivedAt  int64       `json:"received_at"`
 }
 
+// CommentSnapshotStatus 评论快照采集状态
+// 用于 Node.js 轮询等待浏览器完成采集
+type CommentSnapshotStatus struct {
+	Done         bool    `json:"done"`          // 采集是否完成
+	Success      bool    `json:"success"`        // 是否成功
+	TotalCount  int     `json:"total_count"`    // 评论总数
+	LoadedCount  int     `json:"loaded_count"`  // 已加载数
+	SnapshotPath string  `json:"snapshot_path"` // 快照文件路径（完成时才有）
+	Message     string  `json:"message"`         // 状态消息
+	Error       string  `json:"error"`          // 错误信息
+	UpdatedAt   int64   `json:"updated_at"`     // 更新时间戳
+}
+
 // SetFetchCommentsResult 设置 fetch_video_comments 结果
 func (h *Hub) SetFetchCommentsResult(taskID string, data *FetchCommentsData) {
 	h.fetchCommentsResultMu.Lock()
@@ -958,4 +976,18 @@ func (h *Hub) GetFetchCommentsResult(taskID string) *FetchCommentsData {
 	h.fetchCommentsResultMu.RLock()
 	defer h.fetchCommentsResultMu.RUnlock()
 	return h.fetchCommentsResult[taskID]
+}
+
+// SetCommentSnapshotStatus 设置评论快照采集状态
+func (h *Hub) SetCommentSnapshotStatus(taskID string, status *CommentSnapshotStatus) {
+	h.commentSnapshotStatusMu.Lock()
+	defer h.commentSnapshotStatusMu.Unlock()
+	h.commentSnapshotStatus[taskID] = status
+}
+
+// GetCommentSnapshotStatus 获取评论快照采集状态
+func (h *Hub) GetCommentSnapshotStatus(taskID string) *CommentSnapshotStatus {
+	h.commentSnapshotStatusMu.RLock()
+	defer h.commentSnapshotStatusMu.RUnlock()
+	return h.commentSnapshotStatus[taskID]
 }

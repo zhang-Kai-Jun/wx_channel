@@ -123,7 +123,7 @@ func (h *CommentHandler) HandleDumpPiniaStore(Conn *SunnyNet.HttpConn) bool {
 	savedPath, err := h.savePiniaStoreSnapshot(snapshot)
 	if err != nil {
 		utils.HandleError(err, "保存 Pinia Store 快照")
-		h.sendEmptyResponse(Conn)
+		h.sendJSONResponse(Conn, map[string]interface{}{"path": "", "error": err.Error()})
 		return true
 	}
 
@@ -135,7 +135,7 @@ func (h *CommentHandler) HandleDumpPiniaStore(Conn *SunnyNet.HttpConn) bool {
 	utils.LogInfo("[Pinia Store] 快照已保存 | 页面=%s | Store数=%d | Store列表=%v | 路径=%s",
 		requestData.Page, storeCount, storeNames, savedPath)
 
-	h.sendEmptyResponse(Conn)
+	h.sendJSONResponse(Conn, map[string]interface{}{"path": savedPath})
 	return true
 }
 
@@ -437,4 +437,30 @@ func (h *CommentHandler) sendErrorResponse(Conn *SunnyNet.HttpConn, err error) {
 
 	errorMsg := fmt.Sprintf(`{"success":false,"error":"%s"}`, err.Error())
 	Conn.StopRequest(500, errorMsg, headers)
+}
+
+// sendJSONResponse 发送 JSON 响应
+func (h *CommentHandler) sendJSONResponse(Conn *SunnyNet.HttpConn, data interface{}) {
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("X-Content-Type-Options", "nosniff")
+
+	// CORS
+	if h.getConfig() != nil && len(h.getConfig().AllowedOrigins) > 0 {
+		origin := Conn.Request.Header.Get("Origin")
+		if origin != "" {
+			for _, o := range h.getConfig().AllowedOrigins {
+				if o == origin {
+					headers.Set("Access-Control-Allow-Origin", origin)
+					headers.Set("Vary", "Origin")
+					headers.Set("Access-Control-Allow-Headers", "Content-Type, X-Local-Auth")
+					headers.Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+					break
+				}
+			}
+		}
+	}
+
+	body, _ := json.Marshal(data)
+	Conn.StopRequest(200, string(body), headers)
 }

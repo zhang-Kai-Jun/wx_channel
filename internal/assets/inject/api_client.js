@@ -1,7 +1,80 @@
 /**
  * @file API 客户端 - 通过 WebSocket 与后端通信
  */
+
+// 日志辅助函数 - 使用 fetch 发送到服务端日志
+var __api_log = (function() {
+  var levels = { 'INF': 0, 'WRN': 1, 'ERR': 2, 'DBG': 3 };
+  var currentLevel = 0; // 0=INF, 1=WRN, 2=ERR, 3=DBG
+
+  return function(level, ...args) {
+    if (levels[level] < currentLevel) return;
+    var prefix = level === 'DBG' ? 'DBG' : level;
+    var message = args.map(function(arg) {
+      if (typeof arg === 'object' && arg !== null) {
+        try { return JSON.stringify(arg); } catch(e) { return String(arg); }
+      }
+      return String(arg);
+    }).join(' ');
+
+    // 输出到控制台（会被日志面板捕获）
+    if (level === 'ERR') {
+      console.error('[API客户端] ' + message);
+    } else if (level === 'WRN') {
+      console.warn('[API客户端] ' + message);
+    } else {
+      console.log('[API客户端] ' + message);
+    }
+
+    // 发送到服务端日志 (使用 fetch 而不是依赖全局 __wx_log)
+    fetch("/__wx_channels_api/tip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ msg: prefix + ' ' + message }),
+    }).catch(function(err) {
+      console.error('[API客户端] 日志发送失败:', err);
+    });
+  };
+})();
+
 console.log('[api_client.js] 加载 API 客户端模块');
+
+// ============================================================
+// 评论操作 DOM 选择器配置（V2 版本）
+// ============================================================
+window.__wx_comment_selectors__ = {
+  // 评论行选择器
+  commentItemSelectors: [
+    'div.comment-item',
+    '.comment-list .comment-item',
+    '[class*="comment-list"] > [class*="comment"]',
+    '.comment-panel .comment-item'
+  ],
+
+  // 评论人昵称选择器
+  commentUserNameSelector: 'span.comment-user-name',
+
+  // 评论内容选择器
+  commentContentSelector: 'div.comment-content',
+
+  // 点赞按钮选择器
+  likeButtonSelector: 'div.like-num',
+
+  // 回复按钮容器选择器（需匹配 span 内容为"回复"）
+  replyButtonSelectors: ['div.action-item', 'div.click-box'],
+
+  // 回复按钮文本
+  replyButtonText: '回复',
+
+  // 回复输入框选择器（placeholder 以"回复 "开头）
+  replyInputSelector: 'textarea.weui-textarea',
+
+  // 回复输入框 placeholder 前缀
+  replyInputPlaceholderPrefix: '回复 ',
+
+  // 回复发送按钮选择器
+  replySendButtonSelector: 'div.weui-btn'
+};
 
 window.__wx_api_client = {
   ws: null,
@@ -312,11 +385,72 @@ window.__wx_api_client = {
 
     try {
       if (data.action === 'start_comment_collection') {
-        if (typeof window.__wx_channels_start_comment_collection === 'function') {
-          console.log('[API客户端] 执行评论采集指令...');
-          window.__wx_channels_start_comment_collection();
+        var taskData = data.payload || data;
+        var snapshotTaskId = taskData.task_id || '';
+        console.log('[API客户端] 执行评论采集指令, task_id=' + snapshotTaskId + '...');
+
+        // 设置全局任务ID，dumpAllPiniaStores 会读取并上报
+        window.__snapshotTaskId = snapshotTaskId;
+
+        // 监听评论采集完成信号，采集完成后自动保存快照（参考 feed.js 按钮逻辑）
+        var originalWxLog = typeof __wx_log === 'function' ? __wx_log : null;
+        var snapshotSaved = false;
+
+        function onCollectionDone() {
+          if (snapshotSaved) return;
+          snapshotSaved = true;
+          var savedWxLog = originalWxLog;
+          if (savedWxLog) __wx_log = savedWxLog;
+          if (typeof window.dumpAllPiniaStores === 'function') {
+            window.dumpAllPiniaStores().then(function(path) {
+              console.log('[API客户端] 评论快照已保存: ' + (path || '(空)'));
+              if (savedWxLog) savedWxLog({ msg: '📸 评论快照已保存: ' + (path || '(空)') });
+            });
+          }
+        }
+
+        __wx_log = function (data) {
+          if (originalWxLog) originalWxLog(data);
+          if (snapshotSaved) return;
+          var msg = data && data.msg;
+          if (!msg) return;
+          if (msg.indexOf('✅ 评论采集完成') !== -1 || msg.indexOf('⚠️ 采集停止') !== -1 || msg.indexOf('✅ 评论已保存') !== -1) {
+            console.log('[API客户端] 检测到采集完成信号: ' + msg);
+            onCollectionDone();
+          }
+        };
+
+        if (typeof window.__start_feed_comment_collection_with_open_panel === 'function') {
+          window.__start_feed_comment_collection_with_open_panel();
         } else {
-          console.warn('[API客户端] 评论采集函数未就绪');
+          console.warn('[API客户端] 评论采集函数未就绪，尝试直接调用...');
+          if (typeof window.__wx_channels_start_comment_collection === 'function') {
+            window.__wx_channels_start_comment_collection();
+          }
+        }
+      }
+
+      // 【open_comment_panel】打开评论区面板
+      if (data.action === 'open_comment_panel') {
+        console.log('[API客户端] 执行打开评论区面板指令...');
+        if (typeof window.__try_open_feed_comment_panel === 'function') {
+          window.__try_open_feed_comment_panel();
+        }
+      }
+
+      // 【dump_pinia_store】触发 Pinia Store 快照采集
+      if (data.action === 'dump_pinia_store') {
+        var taskData = data.payload || data;
+        var snapshotTaskId = taskData.task_id || '';
+        console.log('[API客户端] 执行 dump_pinia_store 指令, task_id=' + snapshotTaskId + '...');
+        // 设置全局任务ID，dumpAllPiniaStores 会读取并上报
+        window.__snapshotTaskId = snapshotTaskId;
+        if (typeof window.dumpAllPiniaStores === 'function') {
+          window.dumpAllPiniaStores().then(function(path) {
+            console.log('[API客户端] dump_pinia_store 完成, task_id=' + snapshotTaskId + ', path=' + path);
+          }).catch(function(err) {
+            console.error('[API客户端] dump_pinia_store 异常:', err);
+          });
         }
       }
 
@@ -1491,6 +1625,332 @@ window.__wx_api_client = {
         };
 
         return await _executeWithRetry(commentAttempt, 'do_comment');
+      }
+
+      // get_comment_count 操作 - 从 Pinia Store 获取当前视频的评论总数
+      if (action === 'get_comment_count') {
+        var commentCountAttempt = async function() {
+          console.log('[API客户端] get_comment_count 开始执行');
+          var commentCount = 0;
+          try {
+            var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+            var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
+            var appContext = vue && (vue.appContext || (vue.ctx && vue.ctx.appContext));
+            var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+            var pinia = globalProperties && globalProperties.$pinia;
+            if (!pinia || !pinia._s) {
+              console.log('[API客户端] get_comment_count: pinia 未就绪');
+              return { success: false, message: 'pinia 未就绪', count: 0 };
+            }
+
+            var stores = pinia._s;
+            var iterator = stores.keys();
+            var result = iterator.next();
+
+            while (!result.done) {
+              var id = result.value;
+              var s = stores.get(id);
+              if (!s) { result = iterator.next(); continue; }
+
+              var home = s.home || (s.$state && s.$state.home);
+              var flowCommentList = null;
+              if (home && home.flowCommentList) {
+                flowCommentList = home.flowCommentList;
+              } else if (s.flowCommentList) {
+                flowCommentList = s.flowCommentList;
+              }
+
+              if (flowCommentList && flowCommentList.commentCount !== undefined) {
+                commentCount = flowCommentList.commentCount;
+                break;
+              }
+
+              var state = s.$state || s;
+              if (state.home && state.home.flowCommentList && state.home.flowCommentList.commentCount !== undefined) {
+                commentCount = state.home.flowCommentList.commentCount;
+                break;
+              }
+
+              result = iterator.next();
+            }
+          } catch (e) {
+            console.error('[API客户端] get_comment_count 异常:', e);
+            return { success: false, message: e.message, count: 0 };
+          }
+
+          console.log('[API客户端] get_comment_count: 评论总数=' + commentCount);
+          return { success: true, count: commentCount };
+        };
+
+        return await _executeWithRetry(commentCountAttempt, 'get_comment_count');
+      }
+
+      // do_like_comment 操作 - 在评论区定位指定评论并点赞
+      if (action === 'do_like_comment') {
+        var targetContent = body.content || '';
+        console.log('[API客户端] do_like_comment 开始, targetContent:', targetContent);
+
+        var likeCommentAttempt = async function() {
+          if (!targetContent) {
+            return { success: false, message: '评论内容为空' };
+          }
+
+          // 在评论区列表中遍历查找匹配的评论行
+          var selectors = [
+            '.comment-list .comment-row',
+            '.comment-list .comment-item',
+            '[class*="comment-list"] > [class*="comment"]',
+            '.comment-panel .comment-item'
+          ];
+
+          var commentRows = [];
+          for (var si = 0; si < selectors.length; si++) {
+            var nodes = document.querySelectorAll(selectors[si]);
+            if (nodes && nodes.length > 0) {
+              for (var ni = 0; ni < nodes.length; ni++) {
+                commentRows.push(nodes[ni]);
+              }
+            }
+          }
+
+          if (commentRows.length === 0) {
+            console.log('[API客户端] do_like_comment: 未找到评论行');
+            return { success: false, message: '未找到评论列表' };
+          }
+
+          console.log('[API客户端] do_like_comment: 找到 ' + commentRows.length + ' 条评论');
+
+          // 遍历每条评论，找匹配的内容
+          for (var i = 0; i < commentRows.length; i++) {
+            var row = commentRows[i];
+            var rowText = (row.textContent || '').replace(/[\s\n\r]+/g, ' ').trim();
+
+            // 全文匹配（包含目标内容）
+            if (rowText.indexOf(targetContent) !== -1) {
+              console.log('[API客户端] do_like_comment: 定位到目标评论 #' + i);
+
+              // 在该行内查找点赞按钮（div.like-num）
+              var likeBtn = row.querySelector('div.like-num');
+              if (!likeBtn) {
+                // 备用选择器
+                var altSelectors = [
+                  '[class*="like-num"]',
+                  '[class*="like_num"]',
+                  '[class*="like"] > span',
+                  '[class*="digg"]'
+                ];
+                for (var ai = 0; ai < altSelectors.length; ai++) {
+                  likeBtn = row.querySelector(altSelectors[ai]);
+                  if (likeBtn) break;
+                }
+              }
+
+              if (likeBtn) {
+                console.log('[API客户端] do_like_comment: 找到点赞按钮，准备点击');
+                // 滚动到可见区域
+                likeBtn.scrollIntoViewIfNeeded && likeBtn.scrollIntoViewIfNeeded();
+                await new Promise(function(resolve) { setTimeout(resolve, 300); });
+                likeBtn.click();
+                await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+                return { success: true, isLiked: true, message: '评论点赞成功' };
+              } else {
+                console.log('[API客户端] do_like_comment: 在评论行内未找到点赞按钮');
+                return { success: false, message: '未找到点赞按钮' };
+              }
+            }
+          }
+
+          console.log('[API客户端] do_like_comment: 未找到匹配的评论内容');
+          return { success: false, message: '未找到匹配的评论' };
+        };
+
+        return await _executeWithRetry(likeCommentAttempt, 'do_like_comment');
+      }
+
+      // do_reply_comment 操作 - 在评论区定位指定评论并回复
+      if (action === 'do_reply_comment') {
+        var targetContent = body.content || '';
+        var replyContent = body.replyContent || '';
+        __api_log('INF', 'do_reply_comment 开始, targetContent:', targetContent.slice(0, 50), ', replyContent:', replyContent.slice(0, 50));
+
+        var replyCommentAttempt = async function() {
+          if (!targetContent) {
+            return { success: false, message: '评论内容为空' };
+          }
+
+          // 在评论区列表中遍历查找匹配的评论行
+          var selectors = [
+            '.comment-list .comment-row',
+            '.comment-list .comment-item',
+            '[class*="comment-list"] > [class*="comment"]',
+            '.comment-panel .comment-item'
+          ];
+
+          var commentRows = [];
+          for (var si = 0; si < selectors.length; si++) {
+            var nodes = document.querySelectorAll(selectors[si]);
+            if (nodes && nodes.length > 0) {
+              for (var ni = 0; ni < nodes.length; ni++) {
+                commentRows.push(nodes[ni]);
+              }
+            }
+          }
+
+          if (commentRows.length === 0) {
+            __api_log('WRN', 'do_reply_comment: 未找到评论行');
+            return { success: false, message: '未找到评论列表' };
+          }
+
+          __api_log('INF', 'do_reply_comment: 找到 ' + commentRows.length + ' 条评论');
+
+          // 遍历每条评论，找匹配的内容
+          for (var i = 0; i < commentRows.length; i++) {
+            var row = commentRows[i];
+            var rowText = (row.textContent || '').replace(/[\s\n\r]+/g, ' ').trim();
+
+            if (rowText.indexOf(targetContent) !== -1) {
+              __api_log('INF', 'do_reply_comment: 定位到目标评论 #' + i);
+
+              // 在该行内查找"回复"按钮（span，内容为"回复"）
+              var replyBtn = null;
+              var allSpans = row.querySelectorAll('span');
+              for (var si2 = 0; si2 < allSpans.length; si2++) {
+                var spanText = (allSpans[si2].textContent || '').replace(/[\s\n\r]+/g, '').trim();
+                if (spanText === '回复') {
+                  replyBtn = allSpans[si2];
+                  break;
+                }
+              }
+
+              if (!replyBtn) {
+                // 备用：找包含"回复"文本的元素
+                var altReplySelectors = [
+                  '[class*="reply"]',
+                  '[class*="replay"]',
+                  '[class*="comment-action"]'
+                ];
+                for (var ai2 = 0; ai2 < altReplySelectors.length; ai2++) {
+                  var altNodes = row.querySelectorAll(altReplySelectors[ai2]);
+                  for (var an = 0; an < altNodes.length; an++) {
+                    var altText = (altNodes[an].textContent || '').replace(/[\s\n\r]+/g, '').trim();
+                    if (altText.indexOf('回复') !== -1) {
+                      replyBtn = altNodes[an];
+                      break;
+                    }
+                  }
+                  if (replyBtn) break;
+                }
+              }
+
+              if (!replyBtn) {
+                __api_log('WRN', 'do_reply_comment: 在评论行内未找到回复按钮');
+                return { success: false, message: '未找到回复按钮' };
+              }
+
+              __api_log('INF', 'do_reply_comment: 找到回复按钮，准备点击');
+              replyBtn.scrollIntoViewIfNeeded && replyBtn.scrollIntoViewIfNeeded();
+              await new Promise(function(resolve) { setTimeout(resolve, 300); });
+              replyBtn.click();
+
+              // 等待回复输入框出现
+              var pollMax = 8;
+              var pollDelay = 500;
+              var replyInput = null;
+
+              for (var pi = 0; pi < pollMax; pi++) {
+                await new Promise(function(resolve) { setTimeout(resolve, pollDelay); });
+
+                // 查找回复输入框
+                replyInput = document.querySelector('textarea[placeholder*="回复"], textarea[placeholder*="写回复"]');
+                if (!replyInput) {
+                  replyInput = document.querySelector('input[placeholder*="回复"], input[placeholder*="写回复"]');
+                }
+                if (!replyInput) {
+                  var allTextareas = document.querySelectorAll('textarea');
+                  for (var ti = 0; ti < allTextareas.length; ti++) {
+                    var ph = allTextareas[ti].getAttribute('placeholder') || '';
+                    if (ph.indexOf('回复') !== -1) {
+                      replyInput = allTextareas[ti];
+                      break;
+                    }
+                  }
+                }
+                if (!replyInput) {
+                  var allInputs = document.querySelectorAll('input');
+                  for (var ini = 0; ini < allInputs.length; ini++) {
+                    var iph = allInputs[ini].getAttribute('placeholder') || '';
+                    if (iph.indexOf('回复') !== -1) {
+                      replyInput = allInputs[ini];
+                      break;
+                    }
+                  }
+                }
+
+                if (replyInput) {
+                  __api_log('INF', 'do_reply_comment: 第' + (pi + 1) + '次轮询找到回复输入框');
+                  break;
+                }
+              }
+
+              if (!replyInput) {
+                __api_log('ERR', 'do_reply_comment: 未找到回复输入框');
+                return { success: false, message: '未找到回复输入框' };
+              }
+
+              // 输入回复内容
+              replyInput.scrollIntoViewIfNeeded && replyInput.scrollIntoViewIfNeeded();
+              await new Promise(function(resolve) { setTimeout(resolve, 200); });
+              replyInput.focus();
+
+              var nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+              if (nativeSetter) {
+                nativeSetter.call(replyInput, replyContent);
+                replyInput.dispatchEvent(new Event('input', { bubbles: true }));
+                replyInput.dispatchEvent(new Event('change', { bubbles: true }));
+              } else {
+                replyInput.value = replyContent;
+                replyInput.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+
+              await new Promise(function(resolve) { setTimeout(resolve, 500); });
+
+              // 提交：优先按 Enter
+              replyInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+              await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+
+              // 检查是否提交成功（输入框消失或内容清空）
+              var stillOpen = document.querySelector('textarea[placeholder*="回复"], input[placeholder*="回复"]');
+              if (!stillOpen) {
+                __api_log('INF', 'do_reply_comment: 回复输入框已关闭，回复成功');
+                return { success: true, isCommented: true, message: '回复成功' };
+              }
+
+              // 备用：点击发送按钮
+              var sendBtnSelectors = [
+                'button[class*="send"]',
+                'button[class*="submit"]',
+                'button[class*="comment"]',
+                'span[class*="send"]',
+                '[class*="send-btn"]'
+              ];
+              for (var sbi = 0; sbi < sendBtnSelectors.length; sbi++) {
+                var sb = document.querySelector(sendBtnSelectors[sbi]);
+                if (sb) {
+                  sb.click();
+                  await new Promise(function(resolve) { setTimeout(resolve, 1500); });
+                  break;
+                }
+              }
+
+              return { success: true, isCommented: true, message: '回复已发送' };
+            }
+          }
+
+          __api_log('WRN', 'do_reply_comment: 未找到匹配的评论内容');
+          return { success: false, message: '未找到匹配的评论' };
+        };
+
+        return await _executeWithRetry(replyCommentAttempt, 'do_reply_comment');
       }
 
       // get_status 操作 - 获取互动状态（先匹配 feed）

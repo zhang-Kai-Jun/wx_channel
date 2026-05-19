@@ -2543,7 +2543,48 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 					__wx_log({ msg: '💬 已发现 ' + stats.total + '/' + total + ' 条评论，开始自动继续采集...' });
 				}
 				var sameCountRetries = 0;
+				// 4分钟超时强制终止采集
+				var collectionStartTime = Date.now();
+				var collectionTimeout = 4 * 60 * 1000; // 4分钟
 				var loadLoop = setInterval(function() {
+					// 检查4分钟超时
+					if (Date.now() - collectionStartTime >= collectionTimeout) {
+						console.log('[评论采集] ⏰ 4分钟超时，强制终止采集并保存当前数据');
+						updateProgressHint(currentStats ? currentStats.total : 0, total, '4分钟超时，保存当前数据');
+						clearInterval(loadLoop);
+						// 获取当前已有数据并保存
+						var currentSD = findFlowCommentListInStores();
+						var currentPayload = currentSD ? extractStoreComments(currentSD.store) : null;
+						var currentStore = currentSD ? currentSD.store : findFeedStore();
+						if (!currentPayload || !currentPayload.items || !currentPayload.items.length) {
+							var currentDomPayload = extractCommentPayloadFromDOM();
+							var currentStorePayload = currentStore ? extractCommentPayload(currentStore, false) : null;
+							currentPayload = currentDomPayload || currentStorePayload;
+						}
+						if (currentPayload && currentPayload.items && currentPayload.items.length) {
+							var timeoutFormatted = formatComments(currentPayload.items);
+							saveComments(timeoutFormatted, total);
+							var timeoutMsg = '⚠️ 4分钟超时强制终止：已采集 ' + currentPayload.items.length + ' 条评论';
+							if (typeof __wx_log === 'function') {
+								__wx_log({ msg: timeoutMsg });
+							}
+							// 【P0 #1修复】触发 dumpAllPiniaStores() 回调，让 Node.js 能收到 done 信号
+							if (typeof window.dumpAllPiniaStores === 'function') {
+								window.dumpAllPiniaStores().then(function(path) {
+									console.log('[评论采集] 超时快照已保存: ' + (path || '(空)'));
+								});
+							}
+						} else {
+							// 没有数据也要回调，避免 Node.js 一直等待
+							if (typeof window.dumpAllPiniaStores === 'function') {
+								window.dumpAllPiniaStores().then(function(path) {
+									console.log('[评论采集] 超时快照已保存(无数据): ' + (path || '(空)'));
+								});
+							}
+						}
+						return;
+					}
+
 					// 优先从 flowCommentList 直接读取
 					var currentSD = findFlowCommentListInStores();
 					var currentPayload = currentSD ? extractStoreComments(currentSD.store) : null;

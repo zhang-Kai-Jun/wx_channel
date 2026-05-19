@@ -132,6 +132,18 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	// 评论快照采集结果回调（inject 采集完成后调用）
+	if path == "/__wx_channels_api/comment_snapshot_callback" {
+		h.HandleCommentSnapshotCallback(Conn)
+		return true
+	}
+
+	// 评论快照采集状态轮询（Node.js 轮询获取）
+	if path == "/__wx_channels_api/comment_snapshot_status" {
+		h.HandleGetCommentSnapshotStatus(Conn)
+		return true
+	}
+
 	if h.HandleProfile(Conn) {
 		return true
 	}
@@ -253,11 +265,13 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 		Index   int    `json:"index"`
 		URL     string `json:"url"`
 		TaskID  string `json:"task_id"`
+		// 回复专用字段（用于 do_reply_comment_v2）
+		ReplyContent string `json:"replyContent"`
 		// 精准匹配专用字段
-		TargetNum      int      `json:"target_num"`
-		TriggerWords   []string `json:"trigger_words"`
-		IpFilter      string   `json:"ip_filter"`
-		TimeFilter    *struct {
+		TargetNum    int      `json:"target_num"`
+		TriggerWords []string `json:"trigger_words"`
+		IpFilter     string   `json:"ip_filter"`
+		TimeFilter   *struct {
 			Enabled bool   `json:"enabled"`
 			Value   int    `json:"value"`
 			Unit    string `json:"unit"`
@@ -291,17 +305,18 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	// 通过 WebSocket 调用前端 DOM 操作 API
 	domReq := websocket.DOMActionBody{
-		Action:      req.Action,
-		Target:      req.Target,
-		Content:     req.Content,
-		Index:       req.Index,
-		URL:         req.URL,
-		TaskID:      req.TaskID,
-		TargetNum:   req.TargetNum,
-		TriggerWords: req.TriggerWords,
-		IpFilter:   req.IpFilter,
-		TimeFilter:  req.TimeFilter,
-		BlockWords:  req.BlockWords,
+		Action:        req.Action,
+		Target:        req.Target,
+		Content:       req.Content,
+		Index:         req.Index,
+		URL:           req.URL,
+		TaskID:        req.TaskID,
+		ReplyContent:  req.ReplyContent,
+		TargetNum:     req.TargetNum,
+		TriggerWords:  req.TriggerWords,
+		IpFilter:      req.IpFilter,
+		TimeFilter:    req.TimeFilter,
+		BlockWords:    req.BlockWords,
 		DedupUsernames: req.DedupUsernames,
 	}
 
@@ -359,7 +374,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 				return
 			}
 			h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
-				Success:       wsResp.Success,
+				Success:      wsResp.Success,
 				PanelReady:   wsResp.Result.PanelReady,
 				Items:        wsResp.Result.Items,
 				Total:        wsResp.Result.Total,
@@ -377,6 +392,68 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 		headers.Set("Content-Type", "application/json")
 		h.setCORSHeadersFromConn(Conn, headers)
 		Conn.StopRequest(200, `{"success":true,"message":"fetch_video_comments sent"}`, headers)
+		return
+	}
+
+	// 【open_comment_panel】打开评论区面板（通过 WebSocket 广播指令）
+	// 使用 domActionHub（浏览器-facing Hub），而非 wsHub（旧版 dashboard Hub）
+	if req.Action == "open_comment_panel" {
+		if h.domActionHub != nil {
+			if err := h.domActionHub.BroadcastCommand("open_comment_panel", nil); err != nil {
+				utils.LogError("[DOMAction] open_comment_panel 广播失败: %v", err)
+				h.sendErrorResponse(Conn, fmt.Errorf("broadcast failed: %v", err))
+				return
+			}
+		}
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(200, `{"success":true}`, headers)
+		return
+	}
+
+	// 【trigger_comment_snapshot】触发评论采集 + 快照
+	// 完整流程（通过浏览器-facing Hub 广播，Node.js 端轮询等待）：
+	//   Step1: 广播 start_comment_collection → 浏览器打开评论区 + 展开评论 + 采集完成后自动保存快照
+	// goroutine 避免阻塞 HTTP 连接；Node.js 通过轮询 comment_snapshot_status 等待采集完成
+	if req.Action == "trigger_comment_snapshot" {
+		// 捕获关键值，避免 goroutine 引用 Conn
+		taskID := req.TaskID
+		domActionHub := h.domActionHub
+
+		// 初始化采集状态，供 Node.js 轮询
+		if domActionHub != nil && taskID != "" {
+			domActionHub.SetCommentSnapshotStatus(taskID, &websocket.CommentSnapshotStatus{
+				Done:         false,
+				Success:      false,
+				TotalCount:   0,
+				LoadedCount:  0,
+				SnapshotPath: "",
+				Message:      "采集开始",
+				UpdatedAt:    time.Now().Unix(),
+			})
+		}
+
+		// goroutine 在后台广播，不阻塞 HTTP
+		go func() {
+			if domActionHub != nil {
+				// 广播 start_comment_collection（携带 taskID）
+				// 浏览器内部：打开评论区 → 循环加载 → 监听 ✅ 评论采集完成 → 调用 dumpAllPiniaStores 保存快照
+				if err := domActionHub.BroadcastCommand("start_comment_collection", map[string]interface{}{
+					"task_id": taskID,
+				}); err != nil {
+					utils.LogError("[DOMAction] 广播 start_comment_collection 失败: %v", err)
+				} else {
+					utils.LogInfo("[DOMAction] 已广播 start_comment_collection (taskID=%s)，等待浏览器采集完成...", taskID)
+				}
+			}
+		}()
+
+		// HTTP 立即返回，Node.js 通过轮询 comment_snapshot_status 等待采集完成
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(200, `{"success":true}`, headers)
 		return
 	}
 
@@ -450,15 +527,15 @@ func (h *APIHandler) HandleDOMActionHealth(Conn *SunnyNet.HttpConn) {
 	}
 
 	result := map[string]interface{}{
-		"success":                      true,
-		"status":                       "healthy",
-		"time":                         time.Now().Unix(),
-		"hub_ready":                    hubReady,
-		"clients":                      clientCount,
-		"clientCount":                  clientCount,
-		"apiReady":                     apiReady,
-		"clientPagePath":               clientPagePath,
-		"navigatingClientPagePath":     navigatingClientPagePath,
+		"success":                  true,
+		"status":                   "healthy",
+		"time":                     time.Now().Unix(),
+		"hub_ready":                hubReady,
+		"clients":                  clientCount,
+		"clientCount":              clientCount,
+		"apiReady":                 apiReady,
+		"clientPagePath":           clientPagePath,
+		"navigatingClientPagePath": navigatingClientPagePath,
 	}
 
 	resultJSON, _ := json.Marshal(result)
@@ -680,13 +757,13 @@ func (h *APIHandler) HandleMatchingCallback(Conn *SunnyNet.HttpConn) {
 	_ = Conn.Request.Body.Close()
 
 	var payload struct {
-		TaskID     string        `json:"task_id"`
-		Success    bool          `json:"success"`
-		Reason     string        `json:"reason"`
-		Users      []interface{} `json:"users"`
-		Total      int           `json:"total"`
-		TargetNum  int           `json:"target_num"`
-		CommentCount int         `json:"comment_count"`
+		TaskID       string        `json:"task_id"`
+		Success      bool          `json:"success"`
+		Reason       string        `json:"reason"`
+		Users        []interface{} `json:"users"`
+		Total        int           `json:"total"`
+		TargetNum    int           `json:"target_num"`
+		CommentCount int           `json:"comment_count"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		h.sendErrorResponse(Conn, err)
@@ -754,11 +831,11 @@ func (h *APIHandler) HandleMatchingProgress(Conn *SunnyNet.HttpConn) {
 	_ = Conn.Request.Body.Close()
 
 	var payload struct {
-		TaskID      string `json:"task_id"`
+		TaskID       string `json:"task_id"`
 		CommentCount int    `json:"comment_count"`
-		UserCount   int    `json:"user_count"`
-		TargetNum   int    `json:"target_num"`
-		Percent     int    `json:"percent"`
+		UserCount    int    `json:"user_count"`
+		TargetNum    int    `json:"target_num"`
+		Percent      int    `json:"percent"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		h.sendErrorResponse(Conn, err)
@@ -772,10 +849,10 @@ func (h *APIHandler) HandleMatchingProgress(Conn *SunnyNet.HttpConn) {
 	// 更新 Hub 的匹配进度缓存
 	h.domActionHub.SetMatchingProgress(payload.TaskID, map[string]interface{}{
 		"comment_count": payload.CommentCount,
-		"user_count":   payload.UserCount,
-		"target_num":   payload.TargetNum,
-		"percent":      payload.Percent,
-		"timestamp":    time.Now().Unix(),
+		"user_count":    payload.UserCount,
+		"target_num":    payload.TargetNum,
+		"percent":       payload.Percent,
+		"timestamp":     time.Now().Unix(),
 	})
 
 	headers := http.Header{}
@@ -870,13 +947,13 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 		Result  struct {
-			PanelReady   bool          `json:"panel_ready"`
-			Items        interface{}   `json:"items"`
-			Total        int           `json:"total"`
-			CommentCount int           `json:"comment_count"`
-			HasMore      bool          `json:"has_more"`
-			Buffer       string        `json:"buffer"`
-			RawItems     interface{}   `json:"raw_items"`
+			PanelReady   bool        `json:"panel_ready"`
+			Items        interface{} `json:"items"`
+			Total        int         `json:"total"`
+			CommentCount int         `json:"comment_count"`
+			HasMore      bool        `json:"has_more"`
+			Buffer       string      `json:"buffer"`
+			RawItems     interface{} `json:"raw_items"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -894,7 +971,7 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 
 	// 存储到 Hub 的缓存
 	h.domActionHub.SetFetchCommentsResult(payload.TaskID, &websocket.FetchCommentsData{
-		Success:       payload.Success,
+		Success:      payload.Success,
 		Message:      payload.Message,
 		PanelReady:   payload.Result.PanelReady,
 		Items:        payload.Result.Items,
@@ -958,14 +1035,14 @@ func (h *APIHandler) HandleGetFetchCommentsResult(Conn *SunnyNet.HttpConn) {
 	if result != nil {
 		responseData = map[string]interface{}{
 			"success":       result.Success,
-			"message":      result.Message,
-			"panel_ready":  result.PanelReady,
-			"items":        result.Items,
-			"total":        result.Total,
+			"message":       result.Message,
+			"panel_ready":   result.PanelReady,
+			"items":         result.Items,
+			"total":         result.Total,
 			"comment_count": result.CommentCount,
-			"has_more":     result.HasMore,
-			"buffer":       result.Buffer,
-			"raw_items":    result.RawItems,
+			"has_more":      result.HasMore,
+			"buffer":        result.Buffer,
+			"raw_items":     result.RawItems,
 		}
 	} else {
 		responseData = map[string]interface{}{
@@ -977,3 +1054,133 @@ func (h *APIHandler) HandleGetFetchCommentsResult(Conn *SunnyNet.HttpConn) {
 	Conn.StopRequest(200, string(dataJSON), headers)
 }
 
+// HandleCommentSnapshotCallback 处理评论快照采集结果回调（inject 采集完成后调用）
+// POST /__wx_channels_api/comment_snapshot_callback
+// Body: { "task_id": "xxx", "done": true, "success": true, "total_count": 100, "loaded_count": 50, "snapshot_path": "...", "message": "ok", "error": "" }
+func (h *APIHandler) HandleCommentSnapshotCallback(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/comment_snapshot_callback" {
+		return
+	}
+
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	body, err := io.ReadAll(Conn.Request.Body)
+	if err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+	_ = Conn.Request.Body.Close()
+
+	var payload struct {
+		TaskID       string `json:"task_id"`
+		Done         bool   `json:"done"`
+		Success      bool   `json:"success"`
+		TotalCount   int    `json:"total_count"`
+		LoadedCount  int    `json:"loaded_count"`
+		SnapshotPath string `json:"snapshot_path"`
+		Message      string `json:"message"`
+		Error        string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+
+	if payload.TaskID == "" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "task_id is required")), headers)
+		return
+	}
+
+	// 写入 Hub 缓存
+	h.domActionHub.SetCommentSnapshotStatus(payload.TaskID, &websocket.CommentSnapshotStatus{
+		Done:         payload.Done,
+		Success:      payload.Success,
+		TotalCount:   payload.TotalCount,
+		LoadedCount:  payload.LoadedCount,
+		SnapshotPath: payload.SnapshotPath,
+		Message:      payload.Message,
+		Error:        payload.Error,
+		UpdatedAt:    time.Now().Unix(),
+	})
+
+	utils.LogInfo("[CommentSnapshotCallback] 收到快照状态: task_id=%s, done=%v, success=%v, total=%d, loaded=%d, path=%s",
+		payload.TaskID, payload.Done, payload.Success, payload.TotalCount, payload.LoadedCount, payload.SnapshotPath)
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, `{"success":true}`, headers)
+}
+
+// HandleGetCommentSnapshotStatus 获取评论快照采集状态（Node.js 轮询）
+// GET /__wx_channels_api/comment_snapshot_status?task_id=xxx
+func (h *APIHandler) HandleGetCommentSnapshotStatus(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/comment_snapshot_status" {
+		return
+	}
+
+	if Conn.Request.Method != "GET" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use GET")), headers)
+		return
+	}
+
+	taskID := Conn.Request.URL.Query().Get("task_id")
+	if taskID == "" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "task_id is required")), headers)
+		return
+	}
+
+	result := h.domActionHub.GetCommentSnapshotStatus(taskID)
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+
+	var responseData map[string]interface{}
+	if result != nil {
+		responseData = map[string]interface{}{
+			"done":          result.Done,
+			"success":       result.Success,
+			"total_count":   result.TotalCount,
+			"loaded_count":  result.LoadedCount,
+			"snapshot_path": result.SnapshotPath,
+			"message":       result.Message,
+			"error":         result.Error,
+		}
+	} else {
+		// 尚未收到状态，视为进行中
+		responseData = map[string]interface{}{
+			"done":    false,
+			"success": false,
+			"message": "采集进行中",
+		}
+	}
+
+	dataJSON, _ := json.Marshal(responseData)
+	Conn.StopRequest(200, string(dataJSON), headers)
+}

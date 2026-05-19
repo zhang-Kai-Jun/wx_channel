@@ -136,6 +136,7 @@ type DOMActionBody struct {
 	Index       int      `json:"index"`
 	URL         string   `json:"url"`
 	TaskID      string   `json:"task_id,omitempty"`
+	ReplyContent string  `json:"replyContent,omitempty"`
 	// 精准匹配专用字段
 	TargetNum      int      `json:"target_num,omitempty"`
 	TriggerWords   []string `json:"trigger_words,omitempty"`

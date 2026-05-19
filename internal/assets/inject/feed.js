@@ -1128,20 +1128,31 @@ function dumpAllPiniaStores() {
 
     var stores = {};
     var storeNames = [];
+    var commentCount = 0;
+    var loadedCount = 0;
+
     pinia._s.forEach(function (store, name) {
       try {
         var state = (store.$state && JSON.parse(JSON.stringify(store.$state))) || {};
         stores[name] = state;
         storeNames.push(name);
+
+        // 从 home store 中提取评论数量
+        if (name === 'home' && state.flowCommentList) {
+          var flowCommentList = state.flowCommentList;
+          commentCount = flowCommentList.commentCount || 0;
+          loadedCount = (flowCommentList.items && flowCommentList.items.length) || 0;
+        }
       } catch (e) {
         stores[name] = { '__error__': e.message };
       }
     });
 
     console.log('[Pinia Store] 快照数据:', stores);
-    __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个)' });
+    __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个, 评论数=' + commentCount + ')' });
 
     var page = window.__wx_current_page__ || location.pathname || '';
+    var snapshotTaskId = window.__snapshotTaskId || '';
 
     fetch('/__wx_channels_api/dump_pinia_store', {
       method: 'POST',
@@ -1156,13 +1167,59 @@ function dumpAllPiniaStores() {
       .then(function (data) {
         var jsonPath = (data && data.path) ? data.path : '';
         console.log('[Pinia Store] 快照已保存:', data);
-        __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: ' + storeNames.join(', ') + ')' });
+        __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: 评论数=' + commentCount + ')' });
+
+        // 通知 Go 后端采集完成
+        if (snapshotTaskId) {
+          fetch('/__wx_channels_api/comment_snapshot_callback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              task_id: snapshotTaskId,
+              done: true,
+              success: !!jsonPath,
+              total_count: commentCount,
+              loaded_count: loadedCount,
+              snapshot_path: jsonPath || '',
+              message: jsonPath ? '快照采集完成' : '快照路径为空'
+            })
+          }).catch(function (e) {
+            console.error('[Pinia Store] 回调失败:', e);
+          });
+        }
+
         resolve(jsonPath);
       })
       .catch(function (err) {
         console.error('[Pinia Store] 保存失败:', err);
         __wx_log({ msg: '❌ Store快照保存失败: ' + err.message });
+
+        // 通知 Go 后端采集失败
+        if (snapshotTaskId) {
+          fetch('/__wx_channels_api/comment_snapshot_callback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              task_id: snapshotTaskId,
+              done: true,
+              success: false,
+              error: err.message || '保存失败'
+            })
+          }).catch(function () {});
+        }
+
         resolve('');
       });
   });
 }
+
+// ============================================================
+// 暴露全局函数，供 api_client.js 通过 WebSocket 广播指令调用
+// ============================================================
+// 全局任务ID（api_client.js 在调用 dumpAllPiniaStores 前设置）
+window.__snapshotTaskId = '';
+window.__try_open_feed_comment_panel = __try_open_feed_comment_panel;
+window.__start_feed_comment_collection_with_open_panel = __start_feed_comment_collection_with_open_panel;
+window.dumpAllPiniaStores = dumpAllPiniaStores;
+window.__wx_channels_start_comment_collection = __wx_channels_start_comment_collection;
+

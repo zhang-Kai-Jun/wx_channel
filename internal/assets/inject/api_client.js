@@ -855,17 +855,82 @@ window.__wx_api_client = {
           var cachedCard = window.__wx_cached_cards && window.__wx_cached_cards[body.index];
           var videoTitle = cachedCard ? _normalizeText(cachedCard.videoTitle) : '';
           this.sendResponseViaHTTP(id, { success: true, message: '已进入视频页面', videoTitle: videoTitle });
+
           // 延迟执行点击
           var self = this;
           setTimeout(function() {
-            var xpath = '//div[@ml-key="finder-profile-card" and not(.//div[contains(@class, "living-tag") or contains(@class, "live-card")])]';
-            var elements = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-            if (elements.snapshotLength > body.index) {
-              var el = elements.snapshotItem(body.index);
+            var cardIndex = body.index || 0;
+            console.log('[API客户端] enter_video 开始, index:', cardIndex);
+
+            var validCards = [];
+
+            // 策略：在"动态"区块内获取卡片
+            var dongtaiBlock = null;
+            var resBlocks = document.querySelectorAll('.res-block');
+
+            for (var rbi = 0; rbi < resBlocks.length; rbi++) {
+              var block = resBlocks[rbi];
+              var titleEl = block.querySelector('.block-title .title');
+              var titleText = titleEl ? (titleEl.innerText || '').trim() : '';
+
+              if (titleText === '动态') {
+                dongtaiBlock = block;
+                console.log('[API客户端] 找到"动态"区块');
+                break;
+              }
+            }
+
+            if (dongtaiBlock) {
+              var cardGrid = dongtaiBlock.querySelector('.card-grid');
+              if (cardGrid) {
+                var cardWrps = cardGrid.querySelectorAll(':scope > .card-wrp');
+                console.log('[API客户端] 动态区块找到 ' + cardWrps.length + ' 个卡片');
+
+                for (var ci = 0; ci < cardWrps.length; ci++) {
+                  var cardWrp = cardWrps[ci];
+                  // 排除账号卡片和直播卡片
+                  if (cardWrp.querySelector('.account-card, [ml-key="search-account-card"], [ml-key="search-live-card"]')) {
+                    continue;
+                  }
+                  // 找内层的 click-box
+                  var clickBox = cardWrp.querySelector('.click-box');
+                  if (clickBox) {
+                    validCards.push(clickBox);
+                  }
+                }
+                console.log('[API客户端] 有效卡片: ' + validCards.length);
+              }
+            }
+
+            // 备用：直接获取所有 object-card 的 click-box
+            if (validCards.length === 0) {
+              var objectCards = document.querySelectorAll('.object-card');
+              console.log('[API客户端] 备用 object-card 找到 ' + objectCards.length + ' 个');
+              for (var oi = 0; oi < objectCards.length; oi++) {
+                var card = objectCards[oi];
+                var clickBox = card.closest('.click-box');
+                if (clickBox) {
+                  validCards.push(clickBox);
+                }
+              }
+            }
+
+            if (cardIndex < validCards.length) {
+              var el = validCards[cardIndex];
+              console.log('[API客户端] 点击卡片 #' + cardIndex);
+
+              // 提取标题用于调试
+              var titleEl = el.querySelector('.info-box .title, [class*="title"]');
+              var title = titleEl ? (titleEl.innerText || '').trim() : '无标题';
+              console.log('[API客户端] 卡片标题: ' + title.substring(0, 50));
+
               el.scrollIntoView({ behavior: 'smooth', block: 'center' });
               setTimeout(function() {
                 el.click();
+                console.log('[API客户端] 卡片已点击');
               }, 500);
+            } else {
+              console.error('[API客户端] 未找到索引 ' + cardIndex + ' 的卡片 (总共 ' + validCards.length + ')');
             }
           }, 100);
           return;
@@ -1219,6 +1284,309 @@ window.__wx_api_client = {
           cards: cards,
           message: '找到 ' + cards.length + ' 个视频卡片'
         };
+      }
+
+      // ========== 搜索页操作 - 行业作品意向匹配 (task_type=1) ==========
+
+      // scroll_search_to_bottom - 滚动搜索页到尽头
+      if (action === 'scroll_search_to_bottom') {
+        console.log('[API客户端] scroll_search_to_bottom 开始执行');
+
+        var scrollContainer = document.querySelector('[data-v-3932dd4a].search-result-page');
+        if (!scrollContainer) {
+          console.error('[API客户端] 未找到搜索页滚动容器 .search-result-page');
+          return { success: false, message: '未找到搜索页滚动容器' };
+        }
+
+        var maxScrolls = 50; // 最多滚动次数
+        var scrollDelay = 1500; // 每次滚动后等待时间
+        var stableThreshold = 3; // 连续几次数量不变认为已到尽头
+        var lastCount = 0;
+        var stableCount = 0;
+
+        // 优先使用 collector 中的数据量
+        var getVideoCount = function() {
+          var collector = window.__wx_channels_search_collector;
+          if (collector && collector.feeds) {
+            // 只计算 media 类型
+            return collector.feeds.filter(function(f) { return f && f.type === 'media'; }).length;
+          }
+          return 0;
+        };
+
+        var doScroll = async function() {
+          for (var i = 0; i < maxScrolls; i++) {
+            var scrollHeight = scrollContainer.scrollHeight;
+            scrollContainer.scrollTop = scrollHeight + 600;
+            console.log('[API客户端] 滚动 #' + (i + 1) + ', scrollHeight: ' + scrollHeight);
+
+            await new Promise(function(resolve) { setTimeout(resolve, scrollDelay); });
+
+            // 检查是否还有 loading
+            var loading = scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]');
+            if (loading) {
+              // 等待 loading 消失
+              var waitLoading = 0;
+              while (waitLoading < 10) {
+                await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+                loading = scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]');
+                if (!loading) break;
+                waitLoading++;
+              }
+            }
+
+            // 检查 disabled 属性
+            var disabled = scrollContainer.getAttribute('infinite-scroll-disabled');
+            if (disabled === 'true' && !loading) {
+              console.log('[API客户端] 已无更多数据 (disabled=true)');
+              return { success: true, reason: 'no_more_data', scrollCount: i + 1 };
+            }
+
+            // 检查 collector 中的视频数量
+            var currentCount = getVideoCount();
+            console.log('[API客户端] 当前视频数量 (collector): ' + currentCount);
+
+            if (currentCount === lastCount) {
+              stableCount++;
+              if (stableCount >= stableThreshold) {
+                console.log('[API客户端] 连续 ' + stableCount + ' 次数量不变，已到尽头');
+                return { success: true, reason: 'stable', scrollCount: i + 1, totalCards: currentCount };
+              }
+            } else {
+              stableCount = 0;
+              lastCount = currentCount;
+            }
+          }
+          return { success: true, reason: 'max_scrolls', scrollCount: maxScrolls, totalCards: lastCount };
+        };
+
+        return await doScroll();
+      }
+
+      // fetch_search_video_cards - 采集搜索页"动态"Tab下的视频卡片
+      // 页面结构: res-block > block-title (标题) + card-grid (卡片容器)
+      if (action === 'fetch_search_video_cards') {
+        console.log('[API客户端] fetch_search_video_cards 开始执行');
+
+        var videos = [];
+
+        // 策略：找到"动态"区块，获取其 card-grid 内的卡片
+        var dongtaiBlock = null;
+        var resBlocks = document.querySelectorAll('.res-block');
+        console.log('[API客户端] 找到 ' + resBlocks.length + ' 个 res-block');
+
+        for (var rbi = 0; rbi < resBlocks.length; rbi++) {
+          var block = resBlocks[rbi];
+          var titleEl = block.querySelector('.block-title .title');
+          var titleText = titleEl ? (titleEl.innerText || '').trim() : '';
+          console.log('[API客户端] res-block[' + rbi + '] 标题: ' + titleText);
+
+          // 找"动态"区块
+          if (titleText === '动态') {
+            dongtaiBlock = block;
+            console.log('[API客户端] 找到"动态"区块');
+            break;
+          }
+        }
+
+        // 在动态区块内获取卡片
+        var cardEls = [];
+        if (dongtaiBlock) {
+          var cardGrid = dongtaiBlock.querySelector('.card-grid');
+          if (cardGrid) {
+            cardEls = cardGrid.querySelectorAll(':scope > .card-wrp');
+            console.log('[API客户端] 动态区块 card-grid 找到 ' + cardEls.length + ' 个卡片');
+          }
+        }
+
+        // 备用：直接在 res-block 的 card-grid 中找（如果没找到动态区块）
+        if (cardEls.length === 0) {
+          for (var rbi = 0; rbi < resBlocks.length; rbi++) {
+            var block = resBlocks[rbi];
+            var cardGrid = block.querySelector('.card-grid');
+            if (cardGrid) {
+              var cards = cardGrid.querySelectorAll('.card-wrp');
+              // 排除账号卡片（account-card）和直播卡片
+              for (var ci = 0; ci < cards.length; ci++) {
+                var card = cards[ci];
+                if (card.querySelector('.account-card, [ml-key="search-account-card"], [ml-key="search-live-card"]')) {
+                  continue;
+                }
+                if (card.querySelector('.object-card, [ml-key="search-feed-card"]')) {
+                  cardEls.push(card);
+                }
+              }
+            }
+            if (cardEls.length > 0) break;
+          }
+          console.log('[API客户端] 备用方式找到 ' + cardEls.length + ' 个视频卡片');
+        }
+
+        // 备用：直接获取所有 object-card
+        if (cardEls.length === 0) {
+          cardEls = document.querySelectorAll('.object-card');
+          console.log('[API客户端] 备用 object-card 找到 ' + cardEls.length + ' 个');
+        }
+
+        console.log('[API客户端] 总共处理 ' + cardEls.length + ' 个视频卡片');
+
+        for (var i = 0; i < cardEls.length; i++) {
+          var el = cardEls[i];
+
+          // 排除账号卡片
+          if (el.querySelector('.account-card')) {
+            continue;
+          }
+
+          // 排除直播卡片
+          if (el.querySelector('[class*="live"], [ml-key="search-live-card"]')) {
+            continue;
+          }
+
+          // 提取信息
+          var feedHtml = el.outerHTML || '';
+
+          // 提取标题 - 找 info-box 内的 title
+          var title = '';
+          var infoBox = el.querySelector('.info-box');
+          if (infoBox) {
+            var titleEl = infoBox.querySelector('.title');
+            if (titleEl) {
+              title = (titleEl.innerText || titleEl.textContent || '').trim();
+            }
+          }
+          if (!title) {
+            var titleEl = el.querySelector('[class*="title"]');
+            if (titleEl) {
+              title = (titleEl.innerText || titleEl.textContent || '').trim();
+            }
+          }
+          if (!title) {
+            title = el.innerText ? el.innerText.substring(0, 100).trim() : '';
+          }
+
+          // 提取作者
+          var author = '';
+          var authorEl = el.querySelector('.author__name, [class*="author-name"]');
+          if (authorEl) {
+            author = (authorEl.innerText || authorEl.textContent || '').trim();
+          }
+
+          // 提取 feed id
+          var feedId = '';
+          var idMatch = feedHtml.match(/data[-_]?(id|vid|feed)["'=:\s]+([a-zA-Z0-9_-]{10,})/i);
+          if (idMatch) feedId = idMatch[2];
+
+          videos.push({
+            index: videos.length,
+            title: title,
+            videoTitle: title,
+            author_name: author,
+            feed_id: feedId,
+            html: feedHtml.substring(0, 500)
+          });
+        }
+
+        // 缓存卡片数据
+        window.__wx_cached_cards = videos;
+
+        console.log('[API客户端] fetch_search_video_cards 返回 ' + videos.length + ' 个视频');
+        if (videos.length > 0) {
+          console.log('[API客户端] 第一个视频: ' + videos[0].title + ' | 作者: ' + videos[0].author_name);
+        }
+
+        return {
+          success: true,
+          videos: videos,
+          count: videos.length,
+          message: '找到 ' + videos.length + ' 个视频'
+        };
+      }
+
+      // click_search_video_card - 点击搜索结果中的视频卡片
+      // 策略：在"动态"区块内获取卡片
+      if (action === 'click_search_video_card') {
+        var cardIndex = body.index || 0;
+        console.log('[API客户端] click_search_video_card 开始执行, index:', cardIndex);
+
+        await new Promise(function(resolve) { setTimeout(resolve, 800); });
+
+        var validCards = [];
+
+        // 策略：在"动态"区块内获取卡片
+        var dongtaiBlock = null;
+        var resBlocks = document.querySelectorAll('.res-block');
+
+        for (var rbi = 0; rbi < resBlocks.length; rbi++) {
+          var block = resBlocks[rbi];
+          var titleEl = block.querySelector('.block-title .title');
+          var titleText = titleEl ? (titleEl.innerText || '').trim() : '';
+
+          if (titleText === '动态') {
+            dongtaiBlock = block;
+            console.log('[API客户端] 找到"动态"区块');
+            break;
+          }
+        }
+
+        if (dongtaiBlock) {
+          var cardGrid = dongtaiBlock.querySelector('.card-grid');
+          if (cardGrid) {
+            var cardWrps = cardGrid.querySelectorAll(':scope > .card-wrp');
+            console.log('[API客户端] 动态区块找到 ' + cardWrps.length + ' 个卡片');
+
+            for (var ci = 0; ci < cardWrps.length; ci++) {
+              var cardWrp = cardWrps[ci];
+              if (cardWrp.querySelector('.account-card, [ml-key="search-account-card"], [ml-key="search-live-card"]')) {
+                continue;
+              }
+              var clickBox = cardWrp.querySelector('.click-box');
+              if (clickBox) {
+                validCards.push(clickBox);
+              }
+            }
+            console.log('[API客户端] 有效卡片: ' + validCards.length);
+          }
+        }
+
+        // 备用：直接获取所有 object-card 的 click-box
+        if (validCards.length === 0) {
+          var objectCards = document.querySelectorAll('.object-card');
+          for (var oi = 0; oi < objectCards.length; oi++) {
+            var card = objectCards[oi];
+            var clickBox = card.closest('.click-box');
+            if (clickBox) {
+              validCards.push(clickBox);
+            }
+          }
+          console.log('[API客户端] 备用 object-card 找到 ' + validCards.length + ' 个');
+        }
+
+        console.log('[API客户端] 最终有效卡片: ' + validCards.length);
+
+        if (cardIndex < validCards.length) {
+          var targetEl = validCards[cardIndex];
+          console.log('[API客户端] 点击卡片 #' + cardIndex);
+
+          var titleEl = targetEl.querySelector('.info-box .title, [class*="title"]');
+          var title = titleEl ? (titleEl.innerText || '').trim() : '无标题';
+          console.log('[API客户端] 卡片标题: ' + title.substring(0, 50));
+
+          targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          await new Promise(function(resolve) { setTimeout(resolve, 500); });
+
+          targetEl.click();
+          console.log('[API客户端] 点击完成');
+
+          return {
+            success: true,
+            message: '卡片已点击',
+            index: cardIndex
+          };
+        }
+
+        console.error('[API客户端] 未找到索引 ' + cardIndex + ' 的卡片');
+        return { success: false, message: '未找到可点击的视频元素' };
       }
 
       // find_feed 操作 - 根据 videoTitle 查找对应的 feed DOM
@@ -2752,9 +3120,41 @@ window.__wx_parsers__ = {
 
   getCardElements: function() {
     var cards = [];
+
+    // 搜索页：在"动态"区块内获取卡片
+    var dongtaiBlock = null;
+    var resBlocks = document.querySelectorAll('.res-block');
+
+    for (var rbi = 0; rbi < resBlocks.length; rbi++) {
+      var block = resBlocks[rbi];
+      var titleEl = block.querySelector('.block-title .title');
+      var titleText = titleEl ? (titleEl.innerText || '').trim() : '';
+
+      if (titleText === '动态') {
+        dongtaiBlock = block;
+        break;
+      }
+    }
+
+    if (dongtaiBlock) {
+      var cardGrid = dongtaiBlock.querySelector('.card-grid');
+      if (cardGrid) {
+        var cardEls = cardGrid.querySelectorAll('.object-card');
+        for (var i = 0; i < cardEls.length; i++) {
+          if (!cardEls[i].querySelector('[class*="live"], [ml-key="search-live-card"]')) {
+            cards.push(cardEls[i]);
+          }
+        }
+        return cards;
+      }
+    }
+
+    // 作者页使用 finder-profile-card
     var els = document.querySelectorAll('div[ml-key="finder-profile-card"]');
     for (var i = 0; i < els.length; i++) {
-      if (!els[i].querySelector('.living-tag, .live-card')) cards.push(els[i]);
+      if (!els[i].querySelector('.living-tag, .live-card')) {
+        cards.push(els[i]);
+      }
     }
     return cards;
   }

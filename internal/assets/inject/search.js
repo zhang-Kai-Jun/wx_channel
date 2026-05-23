@@ -182,7 +182,7 @@ window.__wx_channels_search_collector = {
 
       // 只在整十数时打印到后台日志
       if (newCount % 50 === 0) {
-        var msg = '📊 [搜索] 已采集 ' + videoCount + ' 个视频';
+        var msg = '📊 [搜索] 已采集- ' + videoCount + ' 个视频';
         if (liveCount > 0) msg += ', ' + liveCount + ' 个直播';
         __wx_log({ msg: msg });
       }

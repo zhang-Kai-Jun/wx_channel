@@ -144,6 +144,12 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	// 取消评论快照采集（任务停止时调用）
+	if path == "/__wx_channels_api/cancel_snapshot" {
+		h.HandleCancelSnapshot(Conn)
+		return true
+	}
+
 	if h.HandleProfile(Conn) {
 		return true
 	}
@@ -1183,4 +1189,67 @@ func (h *APIHandler) HandleGetCommentSnapshotStatus(Conn *SunnyNet.HttpConn) {
 
 	dataJSON, _ := json.Marshal(responseData)
 	Conn.StopRequest(200, string(dataJSON), headers)
+}
+
+// HandleCancelSnapshot 取消指定 missionId 的所有评论快照采集任务
+// POST /__wx_channels_api/cancel_snapshot
+// Body: { "mission_id": "13095" }
+func (h *APIHandler) HandleCancelSnapshot(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/cancel_snapshot" {
+		return
+	}
+
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	body, err := io.ReadAll(Conn.Request.Body)
+	if err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+	_ = Conn.Request.Body.Close()
+
+	var payload struct {
+		MissionID string `json:"mission_id"`
+		TaskID    string `json:"task_id"` // 可选：只取消单个任务
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		h.sendErrorResponse(Conn, err)
+		return
+	}
+
+	if payload.MissionID == "" && payload.TaskID == "" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "mission_id or task_id is required")), headers)
+		return
+	}
+
+	// 取消采集并广播
+	if payload.TaskID != "" {
+		// 只取消单个任务
+		h.domActionHub.CancelCommentSnapshot(payload.TaskID)
+		h.domActionHub.BroadcastCancelSnapshot(payload.TaskID)
+		utils.LogInfo("[HandleCancelSnapshot] 取消单个采集任务: taskId=%s", payload.TaskID)
+	} else {
+		// 取消该 mission 的所有采集任务
+		// 1. 先标记 Hub 端的状态
+		h.domActionHub.CancelCommentSnapshot(payload.MissionID)
+		// 2. 广播取消命令给所有浏览器（按 missionId 前缀匹配 taskId）
+		prefix := fmt.Sprintf("sph_%s_", payload.MissionID)
+		h.domActionHub.BroadcastCancelSnapshot(prefix)
+		utils.LogInfo("[HandleCancelSnapshot] 取消 mission 所有采集: missionId=%s, prefix=%s", payload.MissionID, prefix)
+	}
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, `{"success":true,"message":"snapshot cancelled"}`, headers)
 }

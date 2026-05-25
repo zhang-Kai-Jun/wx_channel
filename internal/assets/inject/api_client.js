@@ -625,6 +625,26 @@ window.__wx_api_client = {
         }
       }
 
+      // 【cancel_comment_collection】取消评论采集任务
+      if (data.action === 'cancel_comment_collection') {
+        var taskData = data.payload || data;
+        var taskId = taskData.task_id || '';
+        console.log('[API客户端] 收到取消采集指令, task_id=' + taskId);
+
+        // 停止评论采集函数
+        if (typeof window.__stop_feed_comment_collection === 'function') {
+          window.__stop_feed_comment_collection();
+          console.log('[API客户端] 已调用 __stop_feed_comment_collection');
+        }
+
+        // 如果当前的 snapshotTaskId 匹配（精确匹配或前缀匹配），清除它
+        // taskId 可能是完整 ID 或前缀（如 "sph_13095_"）
+        if (window.__snapshotTaskId && (window.__snapshotTaskId === taskId || window.__snapshotTaskId.startsWith(taskId))) {
+          window.__snapshotTaskId = null;
+          console.log('[API客户端] 已清除 __snapshotTaskId');
+        }
+      }
+
       if (data.action === 'download_progress') {
         // 派发自定义事件，供 UI 组件消费
         var event = new CustomEvent('wx_download_progress', { detail: data.payload });

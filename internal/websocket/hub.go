@@ -3,6 +3,7 @@ package websocket
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -990,4 +991,70 @@ func (h *Hub) GetCommentSnapshotStatus(taskID string) *CommentSnapshotStatus {
 	h.commentSnapshotStatusMu.RLock()
 	defer h.commentSnapshotStatusMu.RUnlock()
 	return h.commentSnapshotStatus[taskID]
+}
+
+// CancelCommentSnapshot 取消指定 missionId 的所有评论快照采集任务
+// 用于任务停止时清理 Hub 端的采集状态
+func (h *Hub) CancelCommentSnapshot(missionId string) {
+	h.commentSnapshotStatusMu.Lock()
+	defer h.commentSnapshotStatusMu.Unlock()
+
+	// 匹配格式: sph_{missionId}_{timestamp}_{random}
+	prefix := fmt.Sprintf("sph_%s_", missionId)
+	cancelled := 0
+	for taskId, status := range h.commentSnapshotStatus {
+		if strings.HasPrefix(taskId, prefix) {
+			status.Done = true
+			status.Success = false
+			status.Error = "mission_cancelled"
+			status.UpdatedAt = time.Now().Unix()
+			cancelled++
+		}
+	}
+	if cancelled > 0 {
+		utils.LogInfo("[Hub] 取消评论快照采集: missionId=%s, 取消 %d 个任务", missionId, cancelled)
+	}
+}
+
+// BroadcastCancelSnapshot 广播取消快照采集命令到所有浏览器
+// 浏览器收到后应停止采集并清理状态
+func (h *Hub) BroadcastCancelSnapshot(taskId string) {
+	cmdData := map[string]interface{}{
+		"action":  "cancel_comment_collection",
+		"payload": map[string]interface{}{"task_id": taskId},
+	}
+
+	data, err := json.Marshal(cmdData)
+	if err != nil {
+		utils.LogError("[Hub] 序列化 cancel_comment_collection 命令失败: %v", err)
+		return
+	}
+
+	msg := WSMessage{
+		Type: WSMessageTypeCommand,
+		Data: data,
+	}
+
+	msgData, err := json.Marshal(msg)
+	if err != nil {
+		utils.LogError("[Hub] 序列化 WebSocket 消息失败: %v", err)
+		return
+	}
+
+	h.mu.RLock()
+	clientCount := len(h.clients)
+	h.mu.RUnlock()
+
+	sentCount := 0
+	h.mu.RLock()
+	for client := range h.clients {
+		if err := client.Send(msgData); err != nil {
+			utils.LogWarn("[Hub] 发送 cancel_comment_collection 失败: client=%s, err=%v", client.RemoteAddr, err)
+		} else {
+			sentCount++
+		}
+	}
+	h.mu.RUnlock()
+
+	utils.LogInfo("[Hub] 广播取消采集: taskId=%s, clients=%d, sent=%d", taskId, clientCount, sentCount)
 }

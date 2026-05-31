@@ -370,6 +370,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 					Items        interface{} `json:"items"`
 					Total        int         `json:"total"`
 					CommentCount int         `json:"comment_count"`
+					CurrentTotal int         `json:"current_total"`
 					HasMore      bool        `json:"has_more"`
 					Buffer       string      `json:"buffer"`
 					RawItems     interface{} `json:"raw_items"`
@@ -385,6 +386,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 				Items:        wsResp.Result.Items,
 				Total:        wsResp.Result.Total,
 				CommentCount: wsResp.Result.CommentCount,
+				CurrentTotal: wsResp.Result.CurrentTotal,
 				HasMore:      wsResp.Result.HasMore,
 				Buffer:       wsResp.Result.Buffer,
 				RawItems:     wsResp.Result.RawItems,
@@ -957,6 +959,7 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 			Items        interface{} `json:"items"`
 			Total        int         `json:"total"`
 			CommentCount int         `json:"comment_count"`
+			CurrentTotal int         `json:"current_total"`
 			HasMore      bool        `json:"has_more"`
 			Buffer       string      `json:"buffer"`
 			RawItems     interface{} `json:"raw_items"`
@@ -983,6 +986,7 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 		Items:        payload.Result.Items,
 		Total:        payload.Result.Total,
 		CommentCount: payload.Result.CommentCount,
+		CurrentTotal: payload.Result.CurrentTotal,
 		HasMore:      payload.Result.HasMore,
 		Buffer:       payload.Result.Buffer,
 		RawItems:     payload.Result.RawItems,
@@ -1046,6 +1050,7 @@ func (h *APIHandler) HandleGetFetchCommentsResult(Conn *SunnyNet.HttpConn) {
 			"items":         result.Items,
 			"total":         result.Total,
 			"comment_count": result.CommentCount,
+			"current_total": result.CurrentTotal,
 			"has_more":      result.HasMore,
 			"buffer":        result.Buffer,
 			"raw_items":     result.RawItems,

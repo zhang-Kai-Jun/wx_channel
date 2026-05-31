@@ -1,7 +1,7 @@
 package version
 
 // Current is the current application version
-const Current = "5.6.1"
+const Current = "1.2.0"
 
 // Repo is the GitHub repository path
-const Repo = "nobiyou/wx_channel"
+const Repo = "video_channel"

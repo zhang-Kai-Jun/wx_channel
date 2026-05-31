@@ -946,6 +946,7 @@ type FetchCommentsData struct {
 	Items       interface{} `json:"items"`
 	Total       int         `json:"total"`
 	CommentCount int        `json:"comment_count"`
+	CurrentTotal int        `json:"current_total"`
 	HasMore     bool        `json:"has_more"`
 	Buffer      string      `json:"buffer"`
 	RawItems    interface{} `json:"raw_items"`

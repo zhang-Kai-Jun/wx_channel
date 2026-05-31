@@ -3936,11 +3936,23 @@ func (h *ScriptHandler) getFetchVideoCommentsScript() string {
 			if (window.__sph_expandSecondaryComments) { window.__sph_expandSecondaryComments(); }
 		}
 
+		// 计算当前已加载的评论总数（一级 + 已展开的二级）
+		var currentTotal = 0;
+		if (payload && payload.items) {
+			payload.items.forEach(function(item) {
+				currentTotal++;
+				if (item.levelTwoComment && Array.isArray(item.levelTwoComment)) {
+					currentTotal += item.levelTwoComment.length;
+				}
+			});
+		}
+
 		return {
 			panel_ready: panelOpened,
 			items: formatted,
 			total: total,
 			comment_count: commentCount,
+			current_total: currentTotal,
 			has_more: hasMore,
 			buffer: buffer,
 			raw_items: payload && payload.items ? payload.items : []

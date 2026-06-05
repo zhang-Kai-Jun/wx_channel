@@ -1,17 +1,8 @@
-# 微信视频号下载助手 - Git 忽略文件
 
-# ==================== 开发文档 ====================
-# 开发文档不同步到 GitHub（包含内部技术细节）
 dev-docs/
-
-# ==================== 运行时生成的目录 ====================
-# 下载目录（用户下载的视频文件）
 downloads/
-
-# 日志目录（运行日志）
 logs/
 
-# Web 控制台源代码（暂不公开）
 web/
 web/console.html
 hub_server/frontend/
@@ -20,8 +11,7 @@ hub_server/CHANGELOG.md
 hub_server/hub_server
 hub_server/frontend/
 hub_server/docs/
-# ==================== 压缩文件 ====================
-# 所有压缩文件
+
 *.zip
 *.rar
 *.7z
@@ -29,8 +19,6 @@ hub_server/docs/
 *.tar.gz
 *.tgz
 
-# ==================== 编译产物 ====================
-# Go 编译产物
 *.exe
 *.exe~
 *.dll
@@ -45,8 +33,6 @@ hub_server/docs/
 /build/
 /dist/
 
-# ==================== 临时文件 ====================
-# 临时文件
 *.tmp
 *.temp
 *.swp
@@ -54,12 +40,9 @@ hub_server/docs/
 *.syso
 *~
 
-# 备份文件
 *.bak
 *.backup
 
-# ==================== 系统文件 ====================
-# Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
@@ -73,19 +56,15 @@ $RECYCLE.BIN/
 # Linux
 *~
 
-# ==================== IDE 和编辑器 ====================
-# Visual Studio Code
 .vscode/
 *.code-workspace
 .agent
 
-# GoLand / IntelliJ IDEA
 .idea/
 *.iml
 *.iws
 *.ipr
 
-# Sublime Text
 *.sublime-project
 *.sublime-workspace
 
@@ -96,16 +75,14 @@ $RECYCLE.BIN/
 [._]ss[a-gi-z]
 [._]sw[a-p]
 
-# ==================== Go 相关 ====================
-# 依赖目录
+
 /vendor/
 
 # Go 工作区文件
 go.work
 go.work.sum
 
-# ==================== 配置文件 ====================
-# 配置文件（包含敏感信息）
+
 config.yaml
 
 # 本地配置文件（如果有）
@@ -126,13 +103,9 @@ config.yaml[0-9][0-9]
 .env.local
 .env.*.local
 
-# ==================== 证书文件 ====================
-# 证书目录（如果包含敏感信息）
 # certs/*.pem
 # certs/*.key
 
-# ==================== 数据文件 ====================
-# CSV 记录文件
 download_records.csv
 *.csv
 
@@ -146,14 +119,10 @@ download_records.csv
 *.db-wal
 *.db-journal
 
-# ==================== 测试和脚本 ====================
-# 测试脚本目录
+
 scripts/
 
-# 测试文件应纳入版本控制（单元测试是源码的一部分）
 
-# ==================== 其他 ====================
-# 帮助输出
 help_output.txt
 
 # 测试覆盖率
@@ -168,42 +137,8 @@ coverage.html
 # 体积分析报告（临时文件）
 size_report.txt
 
-# ==================== 发版准备文件 ====================
-# 这些文件仅用于本地发版准备，不需要同步到 GitHub
-LINKS_FIXED.md
-PRE_RELEASE_CHECKLIST.md
-READY_TO_RELEASE.md
-RELEASE_GUIDE.md
-RELEASE_v*.md
-GITHUB_RELEASE_STEPS.md
-PRE_UPLOAD_CHECKLIST.md
-UPLOAD_READY.md
-
-# 临时图片文件
 down.png
 log.png
 
-# ==================== 保留的文件 ====================
-# 确保某些文件被包含（使用 ! 前缀）
 !.gitignore
 !.gitkeep
-
-# ==================== 说明 ====================
-# 此文件定义了不需要同步到 GitHub 的文件和目录
-# 
-# 主要排除：
-# - dev-docs/     开发文档（内部技术细节）❌ 不上传
-# - config.yaml   配置文件（包含敏感信息）❌ 不上传
-# - scripts/      测试脚本目录 ❌ 不上传
-# - downloads/    下载的视频文件
-# - logs/         运行日志
-# - web/          Web 控制台源代码（暂不公开）
-# - *.zip         所有压缩文件
-# - *.exe         编译产物
-# - *.db          数据库文件
-# 
-# 包含的内容：
-# - docs/              用户文档 ✅
-# - README.md          项目主文档 ✅
-# - config.yaml.example 配置文件示例 ✅
-# - 源代码             所有源代码 ✅

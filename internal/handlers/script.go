@@ -339,80 +339,60 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 	};
 	
 	// 暂停视频的辅助函数（只暂停，不阻止自动切换）
+	// 分层降级策略：Video.js API → video.pause() → XPath按钮 → CSS按钮 → 键盘空格键
 	window.__wx_channels_pause_video__ = function() {
 		console.log('[视频助手] 暂停视频（下载期间）...');
 		try {
-			let pausedCount = 0;
 			const pausedVideos = [];
-			
-			// 方法1: 使用 Video.js API
+
+			// === 同步块：立即暂停可见视频，立即返回 ===
 			if (typeof videojs !== 'undefined') {
 				const players = videojs.getAllPlayers?.() || [];
-				players.forEach((player, index) => {
+				for (const player of players) {
 					if (player && typeof player.pause === 'function' && !player.paused()) {
 						player.pause();
-						pausedVideos.push({ type: 'videojs', player, index });
-						pausedCount++;
-						console.log('[视频助手] Video.js 播放器', index, '已暂停');
+						pausedVideos.push({ type: 'videojs', player });
 					}
-				});
+				}
 			}
-			
-			// 方法2: 查找所有 video 元素
-			const videos = document.querySelectorAll('video');
-			videos.forEach((video, index) => {
-				// 尝试通过 Video.js 获取播放器实例
-				let player = null;
-				if (typeof videojs !== 'undefined') {
-					try {
-						player = videojs(video);
-					} catch (e) {
-						// 不是 Video.js 播放器
-					}
+			const allVideos = Array.from(document.querySelectorAll('video'));
+			for (const video of allVideos) {
+				if (!video.paused) {
+					video.pause();
+					pausedVideos.push({ type: 'native', video });
 				}
-				
-				if (player && typeof player.pause === 'function') {
-					if (!player.paused()) {
-						player.pause();
-						pausedVideos.push({ type: 'videojs', player, index });
-						pausedCount++;
-						console.log('[视频助手] Video.js 播放器', index, '已暂停');
-					}
-				} else {
-					if (!video.paused) {
-						video.pause();
-						pausedVideos.push({ type: 'native', video, index });
-						pausedCount++;
-						console.log('[视频助手] 原生视频', index, '已暂停');
-					}
-				}
-			});
-			
-			console.log('[视频助手] 共暂停', pausedCount, '个视频');
-			
-			// 返回暂停的视频列表，用于后续恢复
+			}
+			console.log('[视频助手] 立即暂停完成，共', pausedVideos.length, '个视频');
+			// 立即返回，不阻塞
 			return pausedVideos;
 		} catch (e) {
 			console.error('[视频助手] 暂停视频失败:', e);
 			return [];
 		}
 	};
-	
+
 	// 恢复视频播放的辅助函数
+	// 分层降级策略：player.play() → video.play() → 键盘空格键
 	window.__wx_channels_resume_video__ = function(pausedVideos) {
 		if (!pausedVideos || pausedVideos.length === 0) return;
-		
-		console.log('[视频助手] 恢复视频播放...');
+		console.log('[视频助手] 恢复视频播放，共', pausedVideos.length, '个');
 		try {
-			pausedVideos.forEach(item => {
+			for (const item of pausedVideos) {
 				if (item.type === 'videojs' && item.player) {
-					item.player.play();
-					console.log('[视频助手] Video.js 播放器', item.index, '已恢复');
+					try { item.player.play(); }
+					catch (e) { console.log('[视频助手] Video.js play 失败:', e.message); }
 				} else if (item.type === 'native' && item.video) {
-					item.video.play();
-					console.log('[视频助手] 原生视频', item.index, '已恢复');
+					try { item.video.play(); }
+					catch (e) { console.log('[视频助手] native play 失败:', e.message); }
 				}
-			});
+			}
+			// 备用：尝试键盘空格键
+			setTimeout(() => {
+				const videos = Array.from(document.querySelectorAll('video')).filter(v => v.offsetWidth > 0);
+				if (videos.length > 0) videos[0].focus();
+				document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', keyCode: 32, bubbles: true }));
+				document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', keyCode: 32, bubbles: true }));
+			}, 200);
 		} catch (e) {
 			console.error('[视频助手] 恢复视频失败:', e);
 		}

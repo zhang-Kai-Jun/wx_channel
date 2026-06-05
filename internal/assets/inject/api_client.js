@@ -1334,7 +1334,29 @@ window.__wx_api_client = {
           return 0;
         };
 
+        // 等待 collector 有初始数据（防止页面刚加载时 feeds=[] 导致提前终止）
+        var waitForInitialData = async function() {
+          var maxWait = 8000;
+          var pollInterval = 500;
+          var elapsed = 0;
+          while (elapsed < maxWait) {
+            var count = getVideoCount();
+            if (count > 0) {
+              console.log('[API客户端] 初始数据已就绪: ' + count + ' 个 (等待 ' + elapsed + 'ms)');
+              return count;
+            }
+            await new Promise(function(resolve) { setTimeout(resolve, pollInterval); });
+            elapsed += pollInterval;
+          }
+          console.log('[API客户端] 等待初始数据超时，继续执行，当前: ' + getVideoCount() + ' 个');
+          return getVideoCount();
+        };
+
         var doScroll = async function() {
+          // ★★★ 关键：等待 collector 有初始数据后再开始计数判断
+          await waitForInitialData();
+          var lastCount = getVideoCount();
+
           for (var i = 0; i < maxScrolls; i++) {
             var scrollHeight = scrollContainer.scrollHeight;
             scrollContainer.scrollTop = scrollHeight + 600;
@@ -1380,13 +1402,48 @@ window.__wx_api_client = {
           return { success: true, reason: 'max_scrolls', scrollCount: maxScrolls, totalCards: lastCount };
         };
 
-        return await doScroll();
+        var scrollResult = await doScroll();
+
+        // ★★★ 滚动结束后，将 collector 中的完整数据缓存，供 fetch_search_video_cards 直接消费
+        var collector = window.__wx_channels_search_collector;
+        if (collector && collector.feeds && collector.feeds.length > 0) {
+          var cached = [];
+          collector.feeds.forEach(function(f) {
+            if (!f || f.type !== 'media') return;
+            cached.push({
+              index: cached.length,
+              title: (f.content && f.content.title) ? f.content.title : '',
+              videoTitle: (f.content && f.content.title) ? f.content.title : '',
+              author_name: (f.author && f.author.nickname) ? f.author.nickname : '',
+              feed_id: (f.content && f.content.id) ? f.content.id : (f.id || ''),
+              html: (f.content && f.content.html) ? f.content.html.substring(0, 500) : ''
+            });
+          });
+          window.__wx_cached_cards = cached;
+          console.log('[API客户端] 滚动结束，缓存 ' + cached.length + ' 个视频到 __wx_cached_cards');
+        }
+
+        return scrollResult;
       }
 
       // fetch_search_video_cards - 采集搜索页"动态"Tab下的视频卡片
       // 页面结构: res-block > block-title (标题) + card-grid (卡片容器)
       if (action === 'fetch_search_video_cards') {
         console.log('[API客户端] fetch_search_video_cards 开始执行');
+
+        // ★★★ 优先使用 scroll 阶段缓存的数据（稳定，不依赖 DOM 渲染时序）
+        if (window.__wx_cached_cards && window.__wx_cached_cards.length > 0) {
+          console.log('[API客户端] 使用 scroll 缓存: ' + window.__wx_cached_cards.length + ' 个视频');
+          return {
+            success: true,
+            videos: window.__wx_cached_cards,
+            count: window.__wx_cached_cards.length,
+            message: '使用缓存，找到 ' + window.__wx_cached_cards.length + ' 个视频'
+          };
+        }
+
+        // 无缓存时回退到 DOM 查询
+        console.log('[API客户端] 无缓存，回退到 DOM 查询');
 
         var videos = [];
 

@@ -122,6 +122,33 @@ func (h *Hub) RegisterClient(client *Client) {
 	h.register <- client
 }
 
+// ProbeAllClients 主动探测所有客户端，发送 ping 并等待 pong
+// 死客户端会在发送失败后被清理，返回探测到的存活客户端数量
+func (h *Hub) ProbeAllClients() int {
+	h.mu.RLock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	sentCount := 0
+	for _, client := range clients {
+		msg := WSMessage{Type: WSMessageTypePing, Data: json.RawMessage(`{}`)}
+		data, _ := json.Marshal(msg)
+		if err := client.Send(data); err != nil {
+			utils.LogWarn("[Hub] 探测发送失败，标记为死客户端: %s, err=%v", client.ID, err)
+			// 发送失败，强制关闭连接，让 ReadPump 处理 unregister
+			client.Close()
+		} else {
+			sentCount++
+		}
+	}
+
+	utils.LogInfo("[Hub] ProbeAllClients: 探测 %d 个客户端", sentCount)
+	return sentCount
+}
+
 // GetClient 获取一个可用的客户端（使用负载均衡选择器）
 func (h *Hub) GetClient() (*Client, error) {
 	h.mu.RLock()
@@ -940,18 +967,18 @@ func (h *Hub) GetMatchingProgress(taskID string) map[string]interface{} {
 
 // FetchCommentsData 评论采集结果数据结构
 type FetchCommentsData struct {
-	Success      bool        `json:"success"`
-	Message     string      `json:"message"`
-	PanelReady  bool        `json:"panel_ready"`
-	Items       interface{} `json:"items"`
-	Total       int         `json:"total"`
-	CommentCount int        `json:"comment_count"`
-	CurrentTotal int        `json:"current_total"`
-	HasMore     bool        `json:"has_more"`
-	Buffer      string      `json:"buffer"`
-	RawItems    interface{} `json:"raw_items"`
-	ReceivedAt  int64       `json:"received_at"`
-}
+	Success       bool        `json:"success"`
+	Message       string      `json:"message"`
+	PanelReady    bool        `json:"panel_ready"`
+	Items         interface{} `json:"items"`
+	Total         int         `json:"total"`
+	CommentCount  int         `json:"comment_count"`
+	CurrentTotal  int         `json:"current_total"`
+	HasMore       bool        `json:"has_more"`
+	Buffer        string      `json:"buffer"`
+		RawItems      interface{} `json:"raw_items"`
+		ReceivedAt    int64       `json:"received_at"`
+	}
 
 // CommentSnapshotStatus 评论快照采集状态
 // 用于 Node.js 轮询等待浏览器完成采集

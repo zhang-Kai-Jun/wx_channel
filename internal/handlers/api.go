@@ -102,6 +102,12 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	// 主动探测客户端（关闭页面后调用，触发 Hub 探测并清理死客户端）
+	if path == "/__wx_channels_api/probe" {
+		h.HandleProbe(Conn)
+		return true
+	}
+
 	// 精准匹配任务结果回调
 	if path == "/__wx_channels_api/matching_callback" {
 		h.HandleMatchingCallback(Conn)
@@ -362,7 +368,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 			utils.LogInfo("[DOMAction] fetch_video_comments 后台 CallAPI 完成, task_id=%s", req.TaskID)
 
 			// inject 通过 resp() 发来的 WebSocket 响应数据写入缓存
-			// inject 发送: { success, result: { panel_ready, comment_count, has_more, items, ... } }
+			// inject 发送: { success, result: { panel_ready, comment_count, has_more, items, last_comment_id, ... } }
 			var wsResp struct {
 				Success bool `json:"success"`
 				Result  struct {
@@ -374,6 +380,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 					HasMore      bool        `json:"has_more"`
 					Buffer       string      `json:"buffer"`
 					RawItems     interface{} `json:"raw_items"`
+					LastCommentId string     `json:"last_comment_id"`
 				} `json:"result"`
 			}
 			if parseErr := json.Unmarshal(wsRespData, &wsResp); parseErr != nil {
@@ -381,16 +388,16 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 				return
 			}
 			h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
-				Success:      wsResp.Success,
-				PanelReady:   wsResp.Result.PanelReady,
-				Items:        wsResp.Result.Items,
-				Total:        wsResp.Result.Total,
-				CommentCount: wsResp.Result.CommentCount,
-				CurrentTotal: wsResp.Result.CurrentTotal,
-				HasMore:      wsResp.Result.HasMore,
-				Buffer:       wsResp.Result.Buffer,
-				RawItems:     wsResp.Result.RawItems,
-				ReceivedAt:   time.Now().Unix(),
+				Success:        wsResp.Success,
+				PanelReady:     wsResp.Result.PanelReady,
+				Items:          wsResp.Result.Items,
+				Total:          wsResp.Result.Total,
+				CommentCount:   wsResp.Result.CommentCount,
+				CurrentTotal:   wsResp.Result.CurrentTotal,
+				HasMore:        wsResp.Result.HasMore,
+				Buffer:         wsResp.Result.Buffer,
+				RawItems:       wsResp.Result.RawItems,
+				ReceivedAt:     time.Now().Unix(),
 			})
 			utils.LogInfo("[DOMAction] 评论数据已写入缓存: task_id=%s, panel_ready=%v, comment_count=%d",
 				req.TaskID, wsResp.Result.PanelReady, wsResp.Result.CommentCount)
@@ -544,6 +551,7 @@ func (h *APIHandler) HandleDOMActionHealth(Conn *SunnyNet.HttpConn) {
 		"apiReady":                 apiReady,
 		"clientPagePath":           clientPagePath,
 		"navigatingClientPagePath": navigatingClientPagePath,
+		"clientStatuses":           h.domActionHub.ClientStatuses(),
 	}
 
 	resultJSON, _ := json.Marshal(result)
@@ -730,6 +738,42 @@ func (h *APIHandler) HandleClearNavigating(Conn *SunnyNet.HttpConn) {
 	headers.Set("Content-Type", "application/json")
 	h.setCORSHeadersFromConn(Conn, headers)
 	Conn.StopRequest(200, `{"success":true}`, headers)
+}
+
+// HandleProbe 主动探测客户端（POST /__wx_channels_api/probe）
+// 关闭页面后调用，触发 Hub 向所有客户端发送 ping
+// 死客户端会在发送失败后被清理，活客户端会回复 pong
+func (h *APIHandler) HandleProbe(Conn *SunnyNet.HttpConn) {
+	path := Conn.Request.URL.Path
+	if path != "/__wx_channels_api/probe" {
+		return
+	}
+
+	// 只允许 POST
+	if Conn.Request.Method != "POST" {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use POST")), headers)
+		return
+	}
+
+	// 检查 Hub 是否可用
+	if h.domActionHub == nil {
+		headers := http.Header{}
+		headers.Set("Content-Type", "application/json")
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service not available")), headers)
+		return
+	}
+
+	utils.LogInfo("[HandleProbe] 主动探测所有客户端...")
+	sentCount := h.domActionHub.ProbeAllClients()
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	h.setCORSHeadersFromConn(Conn, headers)
+	Conn.StopRequest(200, fmt.Sprintf(`{"success":true,"probed":%d}`, sentCount), headers)
 }
 
 // HandleMatchingCallback 处理精准匹配任务的结果回调（inject 采集完成后调用）
@@ -955,14 +999,15 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 		Result  struct {
-			PanelReady   bool        `json:"panel_ready"`
-			Items        interface{} `json:"items"`
-			Total        int         `json:"total"`
-			CommentCount int         `json:"comment_count"`
-			CurrentTotal int         `json:"current_total"`
-			HasMore      bool        `json:"has_more"`
-			Buffer       string      `json:"buffer"`
-			RawItems     interface{} `json:"raw_items"`
+			PanelReady    bool        `json:"panel_ready"`
+			Items         interface{} `json:"items"`
+			Total         int         `json:"total"`
+			CommentCount  int         `json:"comment_count"`
+			CurrentTotal  int         `json:"current_total"`
+			HasMore       bool        `json:"has_more"`
+			Buffer        string      `json:"buffer"`
+			RawItems      interface{} `json:"raw_items"`
+			LastCommentId string      `json:"last_comment_id"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -980,17 +1025,17 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 
 	// 存储到 Hub 的缓存
 	h.domActionHub.SetFetchCommentsResult(payload.TaskID, &websocket.FetchCommentsData{
-		Success:      payload.Success,
-		Message:      payload.Message,
-		PanelReady:   payload.Result.PanelReady,
-		Items:        payload.Result.Items,
-		Total:        payload.Result.Total,
-		CommentCount: payload.Result.CommentCount,
-		CurrentTotal: payload.Result.CurrentTotal,
-		HasMore:      payload.Result.HasMore,
-		Buffer:       payload.Result.Buffer,
-		RawItems:     payload.Result.RawItems,
-		ReceivedAt:   time.Now().Unix(),
+		Success:       payload.Success,
+		Message:       payload.Message,
+		PanelReady:    payload.Result.PanelReady,
+		Items:         payload.Result.Items,
+		Total:         payload.Result.Total,
+		CommentCount:  payload.Result.CommentCount,
+		CurrentTotal:  payload.Result.CurrentTotal,
+		HasMore:       payload.Result.HasMore,
+		Buffer:        payload.Result.Buffer,
+		RawItems:      payload.Result.RawItems,
+		ReceivedAt:    time.Now().Unix(),
 	})
 
 	utils.LogInfo("[FetchCommentsCallback] 收到评论采集结果: task_id=%s, success=%v, panel_ready=%v, comment_count=%d",
@@ -1044,16 +1089,16 @@ func (h *APIHandler) HandleGetFetchCommentsResult(Conn *SunnyNet.HttpConn) {
 	var responseData map[string]interface{}
 	if result != nil {
 		responseData = map[string]interface{}{
-			"success":       result.Success,
-			"message":       result.Message,
-			"panel_ready":   result.PanelReady,
-			"items":         result.Items,
-			"total":         result.Total,
-			"comment_count": result.CommentCount,
-			"current_total": result.CurrentTotal,
-			"has_more":      result.HasMore,
-			"buffer":        result.Buffer,
-			"raw_items":     result.RawItems,
+			"success":        result.Success,
+			"message":        result.Message,
+			"panel_ready":    result.PanelReady,
+			"items":          result.Items,
+			"total":          result.Total,
+			"comment_count":  result.CommentCount,
+			"current_total":  result.CurrentTotal,
+			"has_more":       result.HasMore,
+			"buffer":         result.Buffer,
+			"raw_items":      result.RawItems,
 		}
 	} else {
 		responseData = map[string]interface{}{

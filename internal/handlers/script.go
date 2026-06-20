@@ -1588,8 +1588,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			container: document.querySelector('.comment-list, [class*="drawer"], [class*="comment"]') || document.body,
 			items: topLevel,
 			total: parseCommentTotalFromDOM(),
-			buffer: loadingNode ? '__dom_loading__' : '',
-			hasMore: !!loadingNode
+			buffer: loadingNode ? '__dom_loading__' : ''
 		};
 	}
 
@@ -1671,15 +1670,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 						(candidate.nextBuffer || '') ||
 						(candidate.cursor || '') ||
 						(candidate.buffers && (candidate.buffers.lastBuffer || candidate.buffers.nextBuffer)) ||
-						(source.lastBuffer || source.nextBuffer || ''),
-					hasMore: !!(
-						candidate.lastBuffer ||
-						candidate.nextBuffer ||
-						candidate.cursor ||
-						(candidate.buffers && (candidate.buffers.lastBuffer || candidate.buffers.nextBuffer)) ||
-						source.lastBuffer ||
-						source.nextBuffer
-					)
+						(source.lastBuffer || source.nextBuffer || '')
 				};
 			}
 		}
@@ -1760,48 +1751,54 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			if (feed && feed.commentCount !== undefined) total = feed.commentCount;
 		}
 
+		// 使用 Set 跟踪已见到的评论 ID（基于 commentId 唯一标识）
+		if (!window.__sph_seenCommentIds) window.__sph_seenCommentIds = {};
+		var seenCommentIds = window.__sph_seenCommentIds;
+
 		// 计算当前已加载的评论总数（一级 + 二级）
-		if (!window.__sph_lastTotalCount) window.__sph_lastTotalCount = 0;
 		var currentTotalCount = 0;
 		for (var i = 0; i < dataList.items.length; i++) {
-			currentTotalCount++;
-			if (dataList.items[i].levelTwoComment && Array.isArray(dataList.items[i].levelTwoComment)) {
-				currentTotalCount += dataList.items[i].levelTwoComment.length;
+			var item = dataList.items[i];
+			var itemId = item.commentId || item.strCommentId || '';
+			// 统计所有已加载的评论（包括之前见过的）
+			if (itemId) {
+				currentTotalCount++;
+			}
+			if (item.levelTwoComment && Array.isArray(item.levelTwoComment)) {
+				currentTotalCount += item.levelTwoComment.length;
 			}
 		}
-		var prevTotal = window.__sph_lastTotalCount;
-		var isGrowing = prevTotal > 0 && currentTotalCount > prevTotal;
 
-		// 连续无增长计数器（用于防止网络波动导致误判）
-		if (!window.__sph_noGrowthCount) window.__sph_noGrowthCount = 0;
-
-		// hasMore 判断：只依赖增量判断和无增长兜底
-		// 不使用 fcl.commentCount 作为 platformTotal（它可能是当前分页数而非总数，容易误判）
-		var hasMore = true;
-		if (currentTotalCount < prevTotal) {
-			// 数量变小（视频切换等异常），重置追踪，继续等待加载
-			hasMore = !!lastBuffer;
-			window.__sph_noGrowthCount = 0;
-		} else if (!isGrowing && prevTotal > 0 && currentTotalCount === prevTotal) {
-			// 数量停止增长，累计计数器
-			window.__sph_noGrowthCount++;
-			// 连续15次无增长才判定为结束（给网络波动留有余地）
-			if (window.__sph_noGrowthCount >= 15) {
-				hasMore = false;
+		// 收集新评论 ID（只读，不更新全局 seenCommentIds）
+		var newCommentCount = 0;
+		var newCommentIds = [];
+		for (var k = 0; k < dataList.items.length; k++) {
+			var kItem = dataList.items[k];
+			var kItemId = kItem.commentId || kItem.strCommentId || '';
+			if (kItemId && !seenCommentIds[kItemId]) {
+				newCommentCount++;
+				newCommentIds.push(kItemId);
 			}
-		} else {
-			// 有增量，重置计数器
-			window.__sph_noGrowthCount = 0;
+			if (kItem.levelTwoComment && Array.isArray(kItem.levelTwoComment)) {
+				for (var l = 0; l < kItem.levelTwoComment.length; l++) {
+					var lItem = kItem.levelTwoComment[l];
+					var lItemId = lItem.commentId || lItem.strCommentId || '';
+					if (lItemId && !seenCommentIds[lItemId]) {
+						newCommentCount++;
+						newCommentIds.push(lItemId);
+					}
+				}
+			}
 		}
-
-		// 无论是否有更多，都更新追踪状态
-		window.__sph_lastTotalCount = currentTotalCount;
 
 		return {
 			items: dataList.items,
 			total: total,
 			buffer: lastBuffer,
-			hasMore: hasMore,
+			nextBuffer: buffers.nextBuffer || '',  // 用于判断 has_more：有值=还有更多
+			newCommentCount: newCommentCount,  // 新评论数量
+			newCommentIds: newCommentIds,      // 新评论 ID 列表
+			currentTotalCount: currentTotalCount,  // 当前已加载的评论总数（不含已见过的）
 			store: found.store,
 			home: found.home
 		};
@@ -2040,10 +2037,39 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		}, delay);
 	}
 
-	function updateProgressHint(loaded, total, phase) {
+	function updateProgressHint(loaded, total, phase, items) {
 		var text = '评论采集中: ' + loaded + (total > 0 ? '/' + total : '') + (phase ? ' | ' + phase : '');
+		// 获取items 里面的一级和二级评论的 commentId
+		let commentIds = [];
+		for (let i = 0; i < items.length; i++) {
+			commentIds.push(items[i].commentId || '');
+			if(items[i].levelTwoComment && items[i].levelTwoComment.length > 0) {
+				for (let j = 0; j < items[i].levelTwoComment.length; j++) {
+					commentIds.push(items[i].levelTwoComment[j].commentId || '');
+				}
+			}
+		}
+		text += ' | 11111commentIds=' + commentIds.join(',');
+
+		let contents = []
+		for (let i = 0; i < items.length; i++) {
+			contents.push(items[i].content || items[i].text || '');
+			if(items[i].levelTwoComment && items[i].levelTwoComment.length > 0) {
+				for (let j = 0; j < items[i].levelTwoComment.length; j++) {
+					contents.push(items[i].levelTwoComment[j].content || items[i].levelTwoComment[j].text || '');
+				}
+			}
+		}
+		text += ' | 11111contents=' + contents.join(',');
+
 		if (text === lastProgressText) return;
 		lastProgressText = text;
+		if (typeof __wx_log === 'function') {
+			__wx_log({ msg: '💬 ' + text });
+		}
+	}
+
+	function printlog(txt) {
 		if (typeof __wx_log === 'function') {
 			__wx_log({ msg: '💬 ' + text });
 		}
@@ -2217,10 +2243,26 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 				var currentLoadedCount = getCommentStats(items).total;
 				if (currentLoadedCount !== lastCommentCount) {
 					var stats = getCommentStats(items);
+				// 【调试】打印 items 详情
+				var ids = [];
+				for (var k = 0; k < Math.min(items.length, 20); k++) {
+					ids.push(items[k].commentId || '');
+				}
+				console.log('[DEBUG] payload.items count=' + items.length + ', ids=[' + ids.join(',') + ']');
+				var replyIds = [];
+				for (var r = 0; r < Math.min(items.length, 10); r++) {
+					var replies = getReplyList(items[r]);
+					for (var s = 0; s < Math.min(replies.length, 5); s++) {
+						replyIds.push(replies[s].commentId || '');
+					}
+				}
+				if (replyIds.length) {
+					console.log('[DEBUG] replies ids=[' + replyIds.join(',') + ']');
+				}
 					console.log('[评论采集] 评论更新: ' + stats.total + ' (总数: ' + total + ')');
 					lastCommentCount = currentLoadedCount;
 					noChangeCount = 0;
-					updateProgressHint(stats.total, total, '已加载');
+					updateProgressHint(stats.total, total, '已加载----111',items);
 					var formatted = formatComments(items);
 					triggerSave(formatted, total);
 				} else {
@@ -2510,14 +2552,13 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 
 			var stats = getCommentStats(items);
 			var lastBuffer = payload.buffer || '';
-			var hasMore = !!lastBuffer;
 
-			console.log('[评论采集] 采集概况: 已加载' + stats.total + '/' + total + ' (一级:' + stats.topLevel + ', 二级:' + stats.replies + ') | hasMore:' + hasMore);
-			updateProgressHint(stats.total, total, hasMore ? '准备继续加载' : '已全部加载');
+			console.log('[评论采集] 采集概况: 已加载' + stats.total + '/' + total + ' (一级:' + stats.topLevel + ', 二级:' + stats.replies + ')');
+			updateProgressHint(stats.total, total, stats.total < total ? '准备继续加载' : '已全部加载');
 
 			var formatted = formatComments(items);
 
-			if (hasMore || stats.total < total) {
+			if (stats.total < total) {
 				updateProgressHint(stats.total, total, '开始自动采集');
 				if (typeof __wx_log === 'function') {
 					__wx_log({ msg: '💬 已发现 ' + stats.total + '/' + total + ' 条评论，开始自动继续采集...' });
@@ -3879,6 +3920,8 @@ func (h *ScriptHandler) getFetchVideoCommentsScript() string {
 			var el = document.querySelector(selectors[si]);
 			if (el && el.offsetParent !== null) { panelOpened = true; break; }
 		}
+
+		// 如果评论区未打开，尝试点击打开
 		if (!panelOpened) {
 			var cBtns = document.querySelectorAll('[aria-label^="评论"]');
 			for (var ci = 0; ci < cBtns.length; ci++) {
@@ -3889,53 +3932,247 @@ func (h *ScriptHandler) getFetchVideoCommentsScript() string {
 			}
 		}
 
+		// 重新检测评论区是否打开（点击后可能已经打开）
+		if (!panelOpened) {
+			for (var si = 0; si < selectors.length; si++) {
+				var el = document.querySelector(selectors[si]);
+				if (el && el.offsetParent !== null) { panelOpened = true; break; }
+			}
+		}
+
+		// 获取评论数据
 		var payload = null;
 		var found = window.__sph_findFlowCommentListInStores ? window.__sph_findFlowCommentListInStores() : null;
 		if (found && window.__sph_extractStoreComments) {
 			payload = window.__sph_extractStoreComments(found.store || found);
 		}
 
-		var commentCount = 0;
 		var total = 0;
-		var buffer = '';
-		var hasMore = true; // 默认 true：数据未就绪时不误判退出，由平台数据决定是否真的还有更多
-		var formatted = [];
 
 		if (payload && payload.items && payload.items.length) {
-			commentCount = payload.items.length;
 			total = payload.total || 0;
-			buffer = payload.buffer || '';
-			hasMore = !!payload.hasMore;
-			formatted = (window.__sph_formatComments || function(x){return x;})(payload.items);
 		}
 
-		if (commentCount > 0) {
+		// 触发加载更多
+		if (payload && payload.items && payload.items.length > 0) {
 			var storeForMore = window.__sph_findFlowCommentListInStores ? window.__sph_findFlowCommentListInStores() : null;
 			if (storeForMore && window.__sph_tryTriggerStoreLoadMore) { window.__sph_tryTriggerStoreLoadMore(storeForMore.store || storeForMore); }
 			if (window.__sph_scrollCommentList) { window.__sph_scrollCommentList(); }
 			if (window.__sph_expandSecondaryComments) { window.__sph_expandSecondaryComments(); }
+			// 300ms 后再次尝试展开（可能有新的展开按钮出现）
+			setTimeout(function() {
+				if (window.__sph_expandSecondaryComments) { window.__sph_expandSecondaryComments(); }
+			}, 300);
 		}
 
-		// 计算当前已加载的评论总数（一级 + 已展开的二级）
-		var currentTotal = 0;
-		if (payload && payload.items) {
-			payload.items.forEach(function(item) {
-				currentTotal++;
-				if (item.levelTwoComment && Array.isArray(item.levelTwoComment)) {
-					currentTotal += item.levelTwoComment.length;
+		// 简单等待一下让数据加载完成（不阻塞事件循环）
+		var waitStartTime = Date.now();
+		while (Date.now() - waitStartTime < 300) {
+			var loopStart = Date.now();
+			while (Date.now() - loopStart < 50) {}  // 空循环延迟约 50ms
+		}
+
+		// 重新读取最新数据
+		var latestFound = window.__sph_findFlowCommentListInStores ? window.__sph_findFlowCommentListInStores() : null;
+		var latestPayload = null;
+		if (latestFound && window.__sph_extractStoreComments) {
+			latestPayload = window.__sph_extractStoreComments(latestFound.store || latestFound);
+			if (latestPayload && latestPayload.items && latestPayload.items.length > 0) {
+				payload = latestPayload;
+				total = latestPayload.total || total;
+			}
+		}
+
+		// 【快照方案 L1】计算增量评论
+		// extractStoreComments 是只读的，增量 ID 计算 + seen 更新全部在外部做
+		var incrementalRawItems = [];
+		var incrementalCount = 0;
+		if (payload && payload.newCommentIds && payload.newCommentIds.length > 0) {
+			// 增量 ID 列表（由 extractStoreComments 基于当前 seenCommentIds 计算）
+			var newIds = payload.newCommentIds;
+			// 建立 ID → 评论对象的映射
+			var idMap = {};
+			var allItems = payload.items || [];
+			for (var map_i = 0; map_i < allItems.length; map_i++) {
+				var mapItem = allItems[map_i];
+				var mapId = mapItem.commentId || mapItem.strCommentId || '';
+				if (mapId) idMap[mapId] = mapItem;
+				if (mapItem.levelTwoComment && Array.isArray(mapItem.levelTwoComment)) {
+					for (var map_j = 0; map_j < mapItem.levelTwoComment.length; map_j++) {
+						var mapL2 = mapItem.levelTwoComment[map_j];
+						var mapL2Id = mapL2.commentId || mapL2.strCommentId || '';
+						if (mapL2Id) idMap[mapL2Id] = mapL2;
+					}
 				}
-			});
+			}
+			// 用增量 ID 提取出真正的增量对象
+			var dedupSet = {};  // 用于增量 ID 去重（防止一级+二级评论 ID 冲突）
+			var incrementalRawItems = [];
+			for (var nid_i = 0; nid_i < newIds.length; nid_i++) {
+				var nid = newIds[nid_i];
+				if (idMap[nid] && !dedupSet[nid]) {
+					dedupSet[nid] = true;
+					incrementalRawItems.push(idMap[nid]);
+				}
+			}
+			incrementalCount = incrementalRawItems.length;
+
+			// 【关键】把增量 ID 加入 seen 集合，防止下次重复提取
+			if (!window.__sph_seenCommentIds) window.__sph_seenCommentIds = {};
+			for (var sid_i = 0; sid_i < newIds.length; sid_i++) {
+				window.__sph_seenCommentIds[newIds[sid_i]] = true;
+			}
+		}
+		// 增量格式化（只序列化新增评论，极大减少数据传输量）
+		var formattedIncremental = [];
+		if (incrementalRawItems.length > 0 && window.__sph_formatComments) {
+			formattedIncremental = window.__sph_formatComments(incrementalRawItems);
+		}
+
+		// 统计当前已加载的评论总数（用于记录快照）
+		var finalCurrentTotal = 0;
+		if (payload && payload.items) {
+			for (var ti = 0; ti < payload.items.length; ti++) {
+				finalCurrentTotal++;
+				if (payload.items[ti].levelTwoComment && Array.isArray(payload.items[ti].levelTwoComment)) {
+					finalCurrentTotal += payload.items[ti].levelTwoComment.length;
+				}
+			}
+		}
+
+		// 【快照方案 L3】是否还有更多可加载内容（基于 nextBuffer：有值=还能继续翻页）
+		var hasMore = !!(payload && payload.nextBuffer);
+
+		// 【快照方案 L3】提前退出条件：
+		// - 没有更多可加载的内容（hasMore=false）
+		// - 且本次没有新评论（incrementalCount=0）
+		// → 说明已经采集完毕，且没有新评论，直接返回空，跳过 loadMore
+		if (!hasMore && incrementalCount === 0) {
+			return {
+				panel_ready: true,
+				items: [],
+				total: total,
+				comment_count: 0,
+				current_total: finalCurrentTotal,
+				buffer: payload ? (payload.buffer || '') : '',
+				raw_items: [],
+				formatted_items: [],
+				incremental: 0,
+				has_more: false,
+				skipped_loadmore: true
+			};
+		}
+
+		// 【快照方案 L3 - 十万加优化】当 hasMore=true 但没有新评论时
+		// 说明 store 正在加载下一页（loadMore 刚触发还没返回）
+		// 等待一段时间让数据返回，避免无效轮询
+		if (hasMore && incrementalCount === 0) {
+			// 记录空结果次数
+			if (!window.__sph_empty_fetch_count) window.__sph_empty_fetch_count = 0;
+			window.__sph_empty_fetch_count++;
+
+			// 首次空结果：等待 300ms（正常的网络延迟）
+			// 连续空结果：指数退避，最大 1000ms
+			var waitTime = Math.min(300 * Math.pow(2, window.__sph_empty_fetch_count - 1), 1000);
+
+			var waitStart = Date.now();
+			while (Date.now() - waitStart < waitTime) {
+				var innerStart = Date.now();
+				while (Date.now() - innerStart < 50) {}
+			}
+
+			// 等待后重新读取最新数据
+			var reFound = window.__sph_findFlowCommentListInStores ? window.__sph_findFlowCommentListInStores() : null;
+			var rePayload = null;
+			if (reFound && window.__sph_extractStoreComments) {
+				rePayload = window.__sph_extractStoreComments(reFound.store || reFound);
+			}
+			if (rePayload && rePayload.items && rePayload.items.length > 0) {
+				payload = rePayload;
+				total = rePayload.total || total;
+
+				// 重新计算增量
+				var reNewIds = rePayload.newCommentIds || [];
+				var reIdMap = {};
+				var reAllItems = rePayload.items || [];
+				for (var rmi = 0; rmi < reAllItems.length; rmi++) {
+					var rmItem = reAllItems[rmi];
+					var rmId = rmItem.commentId || rmItem.strCommentId || '';
+					if (rmId) reIdMap[rmId] = rmItem;
+					if (rmItem.levelTwoComment && Array.isArray(rmItem.levelTwoComment)) {
+						for (var rmj = 0; rmj < rmItem.levelTwoComment.length; rmj++) {
+							var rmL2 = rmItem.levelTwoComment[rmj];
+							var rmL2Id = rmL2.commentId || rmL2.strCommentId || '';
+							if (rmL2Id) reIdMap[rmL2Id] = rmL2;
+						}
+					}
+				}
+				var reDedup = {};
+				incrementalRawItems = [];
+				for (var rni = 0; rni < reNewIds.length; rni++) {
+					var rnid = reNewIds[rni];
+					if (reIdMap[rnid] && !reDedup[rnid]) {
+						reDedup[rnid] = true;
+						incrementalRawItems.push(reIdMap[rnid]);
+					}
+				}
+				incrementalCount = incrementalRawItems.length;
+
+				// 更新 seen
+				if (!window.__sph_seenCommentIds) window.__sph_seenCommentIds = {};
+				for (var rsi = 0; rsi < reNewIds.length; rsi++) {
+					window.__sph_seenCommentIds[reNewIds[rsi]] = true;
+				}
+
+				// 重新统计
+				finalCurrentTotal = 0;
+				if (payload && payload.items) {
+					for (var rti = 0; rti < payload.items.length; rti++) {
+						finalCurrentTotal++;
+						if (payload.items[rti].levelTwoComment && Array.isArray(payload.items[rti].levelTwoComment)) {
+							finalCurrentTotal += payload.items[rti].levelTwoComment.length;
+						}
+					}
+				}
+				hasMore = !!(payload && payload.nextBuffer);
+
+				// 重新格式化
+				if (incrementalRawItems.length > 0 && window.__sph_formatComments) {
+					formattedIncremental = window.__sph_formatComments(incrementalRawItems);
+				}
+
+				// 如果重试后仍无新评论但还有更多，保持继续等待
+				// 如果重试后有新评论，正常返回
+				if (incrementalCount > 0) {
+					window.__sph_empty_fetch_count = 0;  // 重置计数
+				}
+			}
+		} else {
+			// 有新评论，重置计数
+			window.__sph_empty_fetch_count = 0;
+		}
+
+		// 更新快照状态
+		window.__sph_last_comment_total = total;
+
+
+		// 【方案1修复】如果能获取到评论数据，就认为面板已就绪
+		if (payload && payload.items && payload.items.length > 0) {
+			panelOpened = true;
 		}
 
 		return {
 			panel_ready: panelOpened,
-			items: formatted,
+			items: [],
 			total: total,
-			comment_count: commentCount,
-			current_total: currentTotal,
+			comment_count: incrementalCount,
+			current_total: finalCurrentTotal,
+			buffer: payload ? (payload.buffer || '') : '',
+			raw_items: incrementalRawItems,
+			formatted_items: formattedIncremental,
+			incremental: incrementalCount,
 			has_more: hasMore,
-			buffer: buffer,
-			raw_items: payload && payload.items ? payload.items : []
+			skipped_loadmore: false
 		};
 	};
 

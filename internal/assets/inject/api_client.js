@@ -334,6 +334,11 @@ window.__wx_api_client = {
       this.handleCommand(msg.data);
     } else if (msg.type === 'pong') {
       this.lastHeartbeatTime = Date.now();
+    } else if (msg.type === 'ping') {
+      // 收到 Hub 的主动探测，回复 pong
+      this.ws.send(JSON.stringify({ type: 'pong' }));
+      this.lastHeartbeatTime = Date.now();
+      console.log('[API客户端] 💓 收到 Hub ping，已回复 pong');
     } else if (msg.type === 'task_progress' || msg.type === 'task_complete') {
       if (window.__wx_channels_search_task_collector) {
         window.__wx_channels_search_task_collector._onBackendMessage(msg);

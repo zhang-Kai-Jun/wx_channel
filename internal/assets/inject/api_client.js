@@ -547,7 +547,6 @@ window.__wx_api_client = {
 
         try {
           var result = window.__sph_fetch_video_comments({});
-          console.log('[API客户端] ★★★ 获取评论结果:', result ? result.comment_count + '条' : '空');
 
           // 通过 HTTP 回调把结果写入 Go 缓存（Node.js 轮询获取）
           window.__wx_api_client.sendFetchCommentsCallback(data.task_id || '', {
@@ -2705,15 +2704,6 @@ window.__wx_api_client = {
         raw_items: result.raw_items || []
       }
     };
-
-    console.log('[API客户端] ★★★ [诊断] sendFetchCommentsCallback 即将发送:');
-    console.log('[API客户端] ★★★ [诊断]   task_id:', taskID);
-    console.log('[API客户端] ★★★ [诊断]   success:', payload.success);
-    console.log('[API客户端] ★★★ [诊断]   panel_ready:', payload.result.panel_ready);
-    console.log('[API客户端] ★★★ [诊断]   comment_count:', payload.result.comment_count);
-    console.log('[API客户端] ★★★ [诊断]   has_more:', payload.result.has_more);
-    console.log('[API客户端] ★★★ [诊断]   raw_items 条数:', (payload.result.raw_items || []).length);
-    console.log('[API客户端] ★★★ [诊断]   POST 到:', callbackUrl);
 
     fetch(callbackUrl, {
       method: 'POST',

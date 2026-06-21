@@ -317,18 +317,18 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	// 通过 WebSocket 调用前端 DOM 操作 API
 	domReq := websocket.DOMActionBody{
-		Action:        req.Action,
-		Target:        req.Target,
-		Content:       req.Content,
-		Index:         req.Index,
-		URL:           req.URL,
-		TaskID:        req.TaskID,
-		ReplyContent:  req.ReplyContent,
-		TargetNum:     req.TargetNum,
-		TriggerWords:  req.TriggerWords,
-		IpFilter:      req.IpFilter,
-		TimeFilter:    req.TimeFilter,
-		BlockWords:    req.BlockWords,
+		Action:         req.Action,
+		Target:         req.Target,
+		Content:        req.Content,
+		Index:          req.Index,
+		URL:            req.URL,
+		TaskID:         req.TaskID,
+		ReplyContent:   req.ReplyContent,
+		TargetNum:      req.TargetNum,
+		TriggerWords:   req.TriggerWords,
+		IpFilter:       req.IpFilter,
+		TimeFilter:     req.TimeFilter,
+		BlockWords:     req.BlockWords,
 		DedupUsernames: req.DedupUsernames,
 	}
 
@@ -372,15 +372,15 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 			var wsResp struct {
 				Success bool `json:"success"`
 				Result  struct {
-					PanelReady   bool        `json:"panel_ready"`
-					Items        interface{} `json:"items"`
-					Total        int         `json:"total"`
-					CommentCount int         `json:"comment_count"`
-					CurrentTotal int         `json:"current_total"`
-					HasMore      bool        `json:"has_more"`
-					Buffer       string      `json:"buffer"`
-					RawItems     interface{} `json:"raw_items"`
-					LastCommentId string     `json:"last_comment_id"`
+					PanelReady    bool        `json:"panel_ready"`
+					Items         interface{} `json:"items"`
+					Total         int         `json:"total"`
+					CommentCount  int         `json:"comment_count"`
+					CurrentTotal  int         `json:"current_total"`
+					HasMore       bool        `json:"has_more"`
+					Buffer        string      `json:"buffer"`
+					RawItems      interface{} `json:"raw_items"`
+					LastCommentId string      `json:"last_comment_id"`
 				} `json:"result"`
 			}
 			if parseErr := json.Unmarshal(wsRespData, &wsResp); parseErr != nil {
@@ -388,16 +388,16 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 				return
 			}
 			h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
-				Success:        wsResp.Success,
-				PanelReady:     wsResp.Result.PanelReady,
-				Items:          wsResp.Result.Items,
-				Total:          wsResp.Result.Total,
-				CommentCount:   wsResp.Result.CommentCount,
-				CurrentTotal:   wsResp.Result.CurrentTotal,
-				HasMore:        wsResp.Result.HasMore,
-				Buffer:         wsResp.Result.Buffer,
-				RawItems:       wsResp.Result.RawItems,
-				ReceivedAt:     time.Now().Unix(),
+				Success:      wsResp.Success,
+				PanelReady:   wsResp.Result.PanelReady,
+				Items:        wsResp.Result.Items,
+				Total:        wsResp.Result.Total,
+				CommentCount: wsResp.Result.CommentCount,
+				CurrentTotal: wsResp.Result.CurrentTotal,
+				HasMore:      wsResp.Result.HasMore,
+				Buffer:       wsResp.Result.Buffer,
+				RawItems:     wsResp.Result.RawItems,
+				ReceivedAt:   time.Now().Unix(),
 			})
 			utils.LogInfo("[DOMAction] 评论数据已写入缓存: task_id=%s, panel_ready=%v, comment_count=%d",
 				req.TaskID, wsResp.Result.PanelReady, wsResp.Result.CommentCount)
@@ -1025,17 +1025,17 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 
 	// 存储到 Hub 的缓存
 	h.domActionHub.SetFetchCommentsResult(payload.TaskID, &websocket.FetchCommentsData{
-		Success:       payload.Success,
-		Message:       payload.Message,
-		PanelReady:    payload.Result.PanelReady,
-		Items:         payload.Result.Items,
-		Total:         payload.Result.Total,
-		CommentCount:  payload.Result.CommentCount,
-		CurrentTotal:  payload.Result.CurrentTotal,
-		HasMore:       payload.Result.HasMore,
-		Buffer:        payload.Result.Buffer,
-		RawItems:      payload.Result.RawItems,
-		ReceivedAt:    time.Now().Unix(),
+		Success:      payload.Success,
+		Message:      payload.Message,
+		PanelReady:   payload.Result.PanelReady,
+		Items:        payload.Result.Items,
+		Total:        payload.Result.Total,
+		CommentCount: payload.Result.CommentCount,
+		CurrentTotal: payload.Result.CurrentTotal,
+		HasMore:      payload.Result.HasMore,
+		Buffer:       payload.Result.Buffer,
+		RawItems:     payload.Result.RawItems,
+		ReceivedAt:   time.Now().Unix(),
 	})
 
 	utils.LogInfo("[FetchCommentsCallback] 收到评论采集结果: task_id=%s, success=%v, panel_ready=%v, comment_count=%d",
@@ -1089,16 +1089,16 @@ func (h *APIHandler) HandleGetFetchCommentsResult(Conn *SunnyNet.HttpConn) {
 	var responseData map[string]interface{}
 	if result != nil {
 		responseData = map[string]interface{}{
-			"success":        result.Success,
-			"message":        result.Message,
-			"panel_ready":    result.PanelReady,
-			"items":          result.Items,
-			"total":          result.Total,
-			"comment_count":  result.CommentCount,
-			"current_total":  result.CurrentTotal,
-			"has_more":       result.HasMore,
-			"buffer":         result.Buffer,
-			"raw_items":      result.RawItems,
+			"success":       result.Success,
+			"message":       result.Message,
+			"panel_ready":   result.PanelReady,
+			"items":         result.Items,
+			"total":         result.Total,
+			"comment_count": result.CommentCount,
+			"current_total": result.CurrentTotal,
+			"has_more":      result.HasMore,
+			"buffer":        result.Buffer,
+			"raw_items":     result.RawItems,
 		}
 	} else {
 		responseData = map[string]interface{}{

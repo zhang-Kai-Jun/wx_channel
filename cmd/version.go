@@ -12,10 +12,11 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "打印版本信息",
 	Run: func(cmd *cobra.Command, args []string) {
-		color.White("wx_channel v%s", version.Current)
+		color.White("wx_channel %s", version.GetVersionString())
 		color.White("Go Version: %s", runtime.Version())
 		color.White("OS/Arch: %s/%s", runtime.GOOS, runtime.GOARCH)
-		color.White("Build Date: %s", version.GetVersionString())
+		color.White("Build Date: %s", version.BuildDateOrUnknown())
+		color.White("Git Commit: %s", version.BuildCommitOrUnknown())
 	},
 }
 

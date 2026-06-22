@@ -1,9 +1,10 @@
 package cmd
 
 import (
-	"fmt"
+	"runtime"
 	"wx_channel/internal/version"
 
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -11,7 +12,11 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "打印版本信息",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("wx_channel v%s\n", version.Current)
+		color.White("wx_channel %s", version.GetVersionString())
+		color.White("Go Version: %s", runtime.Version())
+		color.White("OS/Arch: %s/%s", runtime.GOOS, runtime.GOARCH)
+		color.White("Build Date: %s", version.BuildDateOrUnknown())
+		color.White("Git Commit: %s", version.BuildCommitOrUnknown())
 	},
 }
 

@@ -35,8 +35,8 @@ type Hub struct {
 	// 【新增】正在执行导航操作的客户端
 	// CallAPI("open_profile"/"enter_video") 时记录，页面切换完成后由 JS 通知清除
 	// 用于 waitForPageReady 正确查询执行导航的那个客户端的 pagePath
-	navigatingClient     *Client
-	navigatingClientMu   sync.RWMutex
+	navigatingClient   *Client
+	navigatingClientMu sync.RWMutex
 
 	// 精准匹配任务结果缓存（taskID → result）
 	matchingResults   map[string]map[string]interface{}
@@ -120,6 +120,33 @@ func (h *Hub) Run() {
 // RegisterClient 注册新客户端
 func (h *Hub) RegisterClient(client *Client) {
 	h.register <- client
+}
+
+// ProbeAllClients 主动探测所有客户端，发送 ping 并等待 pong
+// 死客户端会在发送失败后被清理，返回探测到的存活客户端数量
+func (h *Hub) ProbeAllClients() int {
+	h.mu.RLock()
+	clients := make([]*Client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	sentCount := 0
+	for _, client := range clients {
+		msg := WSMessage{Type: WSMessageTypePing, Data: json.RawMessage(`{}`)}
+		data, _ := json.Marshal(msg)
+		if err := client.Send(data); err != nil {
+			utils.LogWarn("[Hub] 探测发送失败，标记为死客户端: %s, err=%v", client.ID, err)
+			// 发送失败，强制关闭连接，让 ReadPump 处理 unregister
+			client.Close()
+		} else {
+			sentCount++
+		}
+	}
+
+	utils.LogInfo("[Hub] ProbeAllClients: 探测 %d 个客户端", sentCount)
+	return sentCount
 }
 
 // GetClient 获取一个可用的客户端（使用负载均衡选择器）
@@ -941,29 +968,29 @@ func (h *Hub) GetMatchingProgress(taskID string) map[string]interface{} {
 // FetchCommentsData 评论采集结果数据结构
 type FetchCommentsData struct {
 	Success      bool        `json:"success"`
-	Message     string      `json:"message"`
-	PanelReady  bool        `json:"panel_ready"`
-	Items       interface{} `json:"items"`
-	Total       int         `json:"total"`
-	CommentCount int        `json:"comment_count"`
-	CurrentTotal int        `json:"current_total"`
-	HasMore     bool        `json:"has_more"`
-	Buffer      string      `json:"buffer"`
-	RawItems    interface{} `json:"raw_items"`
-	ReceivedAt  int64       `json:"received_at"`
+	Message      string      `json:"message"`
+	PanelReady   bool        `json:"panel_ready"`
+	Items        interface{} `json:"items"`
+	Total        int         `json:"total"`
+	CommentCount int         `json:"comment_count"`
+	CurrentTotal int         `json:"current_total"`
+	HasMore      bool        `json:"has_more"`
+	Buffer       string      `json:"buffer"`
+	RawItems     interface{} `json:"raw_items"`
+	ReceivedAt   int64       `json:"received_at"`
 }
 
 // CommentSnapshotStatus 评论快照采集状态
 // 用于 Node.js 轮询等待浏览器完成采集
 type CommentSnapshotStatus struct {
-	Done         bool    `json:"done"`          // 采集是否完成
-	Success      bool    `json:"success"`        // 是否成功
-	TotalCount  int     `json:"total_count"`    // 评论总数
-	LoadedCount  int     `json:"loaded_count"`  // 已加载数
-	SnapshotPath string  `json:"snapshot_path"` // 快照文件路径（完成时才有）
-	Message     string  `json:"message"`         // 状态消息
-	Error       string  `json:"error"`          // 错误信息
-	UpdatedAt   int64   `json:"updated_at"`     // 更新时间戳
+	Done         bool   `json:"done"`          // 采集是否完成
+	Success      bool   `json:"success"`       // 是否成功
+	TotalCount   int    `json:"total_count"`   // 评论总数
+	LoadedCount  int    `json:"loaded_count"`  // 已加载数
+	SnapshotPath string `json:"snapshot_path"` // 快照文件路径（完成时才有）
+	Message      string `json:"message"`       // 状态消息
+	Error        string `json:"error"`         // 错误信息
+	UpdatedAt    int64  `json:"updated_at"`    // 更新时间戳
 }
 
 // SetFetchCommentsResult 设置 fetch_video_comments 结果

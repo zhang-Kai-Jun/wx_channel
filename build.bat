@@ -194,7 +194,7 @@ echo [5/6] Compiling video_channel.exe ...
 REM Project depends on SunnyNet (C library), CGO is required.
 REM ldflags combined into a single line to avoid host (MSYS/PowerShell) ^ line-continuation quirks.
 set CGO_ENABLED=1
-go build -trimpath -ldflags "-s -w -H windowsgui -extldflags=-Wl,--allow-multiple-definition -X wx_channel/internal/version.Current=%VERSION% -X wx_channel/internal/version.BuildDate=%BUILD_DATE% -X wx_channel/internal/version.BuildCommit=%GIT_COMMIT%" -o video_channel.exe
+go build -trimpath -ldflags "-s -w -extldflags=-Wl,--allow-multiple-definition -X wx_channel/internal/version.Current=%VERSION% -X wx_channel/internal/version.BuildDate=%BUILD_DATE% -X wx_channel/internal/version.BuildCommit=%GIT_COMMIT%" -o video_channel.exe
 if errorlevel 1 (
     echo [ERROR] Compilation failed.
     goto fail

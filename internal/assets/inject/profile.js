@@ -480,6 +480,103 @@ window.__wx_channels_profile_collector = {
 
       console.log('[Profile] ✅ DOM 按钮已注入到操作区');
 
+      // ===== 复制链接按钮 =====
+      if (container.querySelector('#wx-profile-copy-link-btn')) {
+        console.log('[Profile] ✅ 复制链接按钮已存在');
+      } else {
+        var copyLinkButton = document.createElement('button');
+        copyLinkButton.id = 'wx-profile-copy-link-btn';
+        copyLinkButton.type = 'button';
+
+        if (__wx_is_account_like_page__()) {
+          copyLinkButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+          copyLinkButton.style.marginLeft = '8px';
+          copyLinkButton.style.background = 'transparent';
+          copyLinkButton.style.color = 'inherit';
+          copyLinkButton.style.borderColor = 'transparent';
+          copyLinkButton.style.flexShrink = '0';
+          copyLinkButton.style.opacity = '0.88';
+          copyLinkButton.title = '主页链接';
+          copyLinkButton.textContent = '复制链接';
+          copyLinkButton.onmouseenter = function () {
+            copyLinkButton.style.opacity = '1';
+          };
+          copyLinkButton.onmouseleave = function () {
+            copyLinkButton.style.opacity = '0.88';
+          };
+        } else {
+          copyLinkButton.className = 'weui-btn_default relative flex h-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-md text-sm';
+          copyLinkButton.style.width = '80px';
+          copyLinkButton.style.marginLeft = '8px';
+          copyLinkButton.title = '主页链接';
+          copyLinkButton.textContent = '复制链接';
+        }
+
+        copyLinkButton.onclick = function () {
+          var profileUrl = window.location.origin + '/web/pages/profile?username=' + (new URL(window.location.href).searchParams.get('username') || '');
+          console.log('[Profile] 复制链接:', profileUrl);
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            console.log('[Profile] 使用 clipboard API 复制');
+            navigator.clipboard.writeText(profileUrl).then(function () {
+              console.log('[Profile] clipboard API 复制成功');
+              __wx_log({ msg: '已复制: ' + profileUrl });
+              __show_copy_toast('已复制: ' + profileUrl);
+            }).catch(function (e) {
+              console.log('[Profile] clipboard API 失败，降级:', e);
+              __fallback_copy(profileUrl);
+            });
+          } else {
+            console.log('[Profile] clipboard API 不可用，使用降级方案');
+            __fallback_copy(profileUrl);
+          }
+        };
+
+        function __show_copy_toast(msg) {
+          var existing = document.getElementById('wx-profile-copy-toast');
+          if (existing) existing.remove();
+          var toast = document.createElement('div');
+          toast.id = 'wx-profile-copy-toast';
+          toast.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);z-index:99999;background:rgba(0,0,0,0.8);color:#fff;padding:12px 20px;border-radius:8px;font-size:14px;max-width:90%;word-break:break-all;';
+          toast.textContent = msg;
+          document.body.appendChild(toast);
+          setTimeout(function () {
+            toast.style.opacity = '0';
+            toast.style.transition = 'opacity 0.5s';
+            setTimeout(function () { toast.remove(); }, 500);
+          }, 3000);
+        }
+
+        function __fallback_copy(text) {
+          var textArea = document.createElement('textarea');
+          textArea.value = text;
+          textArea.style.cssText = 'position:fixed;left:-9999px;top:0';
+          document.body.appendChild(textArea);
+          textArea.select();
+          try {
+            document.execCommand('copy');
+            __wx_log({ msg: '已复制: ' + text });
+            __show_copy_toast('已复制: ' + text);
+          } catch (err) {
+            __wx_log({ msg: '复制失败，请手动复制' });
+            __show_copy_toast('复制失败，请手动复制');
+          }
+          document.body.removeChild(textArea);
+        }
+
+        if (__wx_is_account_like_page__()) {
+          container.appendChild(copyLinkButton);
+        } else {
+          var shopWrapperCopy = container.querySelector('.shop-btn__wrp');
+          if (shopWrapperCopy && shopWrapperCopy.parentNode === container) {
+            container.insertBefore(copyLinkButton, shopWrapperCopy);
+          } else {
+            container.appendChild(copyLinkButton);
+          }
+        }
+
+        console.log('[Profile] ✅ 复制链接按钮已注入到操作区');
+      }
+
       // ===== 关闭页面按钮 =====
       if (container.querySelector('#wx-profile-close-btn')) {
         console.log('[Profile] ✅ 关闭页面按钮已存在');

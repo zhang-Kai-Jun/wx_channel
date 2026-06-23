@@ -12,8 +12,7 @@ REM
 REM  Usage:
 REM    build.bat                          Default build (uses version.go Current)
 REM    build.bat -v 1.3.0                 Override version (does NOT write back to version.go)
-REM    build.bat --no-winres              Skip resource embedding (not recommended)
-REM    build.bat --keep-open              Keep window open after build
+REM    build.bat --upload                 Build and upload zip to remote bucket
 REM ============================================================
 
 setlocal EnableDelayedExpansion
@@ -21,16 +20,17 @@ chcp 65001 >nul
 
 REM ---------- Default arguments ----------
 set "VERSION="
-set "SKIP_WINRES=0"
-set "KEEP_OPEN=0"
+set "DO_UPLOAD=0"
+
+REM ---------- Remote upload config ----------
+set "UPLOAD_BUCKET=tos://crmspark/plus/video_channel.zip"
 
 REM ---------- Parse command line ----------
 :parse_args
 if "%~1"=="" goto parse_done
 if /i "%~1"=="-v"          ( set "VERSION=%~2" & shift & shift & goto parse_args )
 if /i "%~1"=="--version"   ( set "VERSION=%~2" & shift & shift & goto parse_args )
-if /i "%~1"=="--no-winres" ( set "SKIP_WINRES=1" & shift & goto parse_args )
-if /i "%~1"=="--keep-open" ( set "KEEP_OPEN=1" & shift & goto parse_args )
+if /i "%~1"=="--upload"    ( set "DO_UPLOAD=1"  & shift & goto parse_args )
 shift
 goto parse_args
 
@@ -65,6 +65,9 @@ echo.
 echo   [Sync targets]
 echo     - winres\winres.json  (Windows resource: FileVersion / ProductVersion)
 echo     - Go ldflags          (runtime: video_channel.exe version)
+if "%DO_UPLOAD%"=="1" (
+echo     - Upload to bucket    (!UPLOAD_BUCKET!)
+)
 echo.
 
 REM ---------- 1. Clean ----------
@@ -73,6 +76,7 @@ if exist wx_channel.exe          del /f /q wx_channel.exe
 if exist video_channel.exe        del /f /q video_channel.exe
 if exist rsrc_windows_amd64.syso del /f /q rsrc_windows_amd64.syso
 if exist rsrc_windows_arm64.syso del /f /q rsrc_windows_arm64.syso
+if exist video_channel.zip        del /f /q video_channel.zip
 echo       OK
 echo.
 
@@ -92,8 +96,7 @@ if not errorlevel 1 (
     if exist "%USERPROFILE%\go\bin\go-winres.exe" set "WINRES_PATH=%USERPROFILE%\go\bin\go-winres.exe"
 )
 
-if "%SKIP_WINRES%"=="1" goto after_winres_install
-if defined WINRES_PATH goto have_winres
+if defined WINRES_PATH goto after_winres_install
 
 echo       go-winres not found, installing...
 go install github.com/tc-hib/go-winres@latest
@@ -115,33 +118,30 @@ echo.
 REM ---------- 3. Sync winres.json version + generate resource ----------
 REM   Temporarily rewrite the 4 version fields in winres.json to %VERSION%,
 REM   then run go-winres make, then restore. Keeps git working tree clean.
-if "%SKIP_WINRES%"=="1" (
-    echo [3/6] Skipped ^(--no-winres^)
-) else (
-    echo [3/6] Syncing winres.json version to %VERSION% ...
-    set "WINRES_BACKUP="
-    set "WINRES_RESTORE=0"
-    if exist "winres\winres.json" (
-        REM Back up to a temp file; use a random suffix to avoid conflicts
-        set "WINRES_BACKUP=winres\winres.json.buildbak.%RANDOM%"
-        copy /y "winres\winres.json" "!WINRES_BACKUP!" >nul
-        if errorlevel 1 (
-            echo [ERROR] Failed to back up winres.json.
-            goto fail
-        )
-        set "WINRES_RESTORE=1"
+echo [3/6] Syncing winres.json version to %VERSION% ...
+set "WINRES_BACKUP="
+set "WINRES_RESTORE=0"
+if exist "winres\winres.json" (
+    REM Back up to a temp file; use a random suffix to avoid conflicts
+    set "WINRES_BACKUP=winres\winres.json.buildbak.%RANDOM%"
+    copy /y "winres\winres.json" "!WINRES_BACKUP!" >nul
+    if errorlevel 1 (
+        echo [ERROR] Failed to back up winres.json.
+        goto fail
     )
+    set "WINRES_RESTORE=1"
+)
 
-    if "!WINRES_RESTORE!"=="1" (
-        REM Use PowerShell to rewrite the 4 version fields in-place, other content unchanged.
-        REM CRITICAL 1: Get-Content MUST use -Encoding UTF8. On Windows with non-ASCII
-        REM system codepage (e.g. GBK), the default encoding decodes UTF-8 bytes like
-        REM C2 A9 (the (c) symbol) as the wrong character (U+6F0F = "漏"), which then
-        REM ends up in the EXE's PE resources.
-        REM CRITICAL 2: must write JSON WITHOUT BOM - go-winres uses Go's strict json
-        REM parser which rejects UTF-8 BOM. Set-Content -Encoding utf8 always writes BOM,
-        REM so we use [System.IO.File]::WriteAllText with UTF8Encoding($false).
-        powershell -NoProfile -Command ^
+if "!WINRES_RESTORE!"=="1" (
+    REM Use PowerShell to rewrite the 4 version fields in-place, other content unchanged.
+    REM CRITICAL 1: Get-Content MUST use -Encoding UTF8. On Windows with non-ASCII
+    REM system codepage (e.g. GBK), the default encoding decodes UTF-8 bytes like
+    REM C2 A9 (the (c) symbol) as the wrong character (U+6F0F = "漏"), which then
+    REM ends up in the EXE's PE resources.
+    REM CRITICAL 2: must write JSON WITHOUT BOM - go-winres uses Go's strict json
+    REM parser which rejects UTF-8 BOM. Set-Content -Encoding utf8 always writes BOM,
+    REM so we use [System.IO.File]::WriteAllText with UTF8Encoding($false).
+    powershell -NoProfile -Command ^
             "$v = '%VERSION%'; $p = 'winres\winres.json'; $e = New-Object System.Text.UTF8Encoding($false); $j = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json; $j.RT_MANIFEST.'#1'.'0409'.identity.version = $v; $j.RT_VERSION.'#1'.'0000'.fixed.file_version = $v; $j.RT_VERSION.'#1'.'0000'.fixed.product_version = $v; $j.RT_VERSION.'#1'.'0000'.info.'0409'.FileVersion = $v; $j.RT_VERSION.'#1'.'0000'.info.'0409'.ProductVersion = $v; [System.IO.File]::WriteAllText($p, ($j | ConvertTo-Json -Depth 12), $e)" >nul 2>&1
         if errorlevel 1 (
             echo [ERROR] Failed to sync winres.json.
@@ -149,25 +149,22 @@ if "%SKIP_WINRES%"=="1" (
             goto fail
         )
         echo       OK ^(temporarily modified, will be restored after build^)
-    ) else (
-        echo       [WARN] winres.json not found, skipping version sync.
-    )
+)
 
-    echo [3/6] Generating Windows resource file ^(rsrc_windows_amd64.syso^)...
-    "%WINRES_PATH%" make
-    if errorlevel 1 (
-        echo [ERROR] Resource generation failed.
-        if "!WINRES_RESTORE!"=="1" copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
-        goto fail
-    )
-    echo       OK
+echo [3.5/6] Generating Windows resource file ^(rsrc_windows_amd64.syso^)...
+"%WINRES_PATH%" make
+if errorlevel 1 (
+    echo [ERROR] Resource generation failed.
+    if "!WINRES_RESTORE!"=="1" copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
+    goto fail
+)
+echo       OK
 
-    REM Restore winres.json, keep git working tree clean
-    if "!WINRES_RESTORE!"=="1" (
-        copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
-        del /f /q "!WINRES_BACKUP!" >nul 2>&1
-        echo       winres.json restored ^(git working tree clean^)
-    )
+REM Restore winres.json, keep git working tree clean
+if "!WINRES_RESTORE!"=="1" (
+    copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
+    del /f /q "!WINRES_BACKUP!" >nul 2>&1
+    echo       winres.json restored ^(git working tree clean^)
 )
 echo.
 
@@ -212,12 +209,11 @@ for %%I in (video_channel.exe) do echo       File size: %%~zI bytes
 echo.
 echo       CLI version info:
 echo.
-.\video_channel.exe version
+for /f "delims=" %%V in ('powershell -NoProfile -Command "Start-Process -FilePath 'video_channel.exe' -ArgumentList 'version' -Wait -NoNewWindow -RedirectStandardOutput '%TEMP%\vc_version_out.txt' -ErrorAction SilentlyContinue; Get-Content '%TEMP%\vc_version_out.txt' -ErrorAction SilentlyContinue"') do echo %%V
+echo.
 echo.
 
 REM Verify Windows resource is embedded
-if "%SKIP_WINRES%"=="1" goto skip_res_check
-
 echo       Windows resource info ^(Properties ^> Details^):
 echo.
 for /f "tokens=*" %%V in ('powershell -NoProfile -Command "(Get-Item 'video_channel.exe').VersionInfo.FileVersion"     2^>nul') do set "FV=%%V"
@@ -243,17 +239,58 @@ if /i not "!FV!"=="%VERSION%" (
     echo       [OK] Windows resource version matches version.go.
 )
 
-:skip_res_check
 echo.
+
+REM ---------- 7. Upload ----------
+if "%DO_UPLOAD%"=="1" (
+    echo [7/7] Packaging and uploading to bucket...
+
+    REM Retry zip creation up to 5 times with wait between attempts.
+    set "ZIP_RETRY=0"
+    :zip_retry
+    powershell -NoProfile -Command "try { Compress-Archive -Force -Path 'video_channel.exe' -DestinationPath 'video_channel.zip' -ErrorAction Stop; exit 0 } catch { Write-Host '[retry]'; exit 1 }"
+    if errorlevel 1 (
+        set /a ZIP_RETRY+=1
+        if !ZIP_RETRY! lss 5 (
+            echo       Zip attempt !ZIP_RETRY! failed ^(file in use^), waiting...
+            powershell -NoProfile -Command "Start-Sleep -Seconds 3"
+            goto zip_retry
+        )
+        echo [ERROR] Failed to create zip after 5 attempts.
+        goto fail
+    )
+    if not exist video_channel.zip (
+        set /a ZIP_RETRY+=1
+        if !ZIP_RETRY! lss 5 (
+            echo       Zip attempt !ZIP_RETRY! failed ^(not found^), waiting...
+            powershell -NoProfile -Command "Start-Sleep -Seconds 3"
+            goto zip_retry
+        )
+        echo [ERROR] Zip file not found after 5 attempts.
+        goto fail
+    )
+    echo       Zip created: video_channel.zip
+    for %%I in (video_channel.zip) do echo       Size: %%~zI bytes
+    echo.
+
+    if exist video_channel.zip (
+        echo       Uploading to !UPLOAD_BUCKET!...
+        tosutil cp video_channel.zip "!UPLOAD_BUCKET!"
+        if errorlevel 1 (
+            echo [ERROR] Upload failed.
+            goto fail
+        )
+        echo       Uploaded: !UPLOAD_BUCKET!
+    ) else (
+        echo [ERROR] video_channel.zip not found, skipping upload.
+    )
+    echo       OK
+    echo.
+)
+
 echo ========================================
 echo   Build complete: video_channel.exe
 echo ========================================
-
-if "%KEEP_OPEN%"=="1" (
-    echo.
-    echo ^(Window will stay open, press any key to close...^)
-    pause ^>nul
-)
 
 endlocal & exit /b 0
 

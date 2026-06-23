@@ -238,6 +238,8 @@ var WXU = (() => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params),
+    }).catch(function (e) {
+      console.warn("[log] fetch failed:", e);
     });
   }
 

@@ -664,6 +664,8 @@ window.__wx_channels_profile_collector = {
           scrollButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">滚动列表</div>';
         }
 
+        scrollButton.style.display = 'none';
+
         scrollButton.onclick = function () {
           __wx_channels_scroll_and_count_cards();
         };

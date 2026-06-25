@@ -483,6 +483,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '采集评论',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.85 18.825L3 20.1l1.275-3.85A7.95 7.95 0 0 1 4 14.15c0-4.28 3.57-7.75 8-7.75s8 3.47 8 7.75-3.57 7.75-8 7.75c-.73 0-1.44-.1-2.1-.3a8.23 8.23 0 0 1-3.05-1.775Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
     );
+    commentIconWrapper.style.display = 'none';
 
     commentIconWrapper.onclick = function () {
       __start_feed_comment_collection_with_open_panel();
@@ -568,6 +569,8 @@ async function __insert_download_btn_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>'
     );
 
+    domIconWrapper.style.display = 'none';
+
     domIconWrapper.onclick = function () {
       try {
         // 获取完整HTML
@@ -607,6 +610,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '下载视频',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>'
     );
+    downloadIconWrapper.style.display = 'none';
 
     downloadIconWrapper.onclick = function () {
       __handle_feed_download_click();
@@ -618,6 +622,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '导出CSV',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M8 3.75h5.25L18 8.5v11.75H8c-1.1 0-2-.9-2-2V5.75c0-1.1.9-2 2-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M13 3.75V8.5h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M9.5 12.5h5M9.5 15.5h5M9.5 18.5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>'
     );
+    exportIconWrapper.style.display = 'none';
 
     exportIconWrapper.onclick = function () { 
       __handle_export_click();
@@ -630,6 +635,8 @@ async function __insert_download_btn_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h6M9 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
     );
 
+    storeSnapshotIconWrapper.style.display = 'none';
+
     storeSnapshotIconWrapper.onclick = function () {
       dumpAllPiniaStores();
     };
@@ -640,6 +647,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '评论快照',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h6M9 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="17" cy="17" r="4" fill="currentColor"/></svg>'
     );
+    commentSnapshotIconWrapper.style.display = 'none';
 
     commentSnapshotIconWrapper.onclick = function () {
       var originalWxLog = typeof __wx_log === 'function' ? __wx_log : null;
@@ -677,6 +685,7 @@ async function __insert_download_btn_to_feed_toolbar() {
       '评论总数',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 20v-8m0 0V4m0 8h8m-8 0H4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     );
+    commentCountIconWrapper.style.display = 'none';
 
     commentCountIconWrapper.onclick = function () {
       var commentCount = 0;

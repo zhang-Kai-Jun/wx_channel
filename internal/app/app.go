@@ -143,7 +143,7 @@ func (app *App) Run() {
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-signalChan
-		color.Red("\n正在关闭服务...%v\n\n", sig)
+		// color.Red("\n正在关闭服务...%v\n\n", sig)
 		utils.LogSystemShutdown(fmt.Sprintf("收到信号: %v", sig))
 		database.Close()
 		if os_env == "darwin" {
@@ -267,7 +267,7 @@ func (app *App) Run() {
 
 	// 2. 立即渲染界面面板 (不再受网络连接阻塞)
 	utils.PrintSeparator()
-	color.Blue("📡 服务状态信息")
+	// color.Blue("📡 服务状态信息")
 	utils.PrintSeparator()
 	utils.PrintLabelValue("⏳", "服务状态", "已启动")
 	utils.PrintLabelValue("🔌", "代理端口", app.Port)
@@ -307,7 +307,7 @@ func (app *App) Run() {
 			if ok := app.Sunny.StartProcess(); ok {
 				utils.Info("✓ 视频号引擎已就绪 (WeChatAppEx.exe)")
 			} else {
-				utils.Warn("⚠️ 注入引擎启动失败：可能需要 [管理员权限] 才能在视频号内显示按钮")
+				// utils.Warn("⚠️ 注入引擎启动失败：可能需要 [管理员权限] 才能在视频号内显示按钮")
 			}
 		}
 
@@ -325,7 +325,7 @@ func (app *App) Run() {
 		}
 
 		if _, err := client.Get("https://sunny.io/"); err != nil {
-			utils.Warn("💡 注意：代理自检未通过")
+			// utils.Warn("💡 注意：代理自检未通过")
 		} else {
 			utils.Info("✓ 证书与网络链路正常")
 		}
@@ -458,7 +458,7 @@ func (app *App) startWebSocketServer(wsPort int) {
 
 	utils.Info("🔌 WebSocket服务已启动，端口: %d", wsPort)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		utils.Warn("WebSocket服务启动失败: %v", err)
+		// utils.Warn("WebSocket服务启动失败: %v", err)
 	}
 }
 

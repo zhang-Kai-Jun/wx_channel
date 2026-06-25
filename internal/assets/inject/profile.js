@@ -514,6 +514,7 @@ window.__wx_channels_profile_collector = {
         button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">批量下载</div>';
       }
 
+      button.style.display = 'none';
       // 点击事件 - 显示/隐藏批量下载面板
       button.onclick = async function () {
         // 使用通用批量下载组件
@@ -592,6 +593,7 @@ window.__wx_channels_profile_collector = {
         domButton.title = '获取当前页面 DOM';
         domButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">11获取DOM</div>';
       }
+      domButton.style.display = 'none';
 
       // 点击事件 - 下载 DOM
       domButton.onclick = function () {
@@ -661,6 +663,8 @@ window.__wx_channels_profile_collector = {
           scrollButton.title = '滚动并采集卡片列表';
           scrollButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">滚动列表</div>';
         }
+
+        scrollButton.style.display = 'none';
 
         scrollButton.onclick = function () {
           __wx_channels_scroll_and_count_cards();
@@ -825,6 +829,7 @@ window.__wx_channels_profile_collector = {
         closeButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">关闭</div>';
       }
 
+      closeButton.style.display = 'none';
       closeButton.onclick = function () {
         __close_page__();
       };

@@ -876,65 +876,87 @@ window.__wx_api_client = {
         }
         if (body.action === 'enter_video') {
           // enter_video 也会导致页面跳转，通过 HTTP 回调确保响应快速到达
-          var cachedCard = window.__wx_cached_cards && window.__wx_cached_cards[body.index];
-          var videoTitle = cachedCard ? _normalizeText(cachedCard.videoTitle) : '';
+          // 优先使用作者页缓存（target=author），否则使用搜索页缓存
+          var isAuthorTarget = body.target === 'author';
+          var cachedCard = isAuthorTarget
+            ? (window.__wx_author_cached_cards && window.__wx_author_cached_cards[body.index])
+            : (window.__wx_cached_cards && window.__wx_cached_cards[body.index]);
+          var videoTitle = cachedCard ? _normalizeText(cachedCard.videoTitle || cachedCard.title) : '';
           this.sendResponseViaHTTP(id, { success: true, message: '已进入视频页面', videoTitle: videoTitle });
 
           // 延迟执行点击
           var self = this;
           setTimeout(function() {
             var cardIndex = body.index || 0;
-            console.log('[API客户端] enter_video 开始, index:', cardIndex);
+            console.log('[API客户端] enter_video 开始, index:', cardIndex, ', target:', body.target);
 
             var validCards = [];
 
-            // 策略：在"动态"区块内获取卡片
-            var dongtaiBlock = null;
-            var resBlocks = document.querySelectorAll('.res-block');
+            // ========== 作者页目标（target=author）：从 .card-grid 中获取卡片 ==========
+            if (isAuthorTarget) {
+              var cardWrps = document.querySelectorAll('.card-grid .card-wrp');
+              console.log('[API客户端] 作者页找到 ' + cardWrps.length + ' 个卡片');
 
-            for (var rbi = 0; rbi < resBlocks.length; rbi++) {
-              var block = resBlocks[rbi];
-              var titleEl = block.querySelector('.block-title .title');
-              var titleText = titleEl ? (titleEl.innerText || '').trim() : '';
-
-              if (titleText === '动态') {
-                dongtaiBlock = block;
-                console.log('[API客户端] 找到"动态"区块');
-                break;
+              for (var ai = 0; ai < cardWrps.length; ai++) {
+                var cardWrp = cardWrps[ai];
+                var clickBox = cardWrp.querySelector('.click-box');
+                if (clickBox) {
+                  validCards.push(clickBox);
+                }
               }
+              console.log('[API客户端] 作者页有效卡片: ' + validCards.length);
             }
 
-            if (dongtaiBlock) {
-              var cardGrid = dongtaiBlock.querySelector('.card-grid');
-              if (cardGrid) {
-                var cardWrps = cardGrid.querySelectorAll(':scope > .card-wrp');
-                console.log('[API客户端] 动态区块找到 ' + cardWrps.length + ' 个卡片');
+            // ========== 搜索页目标：使用现有逻辑 ==========
+            if (!isAuthorTarget || validCards.length === 0) {
+              // 策略：在"动态"区块内获取卡片
+              var dongtaiBlock = null;
+              var resBlocks = document.querySelectorAll('.res-block');
 
-                for (var ci = 0; ci < cardWrps.length; ci++) {
-                  var cardWrp = cardWrps[ci];
-                  // 排除账号卡片和直播卡片
-                  if (cardWrp.querySelector('.account-card, [ml-key="search-account-card"], [ml-key="search-live-card"]')) {
-                    continue;
+              for (var rbi = 0; rbi < resBlocks.length; rbi++) {
+                var block = resBlocks[rbi];
+                var titleEl = block.querySelector('.block-title .title');
+                var titleText = titleEl ? (titleEl.innerText || '').trim() : '';
+
+                if (titleText === '动态') {
+                  dongtaiBlock = block;
+                  console.log('[API客户端] 找到"动态"区块');
+                  break;
+                }
+              }
+
+              if (dongtaiBlock) {
+                var cardGrid = dongtaiBlock.querySelector('.card-grid');
+                if (cardGrid) {
+                  var cardWrps = cardGrid.querySelectorAll(':scope > .card-wrp');
+                  console.log('[API客户端] 动态区块找到 ' + cardWrps.length + ' 个卡片');
+
+                  for (var ci = 0; ci < cardWrps.length; ci++) {
+                    var cardWrp = cardWrps[ci];
+                    // 排除账号卡片和直播卡片
+                    if (cardWrp.querySelector('.account-card, [ml-key="search-account-card"], [ml-key="search-live-card"]')) {
+                      continue;
+                    }
+                    // 找内层的 click-box
+                    var clickBox = cardWrp.querySelector('.click-box');
+                    if (clickBox) {
+                      validCards.push(clickBox);
+                    }
                   }
-                  // 找内层的 click-box
-                  var clickBox = cardWrp.querySelector('.click-box');
+                  console.log('[API客户端] 有效卡片: ' + validCards.length);
+                }
+              }
+
+              // 备用：直接获取所有 object-card 的 click-box
+              if (validCards.length === 0) {
+                var objectCards = document.querySelectorAll('.object-card');
+                console.log('[API客户端] 备用 object-card 找到 ' + objectCards.length + ' 个');
+                for (var oi = 0; oi < objectCards.length; oi++) {
+                  var card = objectCards[oi];
+                  var clickBox = card.closest('.click-box');
                   if (clickBox) {
                     validCards.push(clickBox);
                   }
-                }
-                console.log('[API客户端] 有效卡片: ' + validCards.length);
-              }
-            }
-
-            // 备用：直接获取所有 object-card 的 click-box
-            if (validCards.length === 0) {
-              var objectCards = document.querySelectorAll('.object-card');
-              console.log('[API客户端] 备用 object-card 找到 ' + objectCards.length + ' 个');
-              for (var oi = 0; oi < objectCards.length; oi++) {
-                var card = objectCards[oi];
-                var clickBox = card.closest('.click-box');
-                if (clickBox) {
-                  validCards.push(clickBox);
                 }
               }
             }
@@ -1463,6 +1485,145 @@ window.__wx_api_client = {
           videos: [],
           count: 0,
           message: '无缓存数据，请先执行 scroll_search_to_bottom'
+        };
+      }
+
+      // ========== 作者页操作 - 作者作品意向匹配 (task_type=2) ==========
+
+      // scroll_author_to_bottom - 单次步进滚动，返回当前 DOM 卡片数量
+      if (action === 'scroll_author_to_bottom') {
+        console.log('[API客户端] scroll_author_to_bottom 开始执行');
+
+        if (!window.location.pathname.includes('/pages/profile')) {
+          return { success: false, message: '当前不在作者页' };
+        }
+
+        // 确认视频 tab 处于激活状态
+        var activeTab = document.querySelector('.tabs .tab--active');
+        if (activeTab && !activeTab.textContent.includes('视频')) {
+          var allTabs = document.querySelectorAll('.tabs .tab');
+          var videoTab = null;
+          for (var ti = 0; ti < allTabs.length; ti++) {
+            if (allTabs[ti].textContent.includes('视频')) {
+              videoTab = allTabs[ti];
+              break;
+            }
+          }
+          if (videoTab) {
+            videoTab.click();
+            await new Promise(function(r) { setTimeout(r, 2000); });
+          }
+        }
+
+        // 多层兜底查找滚动容器
+        function findScrollableContainer() {
+          var candidates = [
+            document.querySelector('.page-profile > .content'),
+            document.querySelector('.page-profile'),
+            document.querySelector('.membership-content'),
+            document.querySelector('.membership-content__bd'),
+            document.documentElement,
+            document.body
+          ];
+          for (var ci = 0; ci < candidates.length; ci++) {
+            var el = candidates[ci];
+            if (el && el.scrollHeight > el.clientHeight) {
+              return el;
+            }
+          }
+          return document.querySelector('.page-profile > .content') || document.documentElement;
+        }
+
+        var scroller = findScrollableContainer();
+        var SCROLL_STEP = Math.floor(window.innerHeight * 0.8);
+
+        // 执行一次步进滚动
+        var prevTop = scroller.scrollTop;
+        var prevCards = document.querySelectorAll('.card-wrp').length;
+        scroller.scrollTop = prevTop + SCROLL_STEP;
+        window.scrollBy(0, SCROLL_STEP);
+
+        console.log('[API客户端] 滚动 ' + prevTop + ' -> ' + scroller.scrollTop + ', cards before: ' + prevCards);
+
+        // 等待加载（减少等待时间以减轻服务器压力）
+        await new Promise(function(res) { setTimeout(res, 500); });
+
+        var wc = 0;
+        while (wc < 10) {
+          var loading = scroller.querySelector('.loading, [class*="loading"], [class*="spinner"]');
+          if (!loading) break;
+          await new Promise(function(res) { setTimeout(res, 500); });
+          wc++;
+        }
+
+        var currentCards = document.querySelectorAll('.card-wrp').length;
+        var disabled = scroller.getAttribute('infinite-scroll-disabled');
+
+        console.log('[API客户端] scroll_author_to_bottom 返回: cards=' + currentCards + ', disabled=' + disabled);
+
+        return {
+          success: true,
+          totalCards: currentCards,
+          loaded: currentCards > prevCards,
+          noMore: disabled === 'true'
+        };
+      }
+
+      // fetch_author_video_cards - 采集作者页视频卡片列表
+      if (action === 'fetch_author_video_cards') {
+        console.log('[API客户端] fetch_author_video_cards 开始执行');
+
+        var cards = document.querySelectorAll('.card-grid .card-wrp');
+        if (!cards || cards.length === 0) {
+          console.log('[API客户端] 未找到作者页视频卡片');
+          return { success: false, videos: [], count: 0, message: '未找到视频卡片' };
+        }
+
+        console.log('[API客户端] 找到 ' + cards.length + ' 个作者页视频卡片');
+
+        var authorVideos = [];
+        cards.forEach(function(card, idx) {
+          var clickBox = card.querySelector('.click-box');
+
+          // 提取标题
+          var titleEl = card.querySelector('.title');
+          var title = titleEl ? (titleEl.getAttribute('title') || titleEl.textContent || '').trim() : '';
+
+          // 提取作者昵称
+          var nicknameEl = card.querySelector('.nickname');
+          var nickname = nicknameEl ? (nicknameEl.textContent || '').trim() : '';
+
+          // 提取统计数据（点赞/评论/转发）
+          var statsEl = card.querySelector('.stats, [class*="stats"]');
+          var statsText = statsEl ? (statsEl.textContent || '').trim() : '';
+
+          // 提取封面图
+          var coverEl = card.querySelector('.cover, [class*="cover"] img, video');
+          var coverUrl = '';
+          if (coverEl) {
+            coverUrl = coverEl.src || coverEl.getAttribute('data-src') || '';
+          }
+
+          authorVideos.push({
+            index: idx,
+            title: title,
+            nickname: nickname,
+            stats: statsText,
+            coverUrl: coverUrl,
+            clickable: !!clickBox
+          });
+        });
+
+        console.log('[API客户端] 解析出 ' + authorVideos.length + ' 个视频信息');
+
+        // 缓存供 enter_video 使用
+        window.__wx_author_cached_cards = authorVideos;
+
+        return {
+          success: true,
+          videos: authorVideos,
+          count: authorVideos.length,
+          message: '找到 ' + authorVideos.length + ' 个视频'
         };
       }
 

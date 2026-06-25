@@ -62,6 +62,170 @@ function __wx_normalize_compare_text__(text) {
     .trim();
 }
 
+// ==================== 滚动列表并统计卡片数量 ====================
+
+function __wx_channels_scroll_and_count_cards() {
+  var SCROLL_STEP = window.innerHeight * 0.8;
+  var SCROLL_INTERVAL = 1000;
+  var MAX_EMPTY = 10;
+  var MAX_TOTAL = 100;
+
+  var scrollCount = 0;
+  var emptyCount = 0;
+  var lastCount = 0;
+  var isRunning = false;
+  var debugInfo = [];
+
+  function dumpContainers() {
+    var selectors = [
+      { el: document.querySelector('.page-profile'), n: '.page-profile' },
+      { el: document.querySelector('.page-profile > .content'), n: '.page-profile > .content' },
+      { el: document.querySelector('.membership-content'), n: '.membership-content' },
+      { el: document.querySelector('.membership-content__bd'), n: '.membership-content__bd' },
+      { el: document.documentElement, n: 'documentElement' },
+      { el: document.body, n: 'body' }
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+      var el = selectors[i].el;
+      if (!el) {
+        debugInfo.push(selectors[i].n + ': NOT FOUND');
+        continue;
+      }
+      var style = window.getComputedStyle(el);
+      debugInfo.push(selectors[i].n + ': overflowY=' + style.overflowY + ', scrollH=' + el.scrollHeight + ', clientH=' + el.clientHeight + ', scrollTop=' + el.scrollTop + ', tagName=' + el.tagName);
+    }
+  }
+
+  function findScrollableContainer() {
+    // 优先找 .page-profile > .content（视频卡片列表容器）
+    var candidates = [
+      document.querySelector('.page-profile > .content'),
+      document.querySelector('.page-profile'),
+      document.querySelector('.membership-content'),
+      document.querySelector('.membership-content__bd'),
+      document.documentElement,
+      document.body
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (el && el.scrollHeight > el.clientHeight) return el;
+    }
+    // 兜底：返回 .page-profile > .content（即使当前不可滚动）
+    return document.querySelector('.page-profile > .content') || document.documentElement;
+  }
+
+  function doScroll() {
+    if (isRunning) return;
+    isRunning = true;
+    scrollCount++;
+
+    if (scrollCount === 1) dumpContainers();
+
+    var scroller = findScrollableContainer();
+    if (!scroller) {
+      console.warn('[Profile Scroll] ❌ 未找到容器');
+      isRunning = false;
+      return;
+    }
+
+    var sh = scroller.scrollHeight;
+    var ch = scroller.clientHeight;
+    var st = scroller.scrollTop;
+    var maxScroll = sh - ch;
+
+    var info = '[Profile Scroll] #' + scrollCount + ' ' + (scroller.className || scroller.tagName) + ' sh=' + sh + ' ch=' + ch + ' st=' + st + ' max=' + maxScroll + ' cards=' + document.querySelectorAll('.card-wrp').length;
+    console.log(info);
+    debugInfo.push(info);
+
+    // 强制滚动（不判断 maxScroll，因为有可能是滚动后才会加载新内容）
+    var prevTop = st;
+    scroller.scrollTop = st + SCROLL_STEP;
+
+    // 兼容：同时触发 window 滚动（有些页面需要 window 滚动）
+    window.scrollBy(0, SCROLL_STEP);
+
+    // 等待 loading 消失后再检查（与 api_client.js 逻辑一致）
+    // 等待 loading spinner 消失
+    function waitForLoading(cb, delay) {
+      var d = delay || 500;
+      setTimeout(function() {
+        var loading = scroller.querySelector('.loading, [class*="loading"], [class*="spinner"]');
+        if (loading) {
+          console.log('[Profile Scroll] 检测到 loading，等待消失...');
+          var wc = 0;
+          (function poll() {
+            wc++;
+            var again = scroller.querySelector('.loading, [class*="loading"], [class*="spinner"]');
+            if (!again) {
+              console.log('[Profile Scroll] loading 已消失');
+              setTimeout(cb, 300);
+              return;
+            }
+            if (wc >= 10) {
+              console.log('[Profile Scroll] loading 等待超时，强制继续');
+              cb();
+              return;
+            }
+            setTimeout(poll, 1000);
+          }());
+        } else {
+          cb();
+        }
+      }, d);
+    }
+
+    waitForLoading(function() {
+      // 检查 infinite-scroll-disabled
+      var disabled = scroller.getAttribute('infinite-scroll-disabled');
+      if (disabled === 'true') {
+        console.log('[Profile Scroll] infinite-scroll-disabled=true，已无更多数据');
+        var currentCount = document.querySelectorAll('.card-wrp').length;
+        __wx_log({ msg: '✅ 滚动完成（标签已禁用），卡片已全部加载，共 ' + currentCount + ' 个' });
+        isRunning = false;
+        return;
+      }
+
+      var newTop = scroller.scrollTop;
+      console.log('[Profile Scroll] 滚动后 scrollTop=' + newTop + ' (期望=' + (prevTop + SCROLL_STEP) + ')');
+      isRunning = false;
+      checkResult();
+    }, SCROLL_INTERVAL);
+  }
+
+  function checkResult() {
+    var currentCount = document.querySelectorAll('.card-wrp').length;
+
+    if (scrollCount === 1) {
+      lastCount = currentCount;
+      __wx_log({ msg: '🔄 滚动开始，当前卡片: ' + currentCount + ' 个' });
+      if (debugInfo.length) __wx_log({ msg: '📊 ' + debugInfo.slice(0, 6).join(' | ') });
+    } else {
+      if (currentCount === lastCount) {
+        emptyCount++;
+        __wx_log({ msg: '📭 滚动 #' + scrollCount + ' 卡片不变 (' + currentCount + ')，连续 ' + emptyCount + '/' + MAX_EMPTY });
+      } else {
+        emptyCount = 0;
+        lastCount = currentCount;
+        __wx_log({ msg: '📥 滚动 #' + scrollCount + ' 加载中，当前卡片: ' + currentCount + ' 个' });
+      }
+    }
+
+    if (emptyCount >= MAX_EMPTY) {
+      __wx_log({ msg: '✅ 滚动完成，卡片已全部加载，共 ' + currentCount + ' 个' });
+      return;
+    }
+    if (scrollCount >= MAX_TOTAL) {
+      __wx_log({ msg: '⚠️ 滚动达到上限 ' + MAX_TOTAL + ' 次，当前卡片 ' + currentCount + ' 个' });
+      return;
+    }
+
+    doScroll();
+  }
+
+  __wx_log({ msg: '🚀 开始滚动列表...' });
+  doScroll();
+}
+
 // ==================== Profile页面视频列表采集器 ====================
 window.__wx_channels_profile_collector = {
   videos: [],
@@ -465,6 +629,56 @@ window.__wx_channels_profile_collector = {
           __wx_log({ msg: '获取DOM失败: ' + e.message });
         }
       };
+
+      // ===== 滚动列表按钮 =====
+      if (container.querySelector('#wx-profile-scroll-btn')) {
+        console.log('[Profile] 滚动列表按钮已存在');
+      } else {
+        var scrollButton = document.createElement('button');
+        scrollButton.id = 'wx-profile-scroll-btn';
+        scrollButton.type = 'button';
+
+        if (__wx_is_account_like_page__()) {
+          scrollButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+          scrollButton.style.marginLeft = '8px';
+          scrollButton.style.background = 'transparent';
+          scrollButton.style.color = 'inherit';
+          scrollButton.style.borderColor = 'transparent';
+          scrollButton.style.flexShrink = '0';
+          scrollButton.style.opacity = '0.88';
+          scrollButton.title = '滚动并采集卡片列表';
+          scrollButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="mx-1 !h-4 !w-4"><path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><div>滚动列表</div>';
+          scrollButton.onmouseenter = function () {
+            scrollButton.style.opacity = '1';
+          };
+          scrollButton.onmouseleave = function () {
+            scrollButton.style.opacity = '0.88';
+          };
+        } else {
+          scrollButton.className = 'weui-btn_default relative flex h-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-md text-sm';
+          scrollButton.style.width = '88px';
+          scrollButton.style.marginLeft = '8px';
+          scrollButton.title = '滚动并采集卡片列表';
+          scrollButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">滚动列表</div>';
+        }
+
+        scrollButton.onclick = function () {
+          __wx_channels_scroll_and_count_cards();
+        };
+
+        if (__wx_is_account_like_page__()) {
+          container.appendChild(scrollButton);
+        } else {
+          var shopWrapperScroll = container.querySelector('.shop-btn__wrp');
+          if (shopWrapperScroll && shopWrapperScroll.parentNode === container) {
+            container.insertBefore(scrollButton, shopWrapperScroll);
+          } else {
+            container.appendChild(scrollButton);
+          }
+        }
+
+        console.log('[Profile] 滚动列表按钮已注入到操作区');
+      }
 
       // 在批量下载按钮之后添加 DOM 按钮
       if (__wx_is_account_like_page__()) {
@@ -919,3 +1133,8 @@ function loadDomModules() {
     }
   }, 3000);
 }
+
+// ============================================================
+// 暴露全局函数，供 api_client.js 通过 WebSocket 广播指令调用
+// ============================================================
+window.__wx_channels_scroll_and_count_cards = __wx_channels_scroll_and_count_cards;

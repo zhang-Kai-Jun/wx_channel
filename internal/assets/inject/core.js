@@ -40,12 +40,7 @@ function __wx_channels_copy(text) {
   document.body.removeChild(textArea);
 }
 
-function __wx_channel_loading() {
-  if (window.__wx_channels_tip__ && window.__wx_channels_tip__.loading) {
-    return window.__wx_channels_tip__.loading("下载中");
-  }
-  return { hide() {} };
-}
+
 
 function __wx_log(msg) {
   fetch("/__wx_channels_api/tip", {
@@ -96,9 +91,6 @@ function findElm(fn, timeout) {
 var __wx_channels_tip__ = {};
 var __wx_channels_store__ = {
   profile: null,
-  buffers: [],
-  keys: {},
 };
-var __wx_channels_video_download_btn__ = null;
 
 console.log('[core.js] 核心工具模块加载完成');

@@ -25,10 +25,6 @@ var WXE = (() => {
     FeedProfileLoaded: "OnFeedProfileLoaded",
     LiveProfileLoaded: "OnLiveProfileLoaded",
     JoinLive: "JoinLive",
-    BeforeDownloadMedia: "BeforeDownloadMedia",
-    BeforeDownloadCover: "BeforeDownloadCover",
-    MediaDownloaded: "MediaDownloaded",
-    MP3Downloaded: "MP3Downloaded",
     Feed: "Feed",
   };
   return {
@@ -117,22 +113,6 @@ var WXE = (() => {
     onJoinLive(handler) {
       eventbus.on(ChannelsEvents.JoinLive, handler);
       return () => { eventbus.off(ChannelsEvents.JoinLive, handler); };
-    },
-    beforeDownloadMedia(handler) {
-      eventbus.on(ChannelsEvents.BeforeDownloadMedia, handler);
-      return () => { eventbus.off(ChannelsEvents.BeforeDownloadMedia, handler); };
-    },
-    beforeDownloadCover(handler) {
-      eventbus.on(ChannelsEvents.BeforeDownloadCover, handler);
-      return () => { eventbus.off(ChannelsEvents.BeforeDownloadCover, handler); };
-    },
-    onMediaDownloaded(handler) {
-      eventbus.on(ChannelsEvents.MediaDownloaded, handler);
-      return () => { eventbus.off(ChannelsEvents.MediaDownloaded, handler); };
-    },
-    onMP3Downloaded(handler) {
-      eventbus.on(ChannelsEvents.MP3Downloaded, handler);
-      return () => { eventbus.off(ChannelsEvents.MP3Downloaded, handler); };
     },
     onFeed(handler) {
       eventbus.on(ChannelsEvents.Feed, handler);

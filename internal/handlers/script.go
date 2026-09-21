@@ -20,43 +20,33 @@ import (
 
 // ScriptHandler JavaScript注入处理器
 type ScriptHandler struct {
-	coreJS          []byte
-	decryptJS       []byte
-	downloadJS      []byte
-	homeJS          []byte
-	feedJS          []byte
-	profileJS       []byte
-	searchJS        []byte
-	batchDownloadJS []byte
-	zipJS           []byte
-	fileSaverJS     []byte
-	mittJS          []byte
-	eventbusJS      []byte
-	utilsJS         []byte
-	apiClientJS     []byte
-	keepAliveJS     []byte
-	version         string
+	coreJS      []byte
+	homeJS      []byte
+	feedJS      []byte
+	profileJS   []byte
+	searchJS    []byte
+	mittJS      []byte
+	eventbusJS  []byte
+	utilsJS     []byte
+	apiClientJS []byte
+	keepAliveJS []byte
+	version     string
 }
 
 // NewScriptHandler 创建脚本处理器
-func NewScriptHandler(cfg *config.Config, coreJS, decryptJS, downloadJS, homeJS, feedJS, profileJS, searchJS, batchDownloadJS, zipJS, fileSaverJS, mittJS, eventbusJS, utilsJS, apiClientJS, keepAliveJS []byte, version string) *ScriptHandler {
+func NewScriptHandler(cfg *config.Config, coreJS, homeJS, feedJS, profileJS, searchJS, mittJS, eventbusJS, utilsJS, apiClientJS, keepAliveJS []byte, version string) *ScriptHandler {
 	return &ScriptHandler{
-		coreJS:          coreJS,
-		decryptJS:       decryptJS,
-		downloadJS:      downloadJS,
-		homeJS:          homeJS,
-		feedJS:          feedJS,
-		profileJS:       profileJS,
-		searchJS:        searchJS,
-		batchDownloadJS: batchDownloadJS,
-		zipJS:           zipJS,
-		fileSaverJS:     fileSaverJS,
-		mittJS:          mittJS,
-		eventbusJS:      eventbusJS,
-		utilsJS:         utilsJS,
-		apiClientJS:     apiClientJS,
-		keepAliveJS:     keepAliveJS,
-		version:         version,
+		coreJS:      coreJS,
+		homeJS:      homeJS,
+		feedJS:      feedJS,
+		profileJS:   profileJS,
+		searchJS:    searchJS,
+		mittJS:      mittJS,
+		eventbusJS:  eventbusJS,
+		utilsJS:     utilsJS,
+		apiClientJS: apiClientJS,
+		keepAliveJS: keepAliveJS,
+		version:     version,
 	}
 }
 
@@ -170,22 +160,12 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 	Conn.Response.Header.Set("__debug", "replace_script")
 
 	// 处理不同的JS文件
-	content, handled := h.handleIndexPublish(path, content)
-	if handled {
-		Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
-		return true
-	}
-	content, handled = h.handleVirtualSvgIcons(path, content)
+	content, handled := h.handleVirtualSvgIcons(path, content)
 	if handled {
 		Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
 		return true
 	}
 
-	content, handled = h.handleWorkerRelease(path, content)
-	if handled {
-		Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
-		return true
-	}
 	content, handled = h.handleConnectPublish(Conn, path, content)
 	if handled {
 		return true
@@ -213,19 +193,10 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 
 	// 模块化脚本 - 按依赖顺序加载
 	coreScript := fmt.Sprintf(`<script>%s</script>`, string(h.coreJS))
-	decryptScript := fmt.Sprintf(`<script>%s</script>`, string(h.decryptJS))
-	downloadScript := fmt.Sprintf(`<script>%s</script>`, string(h.downloadJS))
-	batchDownloadScript := fmt.Sprintf(`<script>%s</script>`, string(h.batchDownloadJS))
 	feedScript := fmt.Sprintf(`<script>%s</script>`, string(h.feedJS))
 	profileScript := fmt.Sprintf(`<script>%s</script>`, string(h.profileJS))
 	searchScript := fmt.Sprintf(`<script>%s</script>`, string(h.searchJS))
 	homeScript := fmt.Sprintf(`<script>%s</script>`, string(h.homeJS))
-
-	// 预加载FileSaver.js库 - 所有页面都需要
-	preloadScript := h.getPreloadScript()
-
-	// 下载记录功能 - 所有页面都需要
-	downloadTrackerScript := h.getDownloadTrackerScript()
 
 	// 捕获URL脚本 - 所有页面都需要
 	captureUrlScript := h.getCaptureUrlScript()
@@ -234,7 +205,7 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 	savePageContentScript := h.getSavePageContentScript()
 
 	// 基础脚本（所有页面都需要）
-	baseScripts := logPanelScript + mittScript + eventbusScript + utilsScript + apiClientScript + keepAliveScript + coreScript + decryptScript + downloadScript + batchDownloadScript + feedScript + profileScript + searchScript + homeScript + preloadScript + downloadTrackerScript + captureUrlScript + savePageContentScript
+	baseScripts := logPanelScript + mittScript + eventbusScript + utilsScript + apiClientScript + keepAliveScript + coreScript + feedScript + profileScript + searchScript + homeScript + captureUrlScript + savePageContentScript
 
 	// 根据页面路径决定是否注入特定脚本
 	var pageSpecificScripts string
@@ -242,8 +213,8 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 	switch path {
 	case "/web/pages/home":
 		// Home页面：新版部分链接会渲染成详情页模式，因此同时注入评论采集脚本
-		pageSpecificScripts = h.getVideoCacheNotificationScript() + h.getCommentCaptureScript()
-		utils.LogFileInfo("[脚本] Home页面 - 注入视频缓存监控和评论采集脚本")
+		pageSpecificScripts = h.getCommentCaptureScript()
+		utils.LogFileInfo("[脚本] Home页面 - 注入评论采集脚本")
 
 	case "/web/pages/profile":
 		// Profile页面（视频列表）：不需要特定脚本
@@ -256,9 +227,9 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 		utils.LogFileInfo("[脚本] Account Like页面 - 注入基础脚本以兼容公共 JS 事件")
 
 	case "/web/pages/feed":
-		// Feed页面（视频详情）：注入视频缓存监控、评论采集、精准匹配脚本、获取评论脚本
-		pageSpecificScripts = h.getVideoCacheNotificationScript() + h.getCommentCaptureScript() + h.getVideoCommentsMatchingScript() + h.getFetchVideoCommentsScript()
-		utils.LogFileInfo("[脚本] Feed页面 - 注入视频缓存监控、评论采集、精准匹配和获取评论脚本")
+		// Feed页面（视频详情）：注入评论采集、精准匹配脚本、获取评论脚本
+		pageSpecificScripts = h.getCommentCaptureScript() + h.getVideoCommentsMatchingScript() + h.getFetchVideoCommentsScript()
+		utils.LogFileInfo("[脚本] Feed页面 - 注入评论采集、精准匹配和获取评论脚本")
 
 	case "/web/pages/s":
 		// 搜索页面：注入搜索模块
@@ -275,246 +246,16 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 	initScript := `<script>
 console.log('[init] 开始初始化...');
 setTimeout(function() {
-	console.log('[init] 执行 insert_download_btn');
-	if (typeof insert_download_btn === 'function') {
-		insert_download_btn();
+	console.log('[init] 执行 insert_channel_tools');
+	if (typeof insert_channel_tools === 'function') {
+		insert_channel_tools();
 	} else {
-		console.error('[init] insert_download_btn 函数未定义');
+		console.error('[init] insert_channel_tools 函数未定义');
 	}
 }, 800);
 </script>`
 
 	return baseScripts + pageSpecificScripts + initScript
-}
-
-// getPreloadScript 获取预加载FileSaver.js库的脚本
-func (h *ScriptHandler) getPreloadScript() string {
-	return `<script>
-	// 预加载FileSaver.js库
-	(function() {
-		const script = document.createElement('script');
-		script.src = '/FileSaver.min.js';
-		document.head.appendChild(script);
-	})();
-	</script>`
-}
-
-// getDownloadTrackerScript 获取下载记录功能的脚本
-func (h *ScriptHandler) getDownloadTrackerScript() string {
-	return `<script>
-	// 确保FileSaver.js库已加载
-	if (typeof saveAs === 'undefined') {
-		console.log('加载FileSaver.js库');
-		const script = document.createElement('script');
-		script.src = '/FileSaver.min.js';
-		script.onload = function() {
-			console.log('FileSaver.js库加载成功');
-		};
-		document.head.appendChild(script);
-	}
-
-	// 跟踪已记录的下载，防止重复记录
-	window.__wx_channels_recorded_downloads = {};
-
-	// 添加下载记录功能
-	window.__wx_channels_record_download = function(data) {
-		// 检查是否已经记录过这个下载
-		const recordKey = data.id;
-		if (window.__wx_channels_recorded_downloads[recordKey]) {
-			console.log("已经记录过此下载，跳过记录");
-			return;
-		}
-		
-		// 标记为已记录
-		window.__wx_channels_recorded_downloads[recordKey] = true;
-		
-		// 发送到记录API
-		fetch("/__wx_channels_api/record_download", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json"
-			},
-			body: JSON.stringify(data)
-		});
-	};
-	
-	// 暂停视频的辅助函数（只暂停，不阻止自动切换）
-	// 分层降级策略：Video.js API → video.pause() → XPath按钮 → CSS按钮 → 键盘空格键
-	window.__wx_channels_pause_video__ = function() {
-		console.log('[视频助手] 暂停视频（下载期间）...');
-		try {
-			const pausedVideos = [];
-
-			// === 同步块：立即暂停可见视频，立即返回 ===
-			if (typeof videojs !== 'undefined') {
-				const players = videojs.getAllPlayers?.() || [];
-				for (const player of players) {
-					if (player && typeof player.pause === 'function' && !player.paused()) {
-						player.pause();
-						pausedVideos.push({ type: 'videojs', player });
-					}
-				}
-			}
-			const allVideos = Array.from(document.querySelectorAll('video'));
-			for (const video of allVideos) {
-				if (!video.paused) {
-					video.pause();
-					pausedVideos.push({ type: 'native', video });
-				}
-			}
-			console.log('[视频助手] 立即暂停完成，共', pausedVideos.length, '个视频');
-			// 立即返回，不阻塞
-			return pausedVideos;
-		} catch (e) {
-			console.error('[视频助手] 暂停视频失败:', e);
-			return [];
-		}
-	};
-
-	// 恢复视频播放的辅助函数
-	// 分层降级策略：player.play() → video.play() → 键盘空格键
-	window.__wx_channels_resume_video__ = function(pausedVideos) {
-		if (!pausedVideos || pausedVideos.length === 0) return;
-		console.log('[视频助手] 恢复视频播放，共', pausedVideos.length, '个');
-		try {
-			for (const item of pausedVideos) {
-				if (item.type === 'videojs' && item.player) {
-					try { item.player.play(); }
-					catch (e) { console.log('[视频助手] Video.js play 失败:', e.message); }
-				} else if (item.type === 'native' && item.video) {
-					try { item.video.play(); }
-					catch (e) { console.log('[视频助手] native play 失败:', e.message); }
-				}
-			}
-			// 备用：尝试键盘空格键
-			setTimeout(() => {
-				const videos = Array.from(document.querySelectorAll('video')).filter(v => v.offsetWidth > 0);
-				if (videos.length > 0) videos[0].focus();
-				document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', keyCode: 32, bubbles: true }));
-				document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', keyCode: 32, bubbles: true }));
-			}, 200);
-		} catch (e) {
-			console.error('[视频助手] 恢复视频失败:', e);
-		}
-	};
-	
-	// 覆盖原有的下载处理函数
-	const originalHandleClick = window.__wx_channels_handle_click_download__;
-	if (originalHandleClick) {
-		window.__wx_channels_handle_click_download__ = function(sp) {
-			// 暂停视频
-			const pausedVideos = window.__wx_channels_pause_video__();
-			
-			// 调用原始函数进行下载
-			originalHandleClick(sp);
-			
-			// 注意：不再手动记录下载，因为后端API已经处理了记录保存
-			// 移除重复的记录调用以避免CSV中出现重复记录
-			
-			// 3秒后恢复播放（给下载一些时间开始）
-			setTimeout(() => {
-				window.__wx_channels_resume_video__(pausedVideos);
-			}, 5000);
-		};
-	}
-	
-	// 覆盖当前视频下载函数
-	const originalDownloadCur = window.__wx_channels_download_cur__;
-	if (originalDownloadCur) {
-		window.__wx_channels_download_cur__ = function() {
-			// 暂停视频
-			const pausedVideos = window.__wx_channels_pause_video__();
-			
-			// 调用原始函数进行下载
-			originalDownloadCur();
-			
-			// 注意：不再手动记录下载，因为后端API已经处理了记录保存
-			// 移除重复的记录调用以避免CSV中出现重复记录
-			
-			// 3秒后恢复播放（给下载一些时间开始）
-			setTimeout(() => {
-				window.__wx_channels_resume_video__(pausedVideos);
-			}, 3000);
-		};
-	}
-	
-	// 优化封面下载函数：使用后端API保存到服务器
-	window.__wx_channels_handle_download_cover = function() {
-		if (window.__wx_channels_store__ && window.__wx_channels_store__.profile) {
-			const profile = window.__wx_channels_store__.profile;
-			// 优先使用thumbUrl，然后是fullThumbUrl，最后才是coverUrl
-			const coverUrl = profile.thumbUrl || profile.fullThumbUrl || profile.coverUrl;
-			
-			if (!coverUrl) {
-				// alert("未找到封面图片");
-				return;
-			}
-			
-			// 记录日志
-			if (window.__wx_log) {
-				window.__wx_log({
-					msg: '正在保存封面到服务器...\n' + coverUrl
-				});
-			}
-			
-			// 构建请求数据
-			const requestData = {
-				coverUrl: coverUrl,
-				videoId: profile.id || '',
-				title: profile.title || '',
-				author: profile.nickname || (profile.contact && profile.contact.nickname) || '未知作者',
-				forceSave: false
-			};
-			
-			// 添加授权头
-			const headers = {
-				'Content-Type': 'application/json'
-			};
-			if (window.__WX_LOCAL_TOKEN__) {
-				headers['X-Local-Auth'] = window.__WX_LOCAL_TOKEN__;
-			}
-			
-			// 发送到后端API保存封面
-			fetch('/__wx_channels_api/save_cover', {
-				method: 'POST',
-				headers: headers,
-				body: JSON.stringify(requestData)
-			})
-			.then(response => response.json())
-			.then(data => {
-				if (data.success) {
-					const msg = data.message || '封面已保存';
-					const path = data.relativePath || data.path || '';
-					if (window.__wx_log) {
-						window.__wx_log({
-							msg: '✓ ' + msg
-						});
-					}
-					console.log('✓ [封面下载] 封面已保存:', path);
-				} else {
-					const errorMsg = data.error || '保存封面失败';
-					if (window.__wx_log) {
-						window.__wx_log({
-							msg: '❌ ' + errorMsg
-						});
-					}
-					// alert('保存封面失败: ' + errorMsg);
-				}
-			})
-			.catch(error => {
-				console.error("保存封面失败:", error);
-				if (window.__wx_log) {
-					window.__wx_log({
-						msg: '❌ 保存封面失败: ' + error.message
-					});
-				}
-				// alert("保存封面失败: " + error.message);
-			});
-		} else {
-			// alert("未找到视频信息");
-		}
-	};
-	</script>`
 }
 
 // getCaptureUrlScript 获取捕获完整URL的脚本
@@ -637,610 +378,6 @@ func (h *ScriptHandler) getSavePageContentScript() string {
 		window.__wx_trigger_save_page(2000);
 	}, 8000);
 	</script>`
-}
-
-// getVideoCacheNotificationScript 获取视频缓存监控脚本
-func (h *ScriptHandler) getVideoCacheNotificationScript() string {
-	return `<script>
-	// 初始化视频缓存监控
-	window.__wx_channels_video_cache_monitor = {
-		isBuffering: false,
-		lastBufferTime: 0,
-		totalBufferSize: 0,
-		videoSize: 0,
-		completeThreshold: 0.98, // 认为98%缓冲完成时视频已缓存完成
-		checkInterval: null,
-		notificationShown: false, // 防止重复显示通知
-		
-		// 开始监控缓存
-		startMonitoring: function(expectedSize) {
-			console.log('=== 开始启动视频缓存监控 ===');
-			
-			// 检查播放器状态
-			const vjsPlayer = document.querySelector('.video-js');
-			const video = vjsPlayer ? vjsPlayer.querySelector('video') : document.querySelector('video');
-			
-			if (!video) {
-				console.error('未找到视频元素，无法启动监控');
-				return;
-			}
-			
-			console.log('视频元素状态:');
-			console.log('- readyState:', video.readyState);
-			console.log('- duration:', video.duration);
-			console.log('- buffered.length:', video.buffered ? video.buffered.length : 0);
-			
-			if (this.checkInterval) {
-				clearInterval(this.checkInterval);
-			}
-			
-			this.isBuffering = true;
-			this.lastBufferTime = Date.now();
-			this.totalBufferSize = 0;
-			this.videoSize = expectedSize || 0;
-			this.notificationShown = false; // 重置通知状态
-			
-			console.log('视频缓存监控已启动');
-			console.log('- 视频大小:', (this.videoSize / (1024 * 1024)).toFixed(2) + 'MB');
-			console.log('- 监控间隔: 2秒');
-			
-			// 定期检查缓冲状态 - 增加检查频率
-			this.checkInterval = setInterval(() => this.checkBufferStatus(), 2000);
-			
-			// 添加可见的缓存状态指示器
-			this.addStatusIndicator();
-			
-			// 监听视频播放完成事件
-			this.setupVideoEndedListener();
-			
-			// 延迟开始监控，让播放器有时间初始化
-			setTimeout(() =>{
-				this.monitorNativeBuffering();
-			}, 1000);
-		},
-		
-		// 监控Video.js播放器和原生视频元素的缓冲状态
-		monitorNativeBuffering: function() {
-			let firstCheck = true; // 标记是否是第一次检查
-			const checkBufferedProgress = () => {
-				// 优先检查Video.js播放器
-				const vjsPlayer = document.querySelector('.video-js');
-				let video = null;
-				
-				if (vjsPlayer) {
-					// 从Video.js播放器中获取video元素
-					video = vjsPlayer.querySelector('video');
-					if (firstCheck) {
-						console.log('找到Video.js播放器，开始监控');
-						firstCheck = false;
-					}
-				} else {
-					// 回退到查找普通video元素
-					const videoElements = document.querySelectorAll('video');
-					if (videoElements.length > 0) {
-						video = videoElements[0];
-						if (firstCheck) {
-							console.log('使用普通video元素监控');
-							firstCheck = false;
-						}
-					}
-				}
-				
-				if (video) {
-					// 获取预加载进度条数据
-					if (video.buffered && video.buffered.length > 0 && video.duration) {
-						// 获取最后缓冲时间范围的结束位置
-						const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-						// 计算缓冲百分比
-						const bufferedPercent = (bufferedEnd / video.duration) * 100;
-						
-						// 更新页面指示器
-						const indicator = document.getElementById('video-cache-indicator');
-						if (indicator) {
-							indicator.innerHTML = '<div>视频缓存中: ' + bufferedPercent.toFixed(1) + '% (Video.js播放器)</div>';
-							
-							// 高亮显示接近完成的状态
-							if (bufferedPercent >= 95) {
-								indicator.style.backgroundColor = 'rgba(0,128,0,0.8)';
-							}
-						}
-						
-						// 检查Video.js播放器的就绪状态（只在第一次检查时输出）
-						if (vjsPlayer && typeof vjsPlayer.readyState !== 'undefined' && firstCheck) {
-							console.log('Video.js播放器就绪状态:', vjsPlayer.readyState);
-						}
-						
-						// 检查是否缓冲完成
-						if (bufferedPercent >= 98) {
-							console.log('根据Video.js播放器数据，视频已缓存完成 (' + bufferedPercent.toFixed(1) + '%)');
-							this.showNotification();
-							this.stopMonitoring();
-							return true; // 缓存完成，停止监控
-						}
-					}
-				}
-				return false; // 继续监控
-			};
-			
-			// 立即检查一次
-			if (!checkBufferedProgress()) {
-				// 每秒检查一次预加载进度
-				const bufferCheckInterval = setInterval(() => {
-					if (checkBufferedProgress() || !this.isBuffering) {
-						clearInterval(bufferCheckInterval);
-					}
-				}, 1000);
-			}
-		},
-		
-		// 设置Video.js播放器和视频播放结束监听
-		setupVideoEndedListener: function() {
-			// 尝试查找Video.js播放器和视频元素
-			setTimeout(() => {
-				const vjsPlayer = document.querySelector('.video-js');
-				let video = null;
-				
-				if (vjsPlayer) {
-					// 从Video.js播放器中获取video元素
-					video = vjsPlayer.querySelector('video');
-					console.log('为Video.js播放器设置事件监听');
-					
-					// 尝试监听Video.js特有的事件
-					if (vjsPlayer.addEventListener) {
-						vjsPlayer.addEventListener('ended', () => {
-							console.log('Video.js播放器播放结束，标记为缓存完成');
-							this.showNotification();
-							this.stopMonitoring();
-						});
-						
-						vjsPlayer.addEventListener('loadeddata', () => {
-							console.log('Video.js播放器数据加载完成');
-						});
-					}
-				} else {
-					// 回退到查找普通video元素
-					const videoElements = document.querySelectorAll('video');
-					if (videoElements.length > 0) {
-						video = videoElements[0];
-						console.log('为普通video元素设置事件监听');
-					}
-				}
-				
-				if (video) {
-					// 监听视频播放结束事件
-					video.addEventListener('ended', () => {
-						console.log('视频播放已结束，标记为缓存完成');
-						this.showNotification();
-						this.stopMonitoring();
-					});
-					
-					// 如果视频已在播放中，添加定期检查播放状态
-					if (!video.paused) {
-						const playStateInterval = setInterval(() => {
-							// 如果视频已经播放完或接近结束（剩余小于2秒）
-							if (video.ended || (video.duration && video.currentTime > 0 && video.duration - video.currentTime < 2)) {
-								console.log('视频接近或已播放完成，标记为缓存完成');
-								this.showNotification();
-								this.stopMonitoring();
-								clearInterval(playStateInterval);
-							}
-						}, 1000);
-					}
-				}
-			}, 3000); // 延迟3秒再查找视频元素，确保Video.js播放器完全初始化
-		},
-		
-		// 添加缓冲状态指示器
-		addStatusIndicator: function() {
-			console.log('正在创建缓存状态指示器...');
-			
-			// 移除现有指示器
-			const existingIndicator = document.getElementById('video-cache-indicator');
-			if (existingIndicator) {
-				console.log('移除现有指示器');
-				existingIndicator.remove();
-			}
-			
-			// 创建新指示器
-			const indicator = document.createElement('div');
-			indicator.id = 'video-cache-indicator';
-			indicator.style.cssText = "position:fixed;bottom:20px;left:20px;background-color:rgba(0,0,0,0.8);color:white;padding:10px 15px;border-radius:6px;z-index:99999;font-size:14px;font-family:Arial,sans-serif;border:2px solid rgba(255,255,255,0.3);";
-			indicator.innerHTML = '<div>🔄 视频缓存中: 0%</div>';
-			document.body.appendChild(indicator);
-			
-			console.log('缓存状态指示器已创建并添加到页面');
-			
-			// 初始化进度跟踪变量
-			this.lastLoggedProgress = 0;
-			this.stuckCheckCount = 0;
-			this.maxStuckCount = 30; // 30秒不变则认为停滞
-			
-			// 每秒更新进度
-			const updateInterval = setInterval(() => {
-				if (!this.isBuffering) {
-					clearInterval(updateInterval);
-					indicator.remove();
-					return;
-				}
-				
-				let progress = 0;
-				let progressSource = 'unknown';
-				
-				// 优先方案：从video元素实时读取（最准确）
-				const vjsPlayer = document.querySelector('.video-js');
-				let video = vjsPlayer ? vjsPlayer.querySelector('video') : null;
-				
-				if (!video) {
-					const videoElements = document.querySelectorAll('video');
-					if (videoElements.length > 0) {
-						video = videoElements[0];
-					}
-				}
-				
-				if (video && video.buffered && video.buffered.length > 0) {
-					try {
-						const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-						const duration = video.duration;
-						if (duration > 0 && !isNaN(duration) && isFinite(duration)) {
-							progress = (bufferedEnd / duration) * 100;
-							progressSource = 'video.buffered';
-						}
-					} catch (e) {
-						// 忽略读取错误
-					}
-				}
-				
-				// 备用方案：使用 totalBufferSize
-				if (progress === 0 && this.videoSize > 0 && this.totalBufferSize > 0) {
-					progress = (this.totalBufferSize / this.videoSize) * 100;
-					progressSource = 'totalBufferSize';
-				}
-				
-				// 限制进度范围
-				progress = Math.min(Math.max(progress, 0), 100);
-				
-				// 检测进度是否停滞
-				const progressChanged = Math.abs(progress - this.lastLoggedProgress) >= 0.1;
-				
-				if (!progressChanged) {
-					this.stuckCheckCount++;
-				} else {
-					this.stuckCheckCount = 0;
-				}
-				
-				// 更新指示器
-				if (progress > 0) {
-					// 根据停滞状态显示不同的图标
-					let icon = '🔄';
-					let statusText = '视频缓存中';
-					
-					if (this.stuckCheckCount >= this.maxStuckCount) {
-						icon = '⏸️';
-						statusText = '缓存暂停';
-						indicator.style.backgroundColor = 'rgba(128,128,128,0.8)';
-					} else if (progress >= 95) {
-						icon = '✅';
-						statusText = '缓存接近完成';
-						indicator.style.backgroundColor = 'rgba(0,128,0,0.8)';
-					} else if (progress >= 50) {
-						indicator.style.backgroundColor = 'rgba(255,165,0,0.8)';
-					} else {
-						indicator.style.backgroundColor = 'rgba(0,0,0,0.8)';
-					}
-					
-					indicator.innerHTML = '<div>' + icon + ' ' + statusText + ': ' + progress.toFixed(1) + '%</div>';
-					
-					// 只在进度变化≥1%时输出日志
-					if (Math.abs(progress - this.lastLoggedProgress) >= 1) {
-						console.log('缓存进度更新:', progress.toFixed(1) + '% (来源:' + progressSource + ')');
-						this.lastLoggedProgress = progress;
-					}
-					
-					// 停滞提示（只输出一次）
-					if (this.stuckCheckCount === this.maxStuckCount) {
-						console.log('⏸️ 缓存进度长时间未变化 (' + progress.toFixed(1) + '%)，可能原因：');
-						console.log('  - 视频已暂停播放');
-						console.log('  - 网络速度慢或连接中断');
-						console.log('  - 浏览器缓存策略限制');
-						console.log('  提示：继续播放视频可能会恢复缓存');
-					}
-				} else {
-					indicator.innerHTML = '<div>⏳ 等待视频数据...</div>';
-				}
-				
-				// 如果进度达到98%以上，检查是否完成
-				if (progress >= 98) {
-					this.checkCompletion();
-				}
-			}, 1000);
-		},
-		
-		// 添加缓冲块
-		addBuffer: function(buffer) {
-			if (!this.isBuffering) return;
-			
-			// 更新最后缓冲时间
-			this.lastBufferTime = Date.now();
-			
-			// 累计缓冲大小
-			if (buffer && buffer.byteLength) {
-				this.totalBufferSize += buffer.byteLength;
-				
-				// 输出调试信息到控制台
-				if (this.videoSize > 0) {
-					const percent = ((this.totalBufferSize / this.videoSize) * 100).toFixed(1);
-					console.log('视频缓存进度: ' + percent + '% (' + (this.totalBufferSize / (1024 * 1024)).toFixed(2) + 'MB/' + (this.videoSize / (1024 * 1024)).toFixed(2) + 'MB)');
-				}
-			}
-			
-			// 检查是否接近完成
-			this.checkCompletion();
-		},
-		
-		// 检查Video.js播放器和原生视频的缓冲状态
-		checkBufferStatus: function() {
-			if (!this.isBuffering) return;
-			
-			// 优先检查Video.js播放器
-			const vjsPlayer = document.querySelector('.video-js');
-			let video = null;
-			
-			if (vjsPlayer) {
-				// 从Video.js播放器中获取video元素
-				video = vjsPlayer.querySelector('video');
-				
-				// 检查Video.js播放器特有的状态（只在状态变化时输出日志）
-				if (vjsPlayer.classList.contains('vjs-has-started')) {
-					if (!this._vjsStartedLogged) {
-						console.log('Video.js播放器已开始播放');
-						this._vjsStartedLogged = true;
-					}
-				}
-				
-				if (vjsPlayer.classList.contains('vjs-waiting')) {
-					if (!this._vjsWaitingLogged) {
-						console.log('Video.js播放器正在等待数据');
-						this._vjsWaitingLogged = true;
-					}
-				} else {
-					this._vjsWaitingLogged = false; // 重置标记，以便下次等待时再次输出
-				}
-				
-				if (vjsPlayer.classList.contains('vjs-ended')) {
-					console.log('Video.js播放器播放结束，标记为缓存完成');
-					this.checkCompletion(true);
-					return;
-				}
-			} else {
-				// 回退到查找普通video元素
-				const videoElements = document.querySelectorAll('video');
-				if (videoElements.length > 0) {
-					video = videoElements[0];
-				}
-			}
-			
-			if (video) {
-				if (video.buffered && video.buffered.length > 0 && video.duration) {
-					// 获取最后缓冲时间范围的结束位置
-					const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-					// 计算缓冲百分比
-					const bufferedPercent = (bufferedEnd / video.duration) * 100;
-					
-					// 如果预加载接近完成，触发完成检测（只输出一次日志）
-					if (bufferedPercent >= 95 && !this._preloadNearCompleteLogged) {
-						console.log('检测到视频预加载接近完成 (' + bufferedPercent.toFixed(1) + '%)');
-						this._preloadNearCompleteLogged = true;
-						this.checkCompletion(true);
-					}
-				}
-				
-				// 只在readyState为4且缓冲百分比较高时才认为完成
-				if (video.readyState >= 4 && video.buffered && video.buffered.length > 0 && video.duration) {
-					const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-					const bufferedPercent = (bufferedEnd / video.duration) * 100;
-					if (bufferedPercent >= 98 && !this._readyStateCompleteLogged) {
-						console.log('视频readyState为4且缓冲98%以上，标记为缓存完成');
-						this._readyStateCompleteLogged = true;
-						this.checkCompletion(true);
-					}
-				}
-			}
-			
-			// 如果超过10秒没有新的缓冲数据且已经缓冲了部分数据，可能表示视频已暂停或缓冲完成
-			const timeSinceLastBuffer = Date.now() - this.lastBufferTime;
-			if (timeSinceLastBuffer > 10000 && this.totalBufferSize > 0) {
-				this.checkCompletion(true);
-			}
-		},
-		
-		// 检查是否完成
-		checkCompletion: function(forcedCheck) {
-			if (!this.isBuffering) return;
-			
-			let isComplete = false;
-			
-			// 优先检查Video.js播放器是否已播放完成
-			const vjsPlayer = document.querySelector('.video-js');
-			let video = null;
-			
-			if (vjsPlayer) {
-				video = vjsPlayer.querySelector('video');
-				
-				// 检查Video.js播放器的完成状态
-				if (vjsPlayer.classList.contains('vjs-ended')) {
-					console.log('Video.js播放器已播放完毕，认为缓存完成');
-					isComplete = true;
-				}
-			} else {
-				// 回退到查找普通video元素
-				const videoElements = document.querySelectorAll('video');
-				if (videoElements.length > 0) {
-					video = videoElements[0];
-				}
-			}
-			
-			if (video && !isComplete) {
-				// 如果视频已经播放完毕或接近结束，直接认为完成
-				if (video.ended || (video.duration && video.currentTime > 0 && video.duration - video.currentTime < 2)) {
-					console.log('视频已播放完毕或接近结束，认为缓存完成');
-					isComplete = true;
-				}
-				
-				// 只在readyState为4且缓冲百分比较高时才认为完成
-				if (video.readyState >= 4 && video.buffered && video.buffered.length > 0 && video.duration) {
-					const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-					const bufferedPercent = (bufferedEnd / video.duration) * 100;
-					if (bufferedPercent >= 98) {
-						console.log('视频readyState为4且缓冲98%以上，认为缓存完成');
-						isComplete = true;
-					}
-				}
-			}
-			
-			// 如果未通过播放状态判断完成，再检查缓冲大小
-			if (!isComplete) {
-				// 如果知道视频大小，则根据百分比判断
-				if (this.videoSize > 0) {
-					const ratio = this.totalBufferSize / this.videoSize;
-					// 对短视频降低阈值要求
-					const threshold = this.videoSize < 5 * 1024 * 1024 ? 0.9 : this.completeThreshold; // 5MB以下视频降低阈值到90%
-					isComplete = ratio >= threshold;
-				} 
-				// 强制检查：如果长时间没有新数据且视频元素可以播放到最后，也认为已完成
-				else if (forcedCheck && video) {
-					if (video.readyState >= 3 && video.buffered.length > 0) {
-						const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-						const duration = video.duration;
-						isComplete = duration > 0 && (bufferedEnd / duration) >= 0.95; // 降低阈值到95%
-						
-						if (isComplete) {
-							console.log('强制检查：根据缓冲数据判断视频缓存完成');
-						}
-					}
-				}
-			}
-			
-			// 如果完成，显示通知
-			if (isComplete) {
-				this.showNotification();
-				this.stopMonitoring();
-			}
-		},
-		
-		// 显示通知
-		showNotification: function() {
-			// 防止重复显示通知
-			if (this.notificationShown) {
-				console.log('通知已经显示过，跳过重复显示');
-				return;
-			}
-			
-			console.log('显示缓存完成通知');
-			this.notificationShown = true;
-			
-			// 移除进度指示器
-			const indicator = document.getElementById('video-cache-indicator');
-			if (indicator) {
-				indicator.remove();
-			}
-			
-			// 创建桌面通知
-			if ("Notification" in window && Notification.permission === "granted") {
-				new Notification("视频缓存完成", {
-					body: "视频已缓存完成，可以进行下载操作",
-					icon: window.__wx_channels_store__?.profile?.coverUrl
-				});
-			}
-			
-			// 在页面上显示通知
-			const notification = document.createElement('div');
-			notification.style.cssText = "position:fixed;bottom:20px;right:20px;background-color:rgba(0,128,0,0.9);color:white;padding:15px 25px;border-radius:8px;z-index:99999;animation:fadeInOut 12s forwards;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-size:16px;font-weight:bold;";
-			notification.innerHTML = '<div style="display:flex;align-items:center;"><span style="font-size:24px;margin-right:12px;">🎉</span> <span>视频缓存完成，可以下载了！</span></div>';
-			
-			// 添加动画样式 - 延长显示时间到12秒
-			const style = document.createElement('style');
-			style.textContent = '@keyframes fadeInOut {0% {opacity:0;transform:translateY(20px);} 8% {opacity:1;transform:translateY(0);} 85% {opacity:1;} 100% {opacity:0;}}';
-			document.head.appendChild(style);
-			
-			document.body.appendChild(notification);
-			
-			// 12秒后移除通知
-			setTimeout(() => {
-				notification.remove();
-			}, 12000);
-			
-			// 发送通知事件
-			fetch("/__wx_channels_api/tip", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json"
-				},
-				body: JSON.stringify({
-					msg: "视频缓存完成，可以下载了！"
-				})
-			});
-			
-			console.log("视频缓存完成通知已显示");
-		},
-		
-		// 停止监控
-		stopMonitoring: function() {
-			console.log('停止视频缓存监控');
-			if (this.checkInterval) {
-				clearInterval(this.checkInterval);
-				this.checkInterval = null;
-			}
-			this.isBuffering = false;
-			// 注意：不重置notificationShown，保持通知状态直到下次startMonitoring
-		}
-	};
-	
-	// 请求通知权限
-	if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
-		// 用户操作后再请求权限
-		document.addEventListener('click', function requestPermission() {
-			Notification.requestPermission();
-			document.removeEventListener('click', requestPermission);
-		}, {once: true});
-	}
-	</script>`
-}
-
-// handleIndexPublish 处理index.publish JS文件
-func (h *ScriptHandler) handleIndexPublish(path string, content string) (string, bool) {
-	if !util.Includes(path, "/t/wx_fed/finder/web/web-finder/res/js/index.publish") {
-		return content, false
-	}
-
-	utils.LogFileInfo("[Home数据采集] 正在处理 index.publish 文件")
-
-	regexp1 := regexp.MustCompile(`this.sourceBuffer.appendBuffer\(h\),`)
-	replaceStr1 := `(() => {
-if (window.__wx_channels_store__) {
-window.__wx_channels_store__.buffers.push(h);
-// 添加缓存监控
-if (window.__wx_channels_video_cache_monitor) {
-    window.__wx_channels_video_cache_monitor.addBuffer(h);
-}
-}
-})(),this.sourceBuffer.appendBuffer(h),`
-	if regexp1.MatchString(content) {
-		utils.LogFileInfo("视频播放已成功加载！")
-		utils.LogFileInfo("视频缓冲将被监控，完成时会有提醒")
-		utils.LogFileInfo("[视频播放] 视频播放器已加载 | Path=%s", path)
-	}
-	content = regexp1.ReplaceAllString(content, replaceStr1)
-	regexp2 := regexp.MustCompile(`if\(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`)
-	replaceStr2 := `if(f.cmd==="CUT"){
-	if (window.__wx_channels_store__) {
-	// console.log("CUT", f, __wx_channels_store__.profile.key);
-	window.__wx_channels_store__.keys[__wx_channels_store__.profile.key]=f.decryptor_array;
-	}
-}
-if(f.cmd===re.MAIN_THREAD_CMD.AUTO_CUT`
-	content = regexp2.ReplaceAllString(content, replaceStr2)
-
-	return content, true
 }
 
 // handleVirtualSvgIcons 处理virtual_svg-icons-register JS文件
@@ -1373,18 +510,6 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// handleWorkerRelease 处理worker_release JS文件
-func (h *ScriptHandler) handleWorkerRelease(path string, content string) (string, bool) {
-	if !util.Includes(path, "worker_release") {
-		return content, false
-	}
-
-	regex := regexp.MustCompile(`fmp4Index:p.fmp4Index`)
-	replaceStr := `decryptor_array:p.decryptor_array,fmp4Index:p.fmp4Index`
-	content = regex.ReplaceAllString(content, replaceStr)
-	return content, true
 }
 
 // handleConnectPublish 处理connect.publish JS文件（参考 wx_channels_download 项目的实现）
@@ -3820,7 +2945,7 @@ func (h *ScriptHandler) saveJavaScriptFile(path string, content []byte) {
 	}
 
 	// 创建按页面类型分类的保存目录
-	jsDir := filepath.Join(baseDir, h.getConfig().DownloadsDir, "cached_js", pageType)
+	jsDir := filepath.Join(baseDir, h.getConfig().DataDir, "cached_js", pageType)
 	if err := utils.EnsureDir(jsDir); err != nil {
 		return
 	}

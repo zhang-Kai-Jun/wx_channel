@@ -12,48 +12,10 @@ var __wx_channels_tip__ = {};
 var __wx_channels_cur_video = null;
 var __wx_channels_store__ = {
   profile: null,
-  buffers: [],
-  keys: {},
 };
 var __wx_channels_live_store__ = {
   profile: null,
 };
-
-function __wx_channels_video_decrypt(t, e, p) {
-  for (var r = new Uint8Array(t), n = 0; n < t.byteLength && e + n < p.decryptor_array.length; n++)
-    r[n] ^= p.decryptor_array[n];
-  return r;
-}
-
-window.VTS_WASM_URL = "https://res.wx.qq.com/t/wx_fed/cdn_libs/res/decrypt-video-core/1.3.0/wasm_video_decode.wasm";
-window.MAX_HEAP_SIZE = 33554432;
-var decryptor_array;
-let decryptor;
-
-function wasm_isaac_generate(t, e) {
-  decryptor_array = new Uint8Array(e);
-  var r = new Uint8Array(Module.HEAPU8.buffer, t, e);
-  decryptor_array.set(r.reverse());
-  if (decryptor) decryptor.delete();
-}
-
-let loaded = false;
-const __decrypt_cache__ = new Map();
-
-async function __wx_channels_decrypt(seed) {
-  const cacheKey = String(seed);
-  if (__decrypt_cache__.has(cacheKey)) return __decrypt_cache__.get(cacheKey);
-  if (!loaded) {
-    await WXU.load_script("https://res.wx.qq.com/t/wx_fed/cdn_libs/res/decrypt-video-core/1.3.0/wasm_video_decode.js");
-    loaded = true;
-  }
-  await WXU.sleep();
-  decryptor = new Module.WxIsaac64(seed);
-  decryptor.generate(131072);
-  const result = new Uint8Array(decryptor_array);
-  __decrypt_cache__.set(cacheKey, result);
-  return result;
-}
 
 var WXU = (() => {
   var defaultRandomAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -158,7 +120,6 @@ var WXU = (() => {
         contact: liveContact,
         createtime: feed.createtime || 0,
         liveInfo: feed.liveInfo,
-        canDownload: false
       };
     }
     if (!feed.objectDesc) return null;
@@ -180,7 +141,6 @@ var WXU = (() => {
         spec: [],
         contact: contact,
         nickname: contact ? contact.nickname : "",
-        canDownload: true,
       };
     }
     if (type === 4) {
@@ -216,7 +176,6 @@ var WXU = (() => {
         favCount: feed.favCount,
         forwardCount: feed.forwardCount,
         ipRegionInfo: feed.ipRegionInfo,
-        canDownload: true
       };
     }
     return null;
@@ -304,20 +263,6 @@ var WXU = (() => {
       return window.WSServerProtocol || "wss";
     },
     format_feed,
-    build_decrypt_arr: __wx_channels_decrypt,
-    video_decrypt: __wx_channels_video_decrypt,
-    async decrypt_video(buf, key) {
-      try {
-        const r = await __wx_channels_decrypt(key);
-        if (r) {
-          buf = __wx_channels_video_decrypt(buf, 0, { decryptor_array: r });
-          return [null, buf];
-        }
-        return [new Error("前端解密失败"), null];
-      } catch (err) {
-        return [err, null];
-      }
-    },
     set_cur_video() {
       setTimeout(() => {
         window.__wx_channels_cur_video = document.querySelector(".feed-video.video-js");

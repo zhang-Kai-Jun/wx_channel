@@ -33,6 +33,8 @@ type Client struct {
 	apiReady       bool
 	methods        map[string]bool
 	activeRequests int32 // 活跃请求数（原子操作）
+
+	registeredSequence uint64 // 仅在 Hub.mu 下读写
 }
 
 // NewClient 创建新的客户端
@@ -358,8 +360,6 @@ func (c *Client) UpdateState(state ClientStateBody) {
 	for k, v := range state.Methods {
 		c.methods[k] = v
 	}
-
-	utils.LogInfo("WebSocket 客户端状态更新: %s | page=%s | apiReady=%t", c.RemoteAddr, c.pagePath, c.apiReady)
 }
 
 func (c *Client) SupportsKey(key string) bool {

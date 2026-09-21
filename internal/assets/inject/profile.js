@@ -247,7 +247,7 @@ window.__wx_channels_profile_collector = {
     this.syncCurrentLikeTab();
     // 延迟初始化UI
     setTimeout(function () {
-      self.injectToolbarDownloadIcon();
+      self.injectToolbarTools();
     }, 2000);
     if (__wx_is_account_like_page__()) {
       this.startLikeTabMonitor();
@@ -276,19 +276,9 @@ window.__wx_channels_profile_collector = {
       if (!target) return;
       var tab = target.closest ? target.closest('.sub-tab-item') : null;
       if (!tab) return;
-      if (tab.id === 'wx-profile-download-btn') return;
       setTimeout(function () {
         self.syncCurrentLikeTab();
-        if (window.__wx_batch_download_manager__ && window.__wx_batch_download_manager__.isVisible) {
-          if (self.videos.length > 0) {
-            var filteredVideos = self.filterLivePictureVideos(self.videos).filter(function (v) {
-              return v && (v.type === 'media' || v.type === 'live_replay');
-            });
-            __update_batch_download_ui__(filteredVideos, '赞和收藏 - ' + self.currentLikeTabLabel);
-          } else {
-            __close_batch_download_ui__();
-          }
-        }
+
       }, 80);
     }, true);
   },
@@ -465,8 +455,8 @@ window.__wx_channels_profile_collector = {
     return merged;
   },
 
-  // 在Profile页面操作区注入批量下载按钮
-  injectToolbarDownloadIcon: function () {
+  // 在Profile页面操作区注入工具按钮
+  injectToolbarTools: function () {
     var self = this;
 
     var findActionContainer = function () {
@@ -485,80 +475,6 @@ window.__wx_channels_profile_collector = {
     var tryInject = function () {
       var container = findActionContainer();
       if (!container) return false;
-      if (container.querySelector('#wx-profile-download-btn')) return true;
-
-      var button = document.createElement('button');
-      button.id = 'wx-profile-download-btn';
-      button.type = 'button';
-      if (__wx_is_account_like_page__()) {
-        button.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
-        button.style.marginLeft = '8px';
-        button.style.background = 'transparent';
-        button.style.color = 'inherit';
-        button.style.borderColor = 'transparent';
-        button.style.flexShrink = '0';
-        button.style.opacity = '0.88';
-        button.title = '批量下载当前列表视频';
-        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="mx-1 !h-4 !w-4"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg><div>批量下载</div>';
-        button.onmouseenter = function () {
-          button.style.opacity = '1';
-        };
-        button.onmouseleave = function () {
-          button.style.opacity = '0.88';
-        };
-      } else {
-        button.className = 'weui-btn_default relative flex h-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-md text-sm';
-        button.style.width = '96px';
-        button.style.marginLeft = '8px';
-        button.title = '批量下载当前账号视频';
-        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" class="h-4 w-4 flex-shrink-0 text-fg-0"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg><div class="ml-1 min-w-0 flex-shrink-0 whitespace-nowrap text-fg-0">批量下载</div>';
-      }
-
-      button.style.display = 'none';
-      // 点击事件 - 显示/隐藏批量下载面板
-      button.onclick = async function () {
-        // 使用通用批量下载组件
-        if (window.__wx_batch_download_manager__ && window.__wx_batch_download_manager__.isVisible) {
-          __close_batch_download_ui__();
-        } else {
-          if (__wx_is_account_like_page__()) {
-            try {
-              __wx_log({ msg: '⏳ 正在加载「' + self.currentLikeTabLabel + '」数据...' });
-              await self.loadCurrentLikeTabVideos();
-            } catch (e) {
-              __wx_log({ msg: '❌ ' + (e.message || e) });
-              return;
-            }
-          }
-
-          // 显示批量下载UI（包含视频和直播回放，排除正在直播）
-          var filteredVideos = self.filterLivePictureVideos(self.videos).filter(function (v) {
-            return v && (v.type === 'media' || v.type === 'live_replay');
-          });
-
-          if (filteredVideos.length === 0) {
-            __wx_log({ msg: '⚠️ 暂无视频数据' });
-            return;
-          }
-
-          var title = __wx_is_account_like_page__()
-            ? ('赞和收藏 - ' + self.currentLikeTabLabel)
-            : __wx_profile_list_page_title__();
-          __show_batch_download_ui__(filteredVideos, title);
-        }
-      };
-
-      if (__wx_is_account_like_page__()) {
-        container.appendChild(button);
-      } else {
-        var shopWrapper = container.querySelector('.shop-btn__wrp');
-        if (shopWrapper && shopWrapper.parentNode === container) {
-          container.insertBefore(button, shopWrapper);
-        } else {
-          container.appendChild(button);
-        }
-      }
-
       // 检查是否已有 DOM 按钮
       if (container.querySelector('#wx-profile-dom-btn')) {
         console.log('[Profile] ✅ DOM 按钮已存在');
@@ -571,7 +487,7 @@ window.__wx_channels_profile_collector = {
       domButton.type = 'button';
 
       if (__wx_is_account_like_page__()) {
-        domButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+        domButton.className = 'wx-like-tool-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
         domButton.style.marginLeft = '8px';
         domButton.style.background = 'transparent';
         domButton.style.color = 'inherit';
@@ -641,7 +557,7 @@ window.__wx_channels_profile_collector = {
         scrollButton.type = 'button';
 
         if (__wx_is_account_like_page__()) {
-          scrollButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+          scrollButton.className = 'wx-like-tool-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
           scrollButton.style.marginLeft = '8px';
           scrollButton.style.background = 'transparent';
           scrollButton.style.color = 'inherit';
@@ -684,7 +600,7 @@ window.__wx_channels_profile_collector = {
         console.log('[Profile] 滚动列表按钮已注入到操作区');
       }
 
-      // 在批量下载按钮之后添加 DOM 按钮
+      // 在工具按钮之后添加 DOM 按钮
       if (__wx_is_account_like_page__()) {
         container.appendChild(domButton);
       } else {
@@ -707,7 +623,7 @@ window.__wx_channels_profile_collector = {
         copyLinkButton.type = 'button';
 
         if (__wx_is_account_like_page__()) {
-          copyLinkButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+          copyLinkButton.className = 'wx-like-tool-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
           copyLinkButton.style.marginLeft = '8px';
           copyLinkButton.style.background = 'transparent';
           copyLinkButton.style.color = 'inherit';
@@ -806,7 +722,7 @@ window.__wx_channels_profile_collector = {
       closeButton.type = 'button';
 
       if (__wx_is_account_like_page__()) {
-        closeButton.className = 'wx-like-download-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
+        closeButton.className = 'wx-like-tool-btn flex cursor-pointer items-center justify-center border-0 border-b-2 border-solid pb-0.5 pt-[5px] text-sm';
         closeButton.style.marginLeft = '8px';
         closeButton.style.background = 'transparent';
         closeButton.style.color = 'inherit';
@@ -931,16 +847,7 @@ window.__wx_channels_profile_collector = {
         __wx_log({ msg: msg });
       }
 
-      // 更新UI（使用通用批量下载组件，包含视频和直播回放）
-      if (window.__wx_batch_download_manager__ && window.__wx_batch_download_manager__.isVisible) {
-        var filteredVideos = this.filterLivePictureVideos(targetVideos).filter(function (v) {
-          return v && (v.type === 'media' || v.type === 'live_replay');
-        });
-        var title = __wx_is_account_like_page__()
-          ? ('赞和收藏 - ' + this.currentLikeTabLabel)
-          : __wx_profile_list_page_title__();
-        __update_batch_download_ui__(filteredVideos, title);
-      }
+
     }
   }
 };

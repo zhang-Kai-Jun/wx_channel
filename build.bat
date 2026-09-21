@@ -3,15 +3,14 @@ REM ============================================================
 REM  video_channel build script - can be double-clicked
 REM
 REM  Single source of truth for version: internal\version\version.go
-REM     var Current = "1.2.0"
 REM  This script auto-syncs it to:
-REM     1. winres\winres.json   (Windows resource / right-click Properties - Details)
+REM     1. Windows resources   (right-click Properties - Details)
 REM     2. Go ldflags           (runtime: video_channel.exe version)
 REM  You only need to change the `var Current` line in version.go.
 REM
 REM  Usage:
-REM    build.bat                          Default build (uses version.go Current)
-REM    build.bat -v 1.3.0                 Override version (does NOT write back to version.go)
+REM    build.bat                          Obfuscated build (uses version.go Current)
+REM    build.bat --plain                  Plain build for troubleshooting
 REM    build.bat --upload                 Build and upload zip to remote bucket
 REM ============================================================
 
@@ -21,6 +20,10 @@ chcp 65001 >nul
 REM ---------- Default arguments ----------
 set "VERSION="
 set "DO_UPLOAD=0"
+set "OBFUSCATE=1"
+set "GARBLE_VERSION=v0.14.2"
+set "GARBLE_EXE="
+set "RESOURCE_JSON=%~dp0winres\winres.build.json"
 
 REM ---------- Remote upload config ----------
 set "UPLOAD_BUCKET=tos://crmspark/plus/video_channel.zip"
@@ -28,65 +31,105 @@ set "UPLOAD_BUCKET=tos://crmspark/plus/video_channel.zip"
 REM ---------- Parse command line ----------
 :parse_args
 if "%~1"=="" goto parse_done
-if /i "%~1"=="-v"          ( set "VERSION=%~2" & shift & shift & goto parse_args )
-if /i "%~1"=="--version"   ( set "VERSION=%~2" & shift & shift & goto parse_args )
 if /i "%~1"=="--upload"    ( set "DO_UPLOAD=1"  & shift & goto parse_args )
-shift
-goto parse_args
+if /i "%~1"=="--plain"     ( set "OBFUSCATE=0"  & shift & goto parse_args )
+echo [ERROR] Unsupported argument. Set the version in internal\version\version.go.
+goto fail
 
 :parse_done
 
 REM ---------- Change to script directory ----------
 cd /d "%~dp0"
 
-REM ---------- Version source of truth: internal\version\version.go `var Current` ----------
-REM Priority: -v  >  version.go var Current  >  fallback 0.0.0
-REM No longer reads from winres.json, avoiding duplication.
-
-if "%VERSION%"=="" (
-    if exist "internal\version\version.go" (
-        REM Match the actual `var Current = "X.Y.Z"` declaration line (not comments).
-        REM Token 4 is the quoted value e.g. `"1.2.0"`.
-        for /f "tokens=4" %%A in ('findstr /R /C:"^var Current = " "internal\version\version.go"') do (
-            if not defined VERSION set "VERSION=%%A"
-        )
-    )
+REM Validate version and prepare UTF-8 resources before deleting old artifacts.
+for /f "delims=" %%V in ('powershell -NoProfile -ExecutionPolicy Bypass -File "winres\build-resources.ps1" -Mode Prepare') do set "VERSION=%%V"
+if not defined VERSION (
+    echo [ERROR] Could not prepare Windows version resources.
+    goto fail
 )
-if "%VERSION%"=="" set "VERSION=0.0.0"
-REM Strip possible double quotes (e.g. var Current = "1.2.0")
-set "VERSION=%VERSION:"=%"
 
 cls
 echo ========================================
 echo   video_channel build script
 echo ========================================
 echo   Version: %VERSION%   (source: internal\version\version.go)
+if "%OBFUSCATE%"=="1" (
+    echo   Protection: Garble %GARBLE_VERSION%, project packages and literals
+) else (
+    echo   Protection: OFF ^(--plain troubleshooting build^)
+)
 echo.
 echo   [Sync targets]
-echo     - winres\winres.json  (Windows resource: FileVersion / ProductVersion)
+echo     - Windows resource    (description, product name, file/product version)
 echo     - Go ldflags          (runtime: video_channel.exe version)
 if "%DO_UPLOAD%"=="1" (
 echo     - Upload to bucket    (!UPLOAD_BUCKET!)
 )
 echo.
 
-REM ---------- 1. Clean ----------
-echo [1/6] Cleaning previous artifacts...
-if exist wx_channel.exe          del /f /q wx_channel.exe
-if exist video_channel.exe        del /f /q video_channel.exe
-if exist rsrc_windows_amd64.syso del /f /q rsrc_windows_amd64.syso
-if exist rsrc_windows_arm64.syso del /f /q rsrc_windows_arm64.syso
-if exist video_channel.zip        del /f /q video_channel.zip
-echo       OK
-echo.
-
-REM ---------- 2. Check go / go-winres ----------
-echo [2/6] Checking Go toolchain...
+REM ---------- 1. Check build tools before removing existing artifacts ----------
+echo [1/6] Checking Go toolchain...
 where go >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] go not found in PATH. Please install Go and add it to PATH.
     goto fail
 )
+REM Use the project's toolchain even when the machine sets GOTOOLCHAIN=local.
+set "GOTOOLCHAIN="
+for /f "tokens=2" %%G in ('findstr /B /C:"toolchain " go.mod') do set "GOTOOLCHAIN=%%G"
+if not defined GOTOOLCHAIN (
+    echo [ERROR] go.mod must declare the project toolchain.
+    goto fail
+)
+go version
+if errorlevel 1 goto fail
+set "CGO_ENABLED=1"
+set "TARGET_OS="
+set "TARGET_ARCH="
+for /f "delims=" %%A in ('go env GOOS') do set "TARGET_OS=%%A"
+for /f "delims=" %%A in ('go env GOARCH') do set "TARGET_ARCH=%%A"
+if not "%TARGET_OS%"=="windows" (
+    echo [ERROR] This script requires GOOS=windows.
+    goto fail
+)
+if not defined TARGET_ARCH (
+    echo [ERROR] Could not detect the Go target architecture.
+    goto fail
+)
+set "RESOURCE_OBJECT=rsrc_windows_%TARGET_ARCH%.syso"
+
+if "%OBFUSCATE%"=="0" goto after_garble_install
+REM Garble v0.14.2 supports Go 1.24; review this pair when upgrading go.mod.
+if not "%GOTOOLCHAIN:~0,7%"=="go1.24." (
+    echo [ERROR] Revalidate the pinned Garble version before changing the Go toolchain.
+    goto fail
+)
+where git >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] Garble requires Git to patch the Go linker.
+    goto fail
+)
+set "GARBLE_TOOL_DIR=%LOCALAPPDATA%\wx_channel\build-tools\garble-%GARBLE_VERSION%-%GOTOOLCHAIN%"
+set "GARBLE_EXE=%GARBLE_TOOL_DIR%\garble.exe"
+if exist "%GARBLE_EXE%" goto verify_garble
+echo       Installing Garble %GARBLE_VERSION% with %GOTOOLCHAIN%...
+set "PREVIOUS_GOBIN=%GOBIN%"
+set "GOBIN=%GARBLE_TOOL_DIR%"
+go install mvdan.cc/garble@%GARBLE_VERSION%
+set "INSTALL_RESULT=%ERRORLEVEL%"
+set "GOBIN=%PREVIOUS_GOBIN%"
+if not "%INSTALL_RESULT%"=="0" (
+    echo [ERROR] Garble installation failed. No plain build will be substituted.
+    goto fail
+)
+:verify_garble
+"%GARBLE_EXE%" version
+if errorlevel 1 goto fail
+REM Prefix matching includes wx_channel and all its subpackages, not dependencies.
+set "GOGARBLE=wx_channel"
+REM Prevent inherited experimental control-flow settings from changing this profile.
+set "GARBLE_EXPERIMENTAL_CONTROLFLOW="
+:after_garble_install
 
 set "WINRES_PATH="
 where go-winres >nul 2>nul
@@ -99,7 +142,7 @@ if not errorlevel 1 (
 if defined WINRES_PATH goto after_winres_install
 
 echo       go-winres not found, installing...
-go install github.com/tc-hib/go-winres@latest
+go install github.com/tc-hib/go-winres@v0.3.3
 if errorlevel 1 (
     echo [ERROR] go-winres install failed. Check Go environment and network.
     goto fail
@@ -115,57 +158,36 @@ echo       Found go-winres ^(%WINRES_PATH%^).
 :after_winres_install
 echo.
 
-REM ---------- 3. Sync winres.json version + generate resource ----------
-REM   Temporarily rewrite the 4 version fields in winres.json to %VERSION%,
-REM   then run go-winres make, then restore. Keeps git working tree clean.
-echo [3/6] Syncing winres.json version to %VERSION% ...
-set "WINRES_BACKUP="
-set "WINRES_RESTORE=0"
-if exist "winres\winres.json" (
-    REM Back up to a temp file; use a random suffix to avoid conflicts
-    set "WINRES_BACKUP=winres\winres.json.buildbak.%RANDOM%"
-    copy /y "winres\winres.json" "!WINRES_BACKUP!" >nul
-    if errorlevel 1 (
-        echo [ERROR] Failed to back up winres.json.
-        goto fail
-    )
-    set "WINRES_RESTORE=1"
-)
+REM ---------- 2. Clean ----------
+echo [2/6] Cleaning previous artifacts...
+if exist wx_channel.exe          del /f /q wx_channel.exe
+if exist video_channel.exe        del /f /q video_channel.exe
+if exist rsrc_windows_amd64.syso del /f /q rsrc_windows_amd64.syso
+if exist rsrc_windows_arm64.syso del /f /q rsrc_windows_arm64.syso
+if exist rsrc_windows_386.syso del /f /q rsrc_windows_386.syso
+if exist video_channel.zip        del /f /q video_channel.zip
+echo       OK
+echo.
 
-if "!WINRES_RESTORE!"=="1" (
-    REM Use PowerShell to rewrite the 4 version fields in-place, other content unchanged.
-    REM CRITICAL 1: Get-Content MUST use -Encoding UTF8. On Windows with non-ASCII
-    REM system codepage (e.g. GBK), the default encoding decodes UTF-8 bytes like
-    REM C2 A9 (the (c) symbol) as the wrong character (U+6F0F = "漏"), which then
-    REM ends up in the EXE's PE resources.
-    REM CRITICAL 2: must write JSON WITHOUT BOM - go-winres uses Go's strict json
-    REM parser which rejects UTF-8 BOM. Set-Content -Encoding utf8 always writes BOM,
-    REM so we use [System.IO.File]::WriteAllText with UTF8Encoding($false).
-    powershell -NoProfile -Command ^
-            "$v = '%VERSION%'; $p = 'winres\winres.json'; $e = New-Object System.Text.UTF8Encoding($false); $j = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json; $j.RT_MANIFEST.'#1'.'0409'.identity.version = $v; $j.RT_VERSION.'#1'.'0000'.fixed.file_version = $v; $j.RT_VERSION.'#1'.'0000'.fixed.product_version = $v; $j.RT_VERSION.'#1'.'0000'.info.'0409'.FileVersion = $v; $j.RT_VERSION.'#1'.'0000'.info.'0409'.ProductVersion = $v; [System.IO.File]::WriteAllText($p, ($j | ConvertTo-Json -Depth 12), $e)" >nul 2>&1
-        if errorlevel 1 (
-            echo [ERROR] Failed to sync winres.json.
-            if "!WINRES_RESTORE!"=="1" copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
-            goto fail
-        )
-        echo       OK ^(temporarily modified, will be restored after build^)
-)
-
-echo [3.5/6] Generating Windows resource file ^(rsrc_windows_amd64.syso^)...
-"%WINRES_PATH%" make
+REM ---------- 3. Generate resources for the same architecture as go build ----------
+echo [3/6] Generating Windows resources ^(%RESOURCE_OBJECT%^)...
+"%WINRES_PATH%" make --in "%RESOURCE_JSON%" --arch "%TARGET_ARCH%" --out rsrc
 if errorlevel 1 (
     echo [ERROR] Resource generation failed.
-    if "!WINRES_RESTORE!"=="1" copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
+    goto fail
+)
+if not exist "%RESOURCE_OBJECT%" (
+    echo [ERROR] The expected Windows resource object is missing.
+    goto fail
+)
+set "RESOURCE_INCLUDED="
+for /f "delims=" %%R in ('go list -f "{{.SysoFiles}}" .') do set "RESOURCE_INCLUDED=%%R"
+echo !RESOURCE_INCLUDED! | findstr /L /C:"%RESOURCE_OBJECT%" >nul
+if errorlevel 1 (
+    echo [ERROR] Go did not include the generated Windows resource object.
     goto fail
 )
 echo       OK
-
-REM Restore winres.json, keep git working tree clean
-if "!WINRES_RESTORE!"=="1" (
-    copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
-    del /f /q "!WINRES_BACKUP!" >nul 2>&1
-    echo       winres.json restored ^(git working tree clean^)
-)
 echo.
 
 REM ---------- 4. Compute date / commit ----------
@@ -190,8 +212,12 @@ REM ---------- 5. Compile ----------
 echo [5/6] Compiling video_channel.exe ...
 REM Project depends on SunnyNet (C library), CGO is required.
 REM ldflags combined into a single line to avoid host (MSYS/PowerShell) ^ line-continuation quirks.
-set CGO_ENABLED=1
-go build -trimpath -ldflags "-s -w -extldflags=-Wl,--allow-multiple-definition -X wx_channel/internal/version.Current=%VERSION% -X wx_channel/internal/version.BuildDate=%BUILD_DATE% -X wx_channel/internal/version.BuildCommit=%GIT_COMMIT%" -o video_channel.exe
+set "BUILD_LDFLAGS=-s -w -extldflags=-Wl,--allow-multiple-definition -X wx_channel/internal/version.Current=%VERSION% -X wx_channel/internal/version.BuildDate=%BUILD_DATE% -X wx_channel/internal/version.BuildCommit=%GIT_COMMIT%"
+if "%OBFUSCATE%"=="1" (
+    "%GARBLE_EXE%" -literals build -trimpath -ldflags "%BUILD_LDFLAGS%" -o video_channel.exe .
+) else (
+    go build -trimpath -ldflags "%BUILD_LDFLAGS%" -o video_channel.exe .
+)
 if errorlevel 1 (
     echo [ERROR] Compilation failed.
     goto fail
@@ -216,27 +242,10 @@ echo.
 REM Verify Windows resource is embedded
 echo       Windows resource info ^(Properties ^> Details^):
 echo.
-for /f "tokens=*" %%V in ('powershell -NoProfile -Command "(Get-Item 'video_channel.exe').VersionInfo.FileVersion"     2^>nul') do set "FV=%%V"
-for /f "tokens=*" %%V in ('powershell -NoProfile -Command "(Get-Item 'video_channel.exe').VersionInfo.ProductVersion" 2^>nul') do set "PV=%%V"
-for /f "tokens=*" %%V in ('powershell -NoProfile -Command "(Get-Item 'video_channel.exe').VersionInfo.FileDescription" 2^>nul') do set "FD=%%V"
-for /f "tokens=*" %%V in ('powershell -NoProfile -Command "(Get-Item 'video_channel.exe').VersionInfo.CompanyName"     2^>nul') do set "CN=%%V"
-for /f "tokens=*" %%V in ('powershell -NoProfile -Command "(Get-Item 'video_channel.exe').VersionInfo.InternalName"   2^>nul') do set "IN=%%V"
-for /f "tokens=*" %%V in ('powershell -NoProfile -Command "(Get-Item 'video_channel.exe').VersionInfo.OriginalFilename" 2^>nul') do set "OF=%%V"
-
-echo       FileVersion     : !FV!
-echo       ProductVersion  : !PV!
-echo       FileDescription : !FD!
-echo       CompanyName     : !CN!
-echo       InternalName    : !IN!
-echo       OriginalFilename: !OF!
-echo.
-
-REM Consistency self-check: ldflags-injected VERSION should equal FileVersion
-if /i not "!FV!"=="%VERSION%" (
-    echo       [WARN] FileVersion ^(=!FV!^) does not match version.go Current ^(=%VERSION%^).
-    echo       Check winres.json sync logic.
-) else (
-    echo       [OK] Windows resource version matches version.go.
+powershell -NoProfile -ExecutionPolicy Bypass -File "winres\build-resources.ps1" -Mode Verify
+if errorlevel 1 (
+    echo [ERROR] Windows executable metadata verification failed.
+    goto fail
 )
 
 echo.
@@ -292,17 +301,11 @@ echo ========================================
 echo   Build complete: video_channel.exe
 echo ========================================
 
+if exist "%RESOURCE_JSON%" del /f /q "%RESOURCE_JSON%"
 endlocal & exit /b 0
 
 :fail
-REM On failure, also try to restore winres.json to avoid polluting git tree
-if defined WINRES_BACKUP (
-    if exist "!WINRES_BACKUP!" (
-        copy /y "!WINRES_BACKUP!" "winres\winres.json" >nul
-        del /f /q "!WINRES_BACKUP!" >nul 2>&1
-        echo ^(winres.json restored^)
-    )
-)
+if exist "%RESOURCE_JSON%" del /f /q "%RESOURCE_JSON%"
 echo.
 echo ========================================
 echo   Build failed

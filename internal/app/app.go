@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/qtgolang/SunnyNet/SunnyNet"
 	"github.com/qtgolang/SunnyNet/public"
 
@@ -26,7 +25,6 @@ import (
 	"wx_channel/internal/handlers"
 	"wx_channel/internal/router"
 	"wx_channel/internal/services"
-	"wx_channel/internal/storage"
 	"wx_channel/internal/utils"
 	"wx_channel/internal/websocket"
 	"wx_channel/pkg/certificate"
@@ -42,15 +40,9 @@ type App struct {
 	CurrentPageURL string
 	LogInitMsg     string
 
-	// 管理器
-	FileManager *storage.FileManager
-
 	// 处理器
 	APIHandler        *handlers.APIHandler
-	UploadHandler     *handlers.UploadHandler
-	RecordHandler     *handlers.RecordHandler
 	ScriptHandler     *handlers.ScriptHandler
-	BatchHandler      *handlers.BatchHandler
 	CommentHandler    *handlers.CommentHandler
 	ConsoleAPIHandler *handlers.ConsoleAPIHandler
 	WebSocketHandler  *handlers.WebSocketHandler
@@ -60,8 +52,7 @@ type App struct {
 	WSHub         *websocket.Hub
 	TaskService   *database.SearchTaskService // 搜索任务服务（共享实例）
 	SearchService *api.SearchService
-	RadarService  *services.RadarService  // 自动轮询雷达
-	GopeedService *services.GopeedService // Add GopeedService
+	RadarService  *services.RadarService // 自动轮询雷达
 
 	// 路由器
 	APIRouter *router.APIRouter
@@ -103,30 +94,21 @@ func NewApp(cfgParam *config.Config) *App {
 	return app
 }
 
-// initDownloadRecords 初始化下载记录系统
-func (app *App) initDownloadRecords() error {
-	downloadsDir, err := utils.ResolveDownloadDir(app.Cfg.DownloadsDir)
+// initDataStore 初始化采集数据库
+func (app *App) initDataStore() error {
+	dataDir, err := utils.ResolveDataDir(app.Cfg.DataDir)
 	if err != nil {
-		return fmt.Errorf("解析下载目录失败: %v", err)
-	}
-
-	app.FileManager, err = storage.NewFileManager(downloadsDir)
-	if err != nil {
-		return fmt.Errorf("创建文件管理器失败: %v", err)
+		return fmt.Errorf("解析数据目录失败: %v", err)
 	}
 
 	// Initialize Database
-	dbPath := filepath.Join(downloadsDir, "records.db")
+	dbPath := filepath.Join(dataDir, "records.db")
 	if err := database.Initialize(&database.Config{DBPath: dbPath}); err != nil {
 		return fmt.Errorf("初始化数据库失败: %v", err)
 	}
 
 	// 确保任务相关表存在
 	app.TaskService.EnsureTablesExist()
-
-	// Initialize Gopeed Service
-	app.GopeedService = services.NewGopeedService(downloadsDir)
-	// app.GopeedService.Start() // Removed
 
 	return nil
 }
@@ -156,8 +138,8 @@ func (app *App) Run() {
 		close(done)
 	}()
 
-	if err := app.initDownloadRecords(); err != nil {
-		utils.HandleError(err, "初始化下载记录系统")
+	if err := app.initDataStore(); err != nil {
+		utils.HandleError(err, "初始化采集数据库")
 	} else {
 		if app.LogInitMsg != "" {
 			utils.Info(app.LogInitMsg)
@@ -170,9 +152,8 @@ func (app *App) Run() {
 	app.WebSocketHandler = handlers.NewWebSocketHandler()
 
 	// 初始化雷达服务实例（始终创建，按配置决定是否启动）
-	queueService := services.NewQueueService()
 	radarRepo := database.NewRadarRepository()
-	app.RadarService = services.NewRadarService(radarRepo, queueService, app.WSHub)
+	app.RadarService = services.NewRadarService(radarRepo, app.WSHub)
 	app.ConsoleAPIHandler = handlers.NewConsoleAPIHandler(app.Cfg, app.WSHub, app.RadarService)
 
 	// 初始化新的 API 路由器
@@ -183,26 +164,16 @@ func (app *App) Run() {
 
 	// 初始化业务处理器
 	app.APIHandler = handlers.NewAPIHandler(app.Cfg, app.WSHub)
-	app.UploadHandler = handlers.NewUploadHandler(app.Cfg, app.WSHub, app.GopeedService)
-	app.RecordHandler = handlers.NewRecordHandler(app.Cfg)
 	app.CommentHandler = handlers.NewCommentHandler(app.Cfg)
-
-	// BatchHandler (Injecting GopeedService)
-	app.BatchHandler = handlers.NewBatchHandler(app.Cfg, app.GopeedService)
 
 	// ScriptHandler
 	app.ScriptHandler = handlers.NewScriptHandler(
 		app.Cfg,
 		assets.CoreJS,
-		assets.DecryptJS,
-		assets.DownloadJS,
 		assets.HomeJS,
 		assets.FeedJS,
 		assets.ProfileJS,
 		assets.SearchJS,
-		assets.BatchDownloadJS,
-		assets.ZipJS,
-		assets.FileSaverJS,
 		assets.MittJS,
 		assets.EventbusJS,
 		assets.UtilsJS,
@@ -216,9 +187,6 @@ func (app *App) Run() {
 		app.StaticFileHandler,
 		app.APIRouter,
 		app.APIHandler,
-		app.UploadHandler,
-		app.RecordHandler,
-		app.BatchHandler,
 		app.CommentHandler,
 	}
 	app.responseInterceptors = []router.Interceptor{
@@ -237,15 +205,11 @@ func (app *App) Run() {
 		if err != nil {
 			utils.HandleError(err, "证书安装")
 			utils.Warn("如需完整功能，请手动安装证书或以管理员身份运行程序。")
-
-			if app.FileManager != nil {
-				downloadsDir, err := utils.ResolveDownloadDir(app.Cfg.DownloadsDir)
-				if err == nil {
-					certPath := filepath.Join(downloadsDir, app.Cfg.CertFile)
-					if err := utils.EnsureDir(downloadsDir); err == nil {
-						if err := os.WriteFile(certPath, assets.CertData, 0644); err == nil {
-							utils.Info("证书文件已保存到: %s", certPath)
-						}
+			if dataDir, err := app.Cfg.GetResolvedDataDir(); err == nil {
+				if err := utils.EnsureDir(dataDir); err == nil {
+					certPath := filepath.Join(dataDir, app.Cfg.CertFile)
+					if err := os.WriteFile(certPath, assets.CertData, 0644); err == nil {
+						utils.Info("证书文件已保存到: %s", certPath)
 					}
 				}
 			}
@@ -285,11 +249,6 @@ func (app *App) Run() {
 
 	wsPort := app.Port + 1
 	go app.startWebSocketServer(wsPort)
-
-	// 启动 Prometheus 监控服务器（如果启用）
-	if app.Cfg.MetricsEnabled {
-		go app.startMetricsServer()
-	}
 
 	// 启动对标雷达服务（默认关闭，按配置启用）
 	if app.Cfg.RadarEnabled {
@@ -382,10 +341,7 @@ func (app *App) printEnvConfig() {
 		os.Getenv("WX_CHANNEL_SAVE_PAGE_SNAPSHOT") != "" ||
 		os.Getenv("WX_CHANNEL_SAVE_SEARCH_DATA") != "" ||
 		os.Getenv("WX_CHANNEL_SAVE_PAGE_JS") != "" ||
-		os.Getenv("WX_CHANNEL_SHOW_LOG_BUTTON") != "" ||
-		os.Getenv("WX_CHANNEL_UPLOAD_CHUNK_CONCURRENCY") != "" ||
-		os.Getenv("WX_CHANNEL_UPLOAD_MERGE_CONCURRENCY") != "" ||
-		os.Getenv("WX_CHANNEL_DOWNLOAD_CONCURRENCY") != ""
+		os.Getenv("WX_CHANNEL_SHOW_LOG_BUTTON") != ""
 
 	if hasAnyConfig {
 		utils.PrintSeparator()
@@ -408,9 +364,6 @@ func (app *App) printEnvConfig() {
 		utils.PrintLabelValue("🔍", "保存搜索数据", fmt.Sprintf("%v", app.Cfg.SaveSearchData))
 		utils.PrintLabelValue("📄", "保存JS文件", fmt.Sprintf("%v", app.Cfg.SavePageJS))
 		utils.PrintLabelValue("🖼️", "显示日志按钮", fmt.Sprintf("%v", app.Cfg.ShowLogButton))
-		utils.PrintLabelValue("📤", "分片上传并发", app.Cfg.UploadChunkConcurrency)
-		utils.PrintLabelValue("🔀", "分片合并并发", app.Cfg.UploadMergeConcurrency)
-		utils.PrintLabelValue("📥", "批量下载并发", app.Cfg.DownloadConcurrency)
 		utils.PrintSeparator()
 	}
 }
@@ -459,19 +412,6 @@ func (app *App) startWebSocketServer(wsPort int) {
 	utils.Info("🔌 WebSocket服务已启动，端口: %d", wsPort)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		// utils.Warn("WebSocket服务启动失败: %v", err)
-	}
-}
-
-// startMetricsServer 启动 Prometheus 监控服务器
-func (app *App) startMetricsServer() {
-	metricsAddr := fmt.Sprintf(":%d", app.Cfg.MetricsPort)
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-
-	utils.Info("✓ Prometheus 监控已启动: http://localhost%s/metrics", metricsAddr)
-
-	if err := http.ListenAndServe(metricsAddr, mux); err != nil {
-		utils.LogError("Prometheus 监控服务器启动失败: %v", err)
 	}
 }
 

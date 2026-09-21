@@ -35,6 +35,16 @@ func NewRadarRepository() *RadarRepository {
 	return &RadarRepository{}
 }
 
+// RecordSeenVideo 返回该作品是否首次被当前监控目标发现。
+func (r *RadarRepository) RecordSeenVideo(targetID, videoID string) (bool, error) {
+	result, err := db.Exec(`INSERT OR IGNORE INTO radar_seen_videos (target_id, video_id) VALUES (?, ?)`, targetID, videoID)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count > 0, err
+}
+
 // targetFromRow 从数据库行扫描 Target 数据
 func (r *RadarRepository) targetFromRow(scanner interface{ Scan(...interface{}) error }) (*RadarTarget, error) {
 	var target RadarTarget

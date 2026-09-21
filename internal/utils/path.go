@@ -48,35 +48,35 @@ func GetBaseDir() (string, error) {
 	return filepath.Dir(exePath), nil
 }
 
-// ResolveDownloadDir 解析下载目录路径
+// ResolveDataDir 解析数据目录路径
 // 如果是绝对路径，直接使用；如果是相对路径，相对于程序基础目录
-func ResolveDownloadDir(downloadDir string) (string, error) {
+func ResolveDataDir(dataDir string) (string, error) {
 	// 如果是绝对路径，直接使用
-	if filepath.IsAbs(downloadDir) {
-		return downloadDir, nil
+	if filepath.IsAbs(dataDir) {
+		return dataDir, nil
 	}
-	
+
 	// 如果是相对路径，相对于程序基础目录
 	baseDir, err := GetBaseDir()
 	if err != nil {
 		return "", err
 	}
-	
-	return filepath.Join(baseDir, downloadDir), nil
+
+	return filepath.Join(baseDir, dataDir), nil
 }
 
-// GetDownloadsDirFromConfig 从配置获取解析后的下载目录
-func GetDownloadsDirFromConfig(cfg interface{}) (string, error) {
-	// 使用反射或类型断言来获取DownloadsDir字段
-	type ConfigWithDownloadsDir interface {
-		GetDownloadsDir() string
+// GetDataDirFromConfig 从配置获取解析后的数据目录
+func GetDataDirFromConfig(cfg interface{}) (string, error) {
+	// 使用反射或类型断言来获取DataDir字段
+	type ConfigWithDataDir interface {
+		GetDataDir() string
 	}
-	
-	if c, ok := cfg.(ConfigWithDownloadsDir); ok {
-		return ResolveDownloadDir(c.GetDownloadsDir())
+
+	if c, ok := cfg.(ConfigWithDataDir); ok {
+		return ResolveDataDir(c.GetDataDir())
 	}
-	
+
 	// 如果没有实现接口，尝试直接访问字段
 	// 这里需要根据实际的配置结构来调整
-	return "", fmt.Errorf("无法从配置获取下载目录")
+	return "", fmt.Errorf("无法从配置获取数据目录")
 }

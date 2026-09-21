@@ -12,48 +12,17 @@ import (
 
 	"github.com/coder/websocket"
 
-	"wx_channel/internal/database"
 	"wx_channel/internal/services"
 	"wx_channel/internal/utils"
 )
 
 // WebSocket 消息类型
 const (
-	MessageTypeDownloadProgress = "download_progress"
-	MessageTypeQueueChange      = "queue_change"
-	MessageTypeStatsUpdate      = "stats_update"
-	MessageTypePing             = "ping"
-	MessageTypePong             = "pong"
-	WSMessageTypeCommand        = "cmd"
+	MessageTypeStatsUpdate = "stats_update"
+	MessageTypePing        = "ping"
+	MessageTypePong        = "pong"
+	WSMessageTypeCommand   = "cmd"
 )
-
-// 队列变更操作类型
-const (
-	QueueActionAdd     = "add"
-	QueueActionRemove  = "remove"
-	QueueActionUpdate  = "update"
-	QueueActionReorder = "reorder"
-)
-
-// DownloadProgressMessage 表示下载进度更新
-type DownloadProgressMessage struct {
-	Type       string `json:"type"`
-	QueueID    string `json:"queueId"`
-	Downloaded int64  `json:"downloaded"`
-	Total      int64  `json:"total"`
-	Speed      int64  `json:"speed"`
-	Status     string `json:"status"`
-	Chunks     int    `json:"chunks,omitempty"`
-	ChunksDone int    `json:"chunksDone,omitempty"`
-}
-
-// QueueChangeMessage 表示队列变更通知
-type QueueChangeMessage struct {
-	Type   string               `json:"type"`
-	Action string               `json:"action"`
-	Item   *database.QueueItem  `json:"item,omitempty"`
-	Queue  []database.QueueItem `json:"queue,omitempty"`
-}
 
 // StatsUpdateMessage 表示统计信息更新
 type StatsUpdateMessage struct {
@@ -92,9 +61,6 @@ type WebSocketHub struct {
 
 	// 用于统计更新的统计服务
 	statsService *services.StatisticsService
-
-	// 用于队列更新的队列服务
-	queueService *services.QueueService
 }
 
 // 全局 WebSocket Hub 实例
@@ -120,7 +86,6 @@ func NewWebSocketHub() *WebSocketHub {
 		register:     make(chan *WebSocketClient),
 		unregister:   make(chan *WebSocketClient),
 		statsService: services.NewStatisticsService(),
-		queueService: services.NewQueueService(),
 	}
 }
 
@@ -187,24 +152,6 @@ func (h *WebSocketHub) startStatsUpdateBroadcaster() {
 	}
 }
 
-// StartProgressForwarder 启动一个 goroutine 将下载进度更新转发给 WebSocket 客户端
-// 这将 chunkdownload 的进度通道连接到 WebSocket Hub
-func (h *WebSocketHub) StartProgressForwarder(progressChan <-chan services.ProgressUpdate) {
-	go func() {
-		for update := range progressChan {
-			h.BroadcastDownloadProgress(
-				update.QueueID,
-				update.DownloadedSize,
-				update.TotalSize,
-				update.Speed,
-				update.Status,
-				update.ChunksTotal,
-				update.ChunksCompleted,
-			)
-		}
-	}()
-}
-
 // BroadcastCommand 向所有客户端广播指令
 func (h *WebSocketHub) BroadcastCommand(action string, payload interface{}) error {
 	cmdData := map[string]interface{}{
@@ -236,71 +183,6 @@ func (h *WebSocketHub) BroadcastMessage(message interface{}) error {
 	}
 	h.broadcast <- data
 	return nil
-}
-
-// BroadcastDownloadProgress 向所有客户端广播下载进度
-func (h *WebSocketHub) BroadcastDownloadProgress(queueID string, downloaded, total, speed int64, status string, chunks, chunksDone int) {
-	msg := DownloadProgressMessage{
-		Type:       MessageTypeDownloadProgress,
-		QueueID:    queueID,
-		Downloaded: downloaded,
-		Total:      total,
-		Speed:      speed,
-		Status:     status,
-		Chunks:     chunks,
-		ChunksDone: chunksDone,
-	}
-	if err := h.BroadcastMessage(msg); err != nil {
-		utils.Warn("[WebSocket] Failed to broadcast download progress: %v", err)
-	}
-}
-
-// BroadcastQueueAdd 广播队列项目添加
-func (h *WebSocketHub) BroadcastQueueAdd(item *database.QueueItem) {
-	msg := QueueChangeMessage{
-		Type:   MessageTypeQueueChange,
-		Action: QueueActionAdd,
-		Item:   item,
-	}
-	if err := h.BroadcastMessage(msg); err != nil {
-		utils.Warn("[WebSocket] Failed to broadcast queue add: %v", err)
-	}
-}
-
-// BroadcastQueueRemove 广播队列项目移除
-func (h *WebSocketHub) BroadcastQueueRemove(itemID string) {
-	msg := QueueChangeMessage{
-		Type:   MessageTypeQueueChange,
-		Action: QueueActionRemove,
-		Item:   &database.QueueItem{ID: itemID},
-	}
-	if err := h.BroadcastMessage(msg); err != nil {
-		utils.Warn("[WebSocket] Failed to broadcast queue remove: %v", err)
-	}
-}
-
-// BroadcastQueueUpdate 广播队列项目更新
-func (h *WebSocketHub) BroadcastQueueUpdate(item *database.QueueItem) {
-	msg := QueueChangeMessage{
-		Type:   MessageTypeQueueChange,
-		Action: QueueActionUpdate,
-		Item:   item,
-	}
-	if err := h.BroadcastMessage(msg); err != nil {
-		utils.Warn("[WebSocket] Failed to broadcast queue update: %v", err)
-	}
-}
-
-// BroadcastQueueReorder 广播队列重新排序
-func (h *WebSocketHub) BroadcastQueueReorder(queue []database.QueueItem) {
-	msg := QueueChangeMessage{
-		Type:   MessageTypeQueueChange,
-		Action: QueueActionReorder,
-		Queue:  queue,
-	}
-	if err := h.BroadcastMessage(msg); err != nil {
-		utils.Warn("[WebSocket] Failed to broadcast queue reorder: %v", err)
-	}
 }
 
 // BroadcastStatsUpdate 向所有客户端广播统计更新
@@ -483,21 +365,6 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 			}
 		}
 
-		// 同时也发送当前队列状态
-		queue, err := h.hub.queueService.GetQueue()
-		if err == nil {
-			msg := QueueChangeMessage{
-				Type:   MessageTypeQueueChange,
-				Action: QueueActionReorder,
-				Queue:  queue,
-			}
-			if data, err := json.Marshal(msg); err == nil {
-				select {
-				case client.send <- data:
-				default:
-				}
-			}
-		}
 	}()
 }
 

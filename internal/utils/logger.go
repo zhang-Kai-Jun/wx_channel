@@ -261,82 +261,26 @@ func LogError(format string, args ...interface{}) {
 	// GetLogger().Error(format, args...)
 }
 
-// LogDownload 记录下载操作
-func LogDownload(videoID, title, author, url string, size int64, success bool) {
+// LogComment 记录评论采集操作
+func LogComment(videoID, title string, commentCount int, success bool) {
 	event := GetLogger().zLogger.Info()
 	if !success {
 		event = GetLogger().zLogger.Warn()
 	}
-
 	status := "成功"
 	if !success {
 		status = "失败"
 	}
-	sizeMB := float64(size) / (1024 * 1024)
-
-	// 使用 structured logging 字段
-	event.Str("type", "下载").
+	event.Str("type", "评论采集").
 		Str("status", status).
 		Str("id", videoID).
 		Str("title", title).
-		Str("author", author).
-		Float64("size_mb", sizeMB).
-		Str("url", url).
-		Msgf("[下载] %s | %s", title, status)
-}
-
-// LogComment 记录评论采集操作
-func LogComment(videoID, title string, commentCount int, success bool) {
-
-}
-
-// LogBatchDownload 记录批量下载操作
-func LogBatchDownload(total, success, failed int) {
-
-}
-
-// LogDownloadError 记录下载错误详情
-func LogDownloadError(videoID, title, author, url string, err error, retryCount int) {
-
-}
-
-// LogDownloadRetry 记录下载重试
-func LogDownloadRetry(videoID, title string, attempt, maxRetries int, err error) {
-
+		Int("count", commentCount).
+		Msgf("[评论] %s | %d条", title, commentCount)
 }
 
 // LogAPI 记录API调用
 func LogAPI(method, path string, statusCode int, duration time.Duration) {
-
-}
-
-// LogUploadInit 记录上传初始化
-func LogUploadInit(uploadID string, success bool) {
-
-}
-
-// LogUploadChunk 记录分片上传
-func LogUploadChunk(uploadID string, index, total int, sizeMB float64, success bool) {
-
-}
-
-// LogUploadMerge 记录分片合并
-func LogUploadMerge(uploadID, filename, author string, totalChunks int, sizeMB float64, success bool) {
-
-}
-
-// LogDirectUpload 记录直接上传
-func LogDirectUpload(filename, author string, sizeMB float64, encrypted bool, success bool) {
-
-}
-
-// LogCSVOperation 记录CSV操作
-func LogCSVOperation(operation, videoID, title string, success bool, reason string) {
-
-}
-
-// LogCSVRebuild 记录CSV重建
-func LogCSVRebuild(filePath string, success bool) {
 
 }
 

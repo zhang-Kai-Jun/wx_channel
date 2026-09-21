@@ -130,6 +130,7 @@ type TaskErrorData struct {
 
 // DOMActionBody DOM 操作请求体
 type DOMActionBody struct {
+	OperationID string   `json:"operation_id,omitempty"`
 	Action      string   `json:"action"`
 	Target      string   `json:"target"`
 	Content     string   `json:"content"`

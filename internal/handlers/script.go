@@ -338,64 +338,10 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 		});
 	};
 	
-	// 暂停视频的辅助函数（只暂停，不阻止自动切换）
-	// 分层降级策略：Video.js API → video.pause() → XPath按钮 → CSS按钮 → 键盘空格键
+	// 下载和页面自动暂停复用同一实现，不再定时恢复播放。
 	window.__wx_channels_pause_video__ = function() {
-		console.log('[视频助手] 暂停视频（下载期间）...');
-		try {
-			const pausedVideos = [];
-
-			// === 同步块：立即暂停可见视频，立即返回 ===
-			if (typeof videojs !== 'undefined') {
-				const players = videojs.getAllPlayers?.() || [];
-				for (const player of players) {
-					if (player && typeof player.pause === 'function' && !player.paused()) {
-						player.pause();
-						pausedVideos.push({ type: 'videojs', player });
-					}
-				}
-			}
-			const allVideos = Array.from(document.querySelectorAll('video'));
-			for (const video of allVideos) {
-				if (!video.paused) {
-					video.pause();
-					pausedVideos.push({ type: 'native', video });
-				}
-			}
-			console.log('[视频助手] 立即暂停完成，共', pausedVideos.length, '个视频');
-			// 立即返回，不阻塞
-			return pausedVideos;
-		} catch (e) {
-			console.error('[视频助手] 暂停视频失败:', e);
-			return [];
-		}
-	};
-
-	// 恢复视频播放的辅助函数
-	// 分层降级策略：player.play() → video.play() → 键盘空格键
-	window.__wx_channels_resume_video__ = function(pausedVideos) {
-		if (!pausedVideos || pausedVideos.length === 0) return;
-		console.log('[视频助手] 恢复视频播放，共', pausedVideos.length, '个');
-		try {
-			for (const item of pausedVideos) {
-				if (item.type === 'videojs' && item.player) {
-					try { item.player.play(); }
-					catch (e) { console.log('[视频助手] Video.js play 失败:', e.message); }
-				} else if (item.type === 'native' && item.video) {
-					try { item.video.play(); }
-					catch (e) { console.log('[视频助手] native play 失败:', e.message); }
-				}
-			}
-			// 备用：尝试键盘空格键
-			setTimeout(() => {
-				const videos = Array.from(document.querySelectorAll('video')).filter(v => v.offsetWidth > 0);
-				if (videos.length > 0) videos[0].focus();
-				document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', keyCode: 32, bubbles: true }));
-				document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', keyCode: 32, bubbles: true }));
-			}, 200);
-		} catch (e) {
-			console.error('[视频助手] 恢复视频失败:', e);
-		}
+		if (window.__wx_api_client) return window.__wx_api_client.pauseVideo();
+		return Promise.resolve({ success: false, isPaused: false, message: '暂停模块未就绪' });
 	};
 	
 	// 覆盖原有的下载处理函数
@@ -403,7 +349,7 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 	if (originalHandleClick) {
 		window.__wx_channels_handle_click_download__ = function(sp) {
 			// 暂停视频
-			const pausedVideos = window.__wx_channels_pause_video__();
+			window.__wx_channels_pause_video__();
 			
 			// 调用原始函数进行下载
 			originalHandleClick(sp);
@@ -411,10 +357,6 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 			// 注意：不再手动记录下载，因为后端API已经处理了记录保存
 			// 移除重复的记录调用以避免CSV中出现重复记录
 			
-			// 3秒后恢复播放（给下载一些时间开始）
-			setTimeout(() => {
-				window.__wx_channels_resume_video__(pausedVideos);
-			}, 5000);
 		};
 	}
 	
@@ -423,7 +365,7 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 	if (originalDownloadCur) {
 		window.__wx_channels_download_cur__ = function() {
 			// 暂停视频
-			const pausedVideos = window.__wx_channels_pause_video__();
+			window.__wx_channels_pause_video__();
 			
 			// 调用原始函数进行下载
 			originalDownloadCur();
@@ -431,10 +373,6 @@ func (h *ScriptHandler) getDownloadTrackerScript() string {
 			// 注意：不再手动记录下载，因为后端API已经处理了记录保存
 			// 移除重复的记录调用以避免CSV中出现重复记录
 			
-			// 3秒后恢复播放（给下载一些时间开始）
-			setTimeout(() => {
-				window.__wx_channels_resume_video__(pausedVideos);
-			}, 3000);
 		};
 	}
 	

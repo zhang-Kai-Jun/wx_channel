@@ -716,6 +716,16 @@ window.__wx_api_client = {
     }
   },
 
+  // 手动打开链接独立于任务导航，只确认接收指令，不表示目标页已加载完成。
+  openManualLink: function (id, body) {
+    this.sendResponse(id, { success: true, message: '正在打开链接' });
+    setTimeout(function () {
+      window.__wx_cached_cards = null;
+      window.__wx_current_feed = null;
+      window.location.href = body.url;
+    }, 100);
+  },
+
   // 处理 API 调用请求
   handleAPICall: async function (data) {
     var id = data.id;
@@ -735,6 +745,10 @@ window.__wx_api_client = {
     }
 
     try {
+      if (key === 'key:channels:dom_action' && body.action === 'open_link') {
+        this.openManualLink(id, body);
+        return;
+      }
       // 等待 WXU.API 和 WXU.API2 初始化
       var maxWait = 10000; // 最多等待10秒
       var startTime = Date.now();
@@ -1056,10 +1070,322 @@ window.__wx_api_client = {
     }
   },
 
+  playbackVisibleArea: function(element) {
+    if (!element || !element.isConnected || element.closest('[hidden], [aria-hidden="true"]')) return 0;
+    var style = window.getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden') return 0;
+    var rect = element.getBoundingClientRect();
+    return Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0)) *
+      Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+  },
+
+  getPlaybackScope: function() {
+    var visibleArea = this.playbackVisibleArea;
+    var slides = document.querySelectorAll('.slides-item');
+    var scope = null;
+    var largestArea = 0;
+    for (var si = 0; si < slides.length; si++) {
+      var area = visibleArea(slides[si]);
+      if (area > largestArea) {
+        largestArea = area;
+        scope = slides[si];
+      }
+    }
+    return slides.length ? scope : document;
+  },
+
+  getPlaybackTarget: function(scope) {
+    if (scope === undefined) scope = this.getPlaybackScope();
+    var feed = scope && scope.querySelector('[id^="flow-feed-"]');
+    return {
+      scope: scope,
+      pagePath: window.location.pathname,
+      feedId: feed ? feed.id : '',
+      media: scope ? Array.from(scope.querySelectorAll('video, audio')).map(function(element) {
+        return { element: element, source: [element.getAttribute('src') || '', element.currentSrc || '',
+          Array.from(element.querySelectorAll('source')).map(function(source) { return source.src; }).join('|')].join('|') };
+      }) : []
+    };
+  },
+
+  samePlaybackTarget: function(left, right) {
+    return !!left && !!right && left.scope === right.scope && left.pagePath === right.pagePath && left.feedId === right.feedId &&
+      left.media.length === right.media.length && left.media.every(function(media, index) {
+        return media.element === right.media[index].element && media.source === right.media[index].source;
+      });
+  },
+
+  readPlaybackState: function(scope) {
+    var visibleArea = this.playbackVisibleArea;
+    var findControl = function(selector) {
+      var controls = scope ? scope.querySelectorAll(selector) : [];
+      for (var i = 0; i < controls.length; i++) {
+        var control = controls[i].closest('button, [role="button"]') || controls[i];
+        if (visibleArea(control) > 0 && !control.disabled && control.getAttribute('aria-disabled') !== 'true') return control;
+      }
+      return null;
+    };
+    var media = scope ? Array.from(scope.querySelectorAll('video, audio')).filter(function(element) {
+      var visual = element.tagName === 'AUDIO' ? element.closest('[ml-key="flow-image"], .slides-item') : element;
+      return visibleArea(visual) > 0;
+    }) : [];
+    var pauseButton = findControl('[aria-label*="暂停"], [data-action="pause"], [ml-key="flow-video-pause"], [class*="pause"][class*="btn"]');
+    var playButton = findControl('[aria-label="播放"], [data-action="play"], [ml-key="flow-video-play"]');
+    var nativeVideo = media.some(function(element) { return element.tagName === 'VIDEO'; });
+    if (this.pauseButtonClicks && playButton && !pauseButton) this.pauseButtonClicks.delete(scope);
+    return {
+      media: media, pauseButton: pauseButton, playButton: playButton, nativeVideo: nativeVideo,
+      paused: (nativeVideo || !pauseButton) && (media.length ? media.every(function(element) { return element.paused; }) : !!playButton)
+    };
+  },
+
+  // 不等待按钮渲染或异步确认；播放事件可直接指定切换动画中的媒体。
+  pausePlaybackNow: function(scope, eventMedia) {
+    var state = this.readPlaybackState(scope);
+    var method = 'already_paused';
+    // 普通视频直接暂停媒体，避免 UI 标签滞后时切换按钮重新触发播放。
+    // 图文还需停止轮播；同一内容只点一次，直到观察到播放按钮或切换作品。
+    if (state.pauseButton && !state.nativeVideo) {
+      if (!this.pauseButtonClicks) this.pauseButtonClicks = new WeakMap();
+      var lastClick = this.pauseButtonClicks.get(scope);
+      var target = this.getPlaybackTarget(scope);
+      var sameContent = lastClick && lastClick.pagePath === target.pagePath &&
+        (target.feedId ? lastClick.feedId === target.feedId : this.samePlaybackTarget(lastClick, target));
+      if (!sameContent) {
+        this.pauseButtonClicks.set(scope, target);
+        try { state.pauseButton.click(); method = 'button_click'; } catch(e) {}
+      }
+    }
+    state = this.readPlaybackState(scope);
+    if (eventMedia && eventMedia.isConnected && !state.media.includes(eventMedia)) state.media.push(eventMedia);
+    for (var i = 0; i < state.media.length; i++) {
+      if (state.media[i].paused) continue;
+      try {
+        state.media[i].pause();
+        method = state.media[i].tagName === 'AUDIO' ? 'audio_element' : 'video_element';
+      } catch(e) { console.log('[API客户端] 媒体暂停失败:', e); }
+    }
+    return method;
+  },
+
+  // 只合并同一内容的确认任务，新内容立即开始；旧任务不能清除新任务的状态。
+  pauseVideo: function() {
+    var target = this.getPlaybackTarget();
+    if (this.pausePromise && this.samePlaybackTarget(this.pauseTarget, target) && this.pauseTargetEpoch === (this.pauseEpoch || 0)) {
+      this.pausePlaybackNow(target.scope);
+      return this.pausePromise;
+    }
+    var self = this;
+    this.pauseEpoch = (this.pauseEpoch || 0) + 1;
+    this.pauseTarget = target;
+    this.pauseTargetEpoch = this.pauseEpoch;
+    var promise = this.pauseCurrentMedia(target, this.pauseEpoch).catch(function(error) {
+      return { success: false, isPaused: false, message: error.message };
+    }).finally(function() {
+      if (self.pausePromise === promise) self.pausePromise = null;
+    });
+    this.pausePromise = promise;
+    return promise;
+  },
+
+  pauseCurrentMedia: async function(target, pauseEpoch) {
+    var self = this;
+    var maxRetries = 5;
+    var retryDelay = 300;
+    var getPauseScope = this.getPlaybackScope.bind(this);
+    var isTargetCurrent = function(scope) {
+      return pauseEpoch === (self.pauseEpoch || 0) && scope === getPauseScope() && self.samePlaybackTarget(target, self.getPlaybackTarget(scope));
+    };
+    var readPauseState = this.readPlaybackState.bind(this);
+    // paused 在媒体初始化时也为 true，必须跨多个采样确认，不能读一次就结束。
+    var confirmPaused = async function(scope, initial) {
+      var firstState = readPauseState(scope);
+      if (!firstState.paused) return false;
+      var mediaSources = firstState.media.map(function(element) { return element.currentSrc || element.src; });
+      for (var sample = 0; sample < 3; sample++) {
+        await new Promise(function(resolve) { setTimeout(resolve, 200); });
+        if (!isTargetCurrent(scope)) return false;
+        var current = readPauseState(scope);
+        if (!current.paused || current.media.length !== firstState.media.length) return false;
+        for (var pi = 0; pi < current.media.length; pi++) {
+          var mediaElement = current.media[pi];
+          if (mediaElement !== firstState.media[pi] || (mediaElement.currentSrc || mediaElement.src) !== mediaSources[pi]) return false;
+          if (initial && mediaElement.readyState < 2 && !mediaElement.ended) return false;
+        }
+      }
+      return true;
+    };
+    var pauseDiagnostics = function(scope) {
+      var state = readPauseState(scope);
+      var feed = scope && scope.querySelector('[id^="flow-feed-"]');
+      return {
+        version: 'pause-v5-no-toggle',
+        pagePath: window.location.pathname,
+        feedId: feed ? feed.id : '',
+        slideIndex: Array.from(document.querySelectorAll('.slides-item')).indexOf(scope),
+        pauseButton: !!state.pauseButton,
+        playButton: !!state.playButton,
+        media: state.media.map(function(element) {
+          return { tag: element.tagName, paused: element.paused, readyState: element.readyState, currentTime: element.currentTime };
+        })
+      };
+    };
+    var pauseResult = function(method) {
+      return { success: true, isPaused: true, message: '视频已暂停', byMethod: method, diagnostics: pauseDiagnostics(getPauseScope()) };
+    };
+
+    for (var retry = 0; retry < maxRetries; retry++) {
+      console.log('[API客户端] 暂停重试 ' + (retry + 1) + '/' + maxRetries);
+
+      var scope = getPauseScope();
+      if (!isTargetCurrent(scope)) return { success: false, isPaused: false, message: '当前内容已切换', cancelled: true };
+      var state = readPauseState(scope);
+      if (state.paused) {
+        if (await confirmPaused(scope, true)) return pauseResult('already_paused');
+        if (!isTargetCurrent(scope)) continue;
+        state = readPauseState(scope);
+      }
+
+      var method = this.pausePlaybackNow(scope);
+      if (!isTargetCurrent(scope)) continue;
+      state = readPauseState(scope);
+      if (state.paused && await confirmPaused(scope, method === 'already_paused')) return pauseResult(method);
+      if (!isTargetCurrent(scope)) continue;
+
+      if (retry < maxRetries - 1) {
+        await new Promise(function(resolve) { setTimeout(resolve, retryDelay); });
+      }
+    }
+
+    console.log('[API客户端] 暂停失败: 所有策略均未生效');
+    return {
+      success: false,
+      isPaused: false,
+      message: '暂停失败: 所有策略均未生效',
+      triedMethods: ['button_click', 'video_element', 'audio_element'],
+      diagnostics: pauseDiagnostics(getPauseScope())
+    };
+  },
+
+  startAutoPause: function() {
+    if (this.stopAutoPause) return;
+    var self = this;
+    var retryTimer = null;
+    var stopped = false;
+    var current = null;
+    var enabled = function() {
+      return !stopped && /^\/web\/pages\/(feed|home)\/?$/.test(window.location.pathname);
+    };
+    var syncTarget = function() {
+      var target = self.getPlaybackTarget();
+      if (!current || !self.samePlaybackTarget(current.target, target)) {
+        self.pauseEpoch = (self.pauseEpoch || 0) + 1;
+        if (retryTimer !== null) clearTimeout(retryTimer);
+        retryTimer = null;
+        current = { target: target, attempts: 0, pending: null, confirmed: false, userResumed: false };
+      }
+      return current;
+    };
+    var check = function() {
+      if (!enabled()) return;
+      var context = syncTarget();
+      var scope = context.target.scope;
+      if (!scope || context.userResumed) return;
+      if (!scope.querySelector('video, audio, [ml-key="flow-image"], [ml-key="flow-video-pause"], [aria-label="暂停"]')) return;
+      if (context.pending) {
+        // 确认期间播放器仍可能自动播放或挂载按钮，动作不等待 Promise。
+        self.pausePlaybackNow(scope);
+        return;
+      }
+      if (context.confirmed && self.readPlaybackState(scope).paused) return;
+      if (retryTimer !== null || context.attempts >= 3) return;
+      context.attempts++;
+      context.pending = self.pauseVideo();
+      context.pending.then(function(result) {
+        context.pending = null;
+        if (!enabled() || current !== context || context.userResumed) return;
+        if (!self.samePlaybackTarget(context.target, self.getPlaybackTarget())) { check(); return; }
+        context.confirmed = result.success === true;
+        if (context.confirmed) context.attempts = 0;
+        __api_log(result.success ? 'INF' : 'WRN', '[AutoPause]', result);
+        if (!context.confirmed && context.attempts < 3) {
+          retryTimer = setTimeout(function() {
+            retryTimer = null;
+            check();
+          }, 1000);
+        }
+      });
+    };
+    // play 不冒泡；直接处理事件媒体，覆盖尚未成为最大可见滑块的新视频。
+    var onPlay = function(event) {
+      if (!enabled()) return;
+      var media = event.target;
+      if (!media || !media.matches || !media.matches('video, audio') || !media.isConnected) return;
+      var context = syncTarget();
+      var scope = media.closest('.slides-item') || media.closest('[id^="flow-feed-"], .feed-video, [ml-key="flow-image"]');
+      if (!scope) {
+        if (context.target.scope !== document || self.playbackVisibleArea(media) <= 0) return;
+        scope = document;
+      }
+      if (context.userResumed && context.target.scope && context.target.scope.contains(media)) return;
+      // 有限重试只限制后台确认，不能使实际播放事件失去保护。
+      self.pausePlaybackNow(scope, media);
+      if (!context.pending) check();
+    };
+    var onUserPlay = function(event) {
+      if (!enabled() || !event.isTrusted || event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
+      var element = event.target;
+      if (!element.closest || element.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+      if (event.type === 'keydown' && event.key !== ' ' && event.key !== 'Enter') return;
+      var context = syncTarget();
+      var scope = context.target.scope;
+      if (!scope || !scope.contains(element)) return;
+      var control = element.closest('button, [role="button"]');
+      var playTarget = element.closest('[aria-label="播放"], [data-action="play"], [ml-key="flow-video-play"]') ||
+        (control && control.querySelector('[ml-key="flow-video-play"]'));
+      if (playTarget || (element.matches('video, audio') && element.paused)) {
+        context.userResumed = true;
+        self.pauseEpoch = (self.pauseEpoch || 0) + 1;
+        if (retryTimer !== null) clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+    var observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'id', 'src', 'aria-label', 'ml-key'] });
+    var unsubscribe = window.WXE && window.WXE.onFeed ? window.WXE.onFeed(check) : null;
+    document.addEventListener('play', onPlay, true);
+    document.addEventListener('playing', onPlay, true);
+    document.addEventListener('click', onUserPlay, true);
+    document.addEventListener('keydown', onUserPlay, true);
+    document.addEventListener('scroll', check, true);
+    document.addEventListener('transitionend', check, true);
+    window.addEventListener('pageshow', check);
+    window.addEventListener('pagehide', stop);
+    function stop() {
+      stopped = true;
+      self.pauseEpoch = (self.pauseEpoch || 0) + 1;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      observer.disconnect();
+      if (unsubscribe) unsubscribe();
+      document.removeEventListener('play', onPlay, true);
+      document.removeEventListener('playing', onPlay, true);
+      document.removeEventListener('click', onUserPlay, true);
+      document.removeEventListener('keydown', onUserPlay, true);
+      document.removeEventListener('scroll', check, true);
+      document.removeEventListener('transitionend', check, true);
+      window.removeEventListener('pageshow', check);
+      window.removeEventListener('pagehide', stop);
+      self.stopAutoPause = null;
+    }
+    this.stopAutoPause = stop;
+    check();
+  },
+
   // 执行 DOM Action
   executeDomAction: async function(body, requestId) {
     var self = this;
     var action = body.action || 'click_element';
+    if (action === 'pause_video') return this.pauseVideo();
     var target = body.target || 'video';
     var content = body.content || '';
     var index = body.index || 0;
@@ -1150,6 +1476,7 @@ window.__wx_api_client = {
         await new Promise(function(resolve) { setTimeout(resolve, _RETRY_CONFIG.domRefreshDelay); });
         try {
           var result = await actionFn();
+          if (result && (result.resultUnknown || result.retryable === false)) return result;
           if (result && result.success) {
             console.log('[API客户端] ' + actionName + ' 第' + attempt + '次尝试成功');
             return result;
@@ -1978,7 +2305,45 @@ window.__wx_api_client = {
           window.__wx_current_feed = null;
         }
 
+        var commentStarted = Date.now();
+        var commentAttemptNumber = 0;
+        var commentSubmitted = false;
+        function getCommentDisabledResult() {
+          // 只匹配评论面板的可见状态提示，避免把评论正文或隐藏旧面板误判为关闭评论。
+          var notices = document.querySelectorAll('.comment-panel .text-center.text-fg-3');
+          for (var noticeIndex = 0; noticeIndex < notices.length; noticeIndex++) {
+            var notice = notices[noticeIndex];
+            if ((notice.textContent || '').trim() !== '作者已关闭评论' || !notice.getClientRects().length) continue;
+            var visible = true;
+            for (var ancestor = notice; ancestor; ancestor = ancestor.parentElement) {
+              var style = window.getComputedStyle(ancestor);
+              if (ancestor.hidden || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+                visible = false;
+                break;
+              }
+            }
+            if (visible) {
+              logCommentStage('comments_disabled');
+              return { success: false, isCommented: false, retryable: false, reason: 'comments_disabled', message: '作者已关闭评论' };
+            }
+          }
+          return null;
+        }
+        function logCommentStage(stage, details) {
+          __api_log('INF', '[CommentOperation]', {
+            operation_id: body.operation_id || '', request_id: requestId,
+            stage: stage, attempt: commentAttemptNumber,
+            elapsed_ms: Date.now() - commentStarted, page: window.location.pathname,
+            details: details || {}
+          });
+        }
         var commentAttempt = async function() {
+          // A click may have sent the comment even if a later DOM read throws.
+          if (commentSubmitted) return { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
+          commentAttemptNumber++;
+          logCommentStage('attempt');
+          var disabledResult = getCommentDisabledResult();
+          if (disabledResult) return disabledResult;
           var feedInfo = window.__wx_current_feed || {};
           var feedId = feedInfo.feedId;
           // 【关键】如果不在详情页，不使用缓存的 feedId
@@ -2015,10 +2380,12 @@ window.__wx_api_client = {
           }
 
           if (!commentBtn) {
+            logCommentStage('comment_button_missing');
             console.log('[API客户端] 未找到评论按钮');
             return { success: false, message: '未找到评论按钮' };
           }
 
+          logCommentStage('comment_button_found', { visible: !!commentBtn.getClientRects().length });
           commentBtn.click();
           await new Promise(function(resolve) { setTimeout(resolve, 3000); });
 
@@ -2032,6 +2399,8 @@ window.__wx_api_client = {
           var pollMax = 5;
           var pollDelay = 800;
           for (var pollI = 0; pollI < pollMax; pollI++) {
+            disabledResult = getCommentDisabledResult();
+            if (disabledResult) return disabledResult;
             commentInput = window.__wx_parsers__.getCommentInput();
             if (commentInput) {
               console.log('[API客户端] 第' + (pollI + 1) + '次轮询找到评论输入框');
@@ -2041,6 +2410,8 @@ window.__wx_api_client = {
             await new Promise(function(resolve) { setTimeout(resolve, pollDelay); });
           }
 
+          disabledResult = getCommentDisabledResult();
+          if (disabledResult) return disabledResult;
           if (!commentInput) {
             var placeholder = document.querySelector(window.__wx_selectors__.comment.placeholder);
             if (placeholder) {
@@ -2051,17 +2422,20 @@ window.__wx_api_client = {
             }
           }
 
+          disabledResult = getCommentDisabledResult();
+          if (disabledResult) return disabledResult;
           if (!commentInput) {
+            logCommentStage('input_missing');
             console.log('[API客户端] 未找到评论输入框，检查页面状态...');
             await new Promise(function(resolve) { setTimeout(resolve, 2000); });
             var commentBtns = document.querySelectorAll('[aria-label^="评论"]');
             if (commentBtns.length === 0) {
-              console.log('[API客户端] 评论按钮消失，推测评论已发出');
-              return { success: true, isCommented: true, message: '评论已发送' };
+              return { success: false, message: '评论输入框未找到，页面状态已变化，未发送评论' };
             }
             return { success: false, message: '未找到评论输入框' };
           }
 
+          logCommentStage('input_found');
           console.log('[API客户端] 找到评论输入框');
           commentInput.focus();
           await new Promise(function(resolve) { setTimeout(resolve, 200); });
@@ -2081,6 +2455,8 @@ window.__wx_api_client = {
 
           var sendBtn = null;
           for (var pollJ = 0; pollJ < pollMax; pollJ++) {
+            disabledResult = getCommentDisabledResult();
+            if (disabledResult) return disabledResult;
             sendBtn = window.__wx_parsers__.getSendBtn();
             if (sendBtn) {
               console.log('[API客户端] 第' + (pollJ + 1) + '次轮询找到发送按钮');
@@ -2089,7 +2465,11 @@ window.__wx_api_client = {
             await new Promise(function(resolve) { setTimeout(resolve, pollDelay); });
           }
 
+          disabledResult = getCommentDisabledResult();
+          if (disabledResult) return disabledResult;
           if (sendBtn) {
+            commentSubmitted = true;
+            logCommentStage('send_click');
             sendBtn.click();
             await new Promise(function(resolve) { setTimeout(resolve, 2000); });
             window.__wx_parsers__.refreshAllDom();
@@ -2104,19 +2484,29 @@ window.__wx_api_client = {
             return { success: true, isCommented: true, message: '评论已发送' };
           }
 
+          logCommentStage('send_button_missing');
           console.log('[API客户端] 未找到发送按钮，尝试检测评论是否已发出...');
           var commentBtnsAfter = document.querySelectorAll('[aria-label^="评论"]');
           if (commentBtnsAfter.length === 0) {
-            console.log('[API客户端] 评论浮层已关闭，评论已发出');
-            setTimeout(function() { try { window.close(); } catch(e) {} }, 500);
-            return { success: true, isCommented: true, message: '评论已发送' };
+            return { success: false, message: '未找到发送按钮，页面状态已变化，未发送评论' };
           }
           console.log('[API客户端] 评论浮层未关闭，评论未发出');
           setTimeout(function() { try { window.close(); } catch(e) {} }, 500);
           return { success: false, message: '未找到发送按钮，评论未发出' };
         };
 
-        return await _executeWithRetry(commentAttempt, 'do_comment');
+        var commentResult;
+        try {
+          commentResult = await _executeWithRetry(commentAttempt, 'do_comment');
+        } catch (commentError) {
+          if (!commentSubmitted) throw commentError;
+          commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
+        }
+        if (commentSubmitted && !commentResult.success) {
+          commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
+        }
+        logCommentStage('finished', { success: commentResult.success, result_unknown: !!commentResult.resultUnknown });
+        return commentResult;
       }
 
       // get_comment_count 操作 - 从 Pinia Store 获取当前视频的评论总数
@@ -2523,182 +2913,6 @@ window.__wx_api_client = {
         return { success: true, method: 'window_close', message: '页面已关闭 (window.close)' };
       }
 
-      // pause_video 操作 - 暂停视频播放（分层降级策略 + currentTime 差值验证）
-      if (action === 'pause_video') {
-        var maxRetries = 5;
-        var retryDelay = 300;
-
-        // 先检查视频是否已在暂停状态（通过 currentTime 差值）
-        var initVideos = document.querySelectorAll('video');
-        var playingVideos = [];
-        for (var av = 0; av < initVideos.length; av++) {
-          if (initVideos[av].offsetWidth > 0 && initVideos[av].offsetHeight > 0 && !initVideos[av].paused) {
-            playingVideos.push(initVideos[av]);
-          }
-        }
-        if (playingVideos.length === 0) {
-          console.log('[API客户端] 没有正在播放的视频，无需暂停');
-          return { success: true, isPaused: true, message: '视频已暂停', byMethod: 'already_paused' };
-        }
-
-        // 辅助函数：通过 currentTime 差值确认视频真的停止了
-        var _isVideoActuallyPaused = function(v) {
-          if (!v || v.paused) return false;
-          var t1 = v.currentTime;
-          var t2 = v.currentTime;
-          try { t2 = v.currentTime; } catch(e) {}
-          // 等待一帧后再读一次，时间不增长才算真正暂停
-          var t3 = t1;
-          var dom = v;
-          // 使用 Promise 延迟读取
-          return new Promise(function(resolve) {
-            setTimeout(function() {
-              try { t3 = dom.currentTime; } catch(e) {}
-              resolve(Math.abs(t3 - t1) < 0.05);
-            }, 100);
-          });
-        };
-
-        // 同步版：通过 double-read 立即判断
-        var _checkPausedSync = function(v) {
-          if (!v) return false;
-          if (v.paused) return true;
-          var t1 = 0, t2 = 0;
-          try { t1 = v.currentTime; } catch(e) {}
-          try { t2 = v.currentTime; } catch(e) {}
-          return v.paused || Math.abs(t2 - t1) < 0.05;
-        };
-
-        for (var retry = 0; retry < maxRetries; retry++) {
-          console.log('[API客户端] 暂停重试 ' + (retry + 1) + '/' + maxRetries);
-
-          // ========== 每次重试前重新查询 DOM ==========
-          var targetVideo = null;
-          var curVideos = document.querySelectorAll('video');
-          for (var vi = 0; vi < curVideos.length; vi++) {
-            if (curVideos[vi].offsetWidth > 0 && curVideos[vi].offsetHeight > 0 && !curVideos[vi].paused) {
-              targetVideo = curVideos[vi];
-              break;
-            }
-          }
-
-          // ========== 策略 1: video.pause() 直接暂停 ==========
-          if (targetVideo) {
-            // 记录暂停前的 currentTime 作为基准
-            var timeBefore = 0;
-            try { timeBefore = targetVideo.currentTime; } catch(e) {}
-            targetVideo.pause();
-            // 等待视频引擎响应
-            await new Promise(function(resolve) { setTimeout(resolve, 300); });
-            // 通过 currentTime 差值验证真的暂停了
-            var timeAfter = 0;
-            try { timeAfter = targetVideo.currentTime; } catch(e) {}
-            var isStopped = targetVideo.paused && Math.abs(timeAfter - timeBefore) < 0.1;
-            console.log('[API客户端] video.pause() 验证: paused=' + targetVideo.paused + ', timeBefore=' + timeBefore.toFixed(2) + ', timeAfter=' + timeAfter.toFixed(2) + ', isStopped=' + isStopped);
-            if (isStopped) {
-              console.log('[API客户端] video.pause() 暂停成功');
-              return { success: true, isPaused: true, message: '暂停成功 (video.pause)', byMethod: 'video_element' };
-            }
-            console.log('[API客户端] video.pause() 未生效，尝试按钮');
-          } else {
-            console.log('[API客户端] 未找到正在播放的视频，等待重试');
-          }
-
-          // ========== 策略 2: XPath 按钮 ==========
-          var xpathSelectors = [
-            '//button[@aria-label="暂停"]',
-            '//button[contains(@aria-label, "暂停")]',
-            '//div[@role="button"][@aria-label="暂停"]',
-            '//svg[@ml-key="flow-video-pause"]',
-          ];
-
-          var foundBtn = null;
-          for (var x = 0; x < xpathSelectors.length; x++) {
-            var result = document.evaluate(xpathSelectors[x], document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-            if (result.singleNodeValue) {
-              foundBtn = result.singleNodeValue;
-              console.log('[API客户端] XPath 找到暂停按钮: ' + xpathSelectors[x]);
-              break;
-            }
-          }
-
-          // ========== 策略 3: CSS 选择器 ==========
-          if (!foundBtn) {
-            var cssSelectors = ['[aria-label="暂停"]', '[data-action="pause"]', '[class*="pause"][class*="btn"]'];
-            for (var ci = 0; ci < cssSelectors.length; ci++) {
-              var els = document.querySelectorAll(cssSelectors[ci]);
-              for (var cj = 0; cj < els.length; cj++) {
-                var aria = els[cj].getAttribute('aria-label') || '';
-                if (aria.includes('暂停')) {
-                  foundBtn = els[cj];
-                  break;
-                }
-              }
-              if (foundBtn) break;
-            }
-          }
-
-          if (foundBtn) {
-            var btnBeforeLabel = (foundBtn.getAttribute('aria-label') || '').trim();
-            console.log('[API客户端] 点击前按钮 aria-label: "' + btnBeforeLabel + '"');
-            // 只对"暂停"按钮执行点击，跳过已是"播放"状态的按钮
-            if (!btnBeforeLabel.includes('暂停')) {
-              console.log('[API客户端] 按钮不是暂停按钮（当前为"' + btnBeforeLabel + '"），跳过');
-            } else {
-              // 记录点击前的 currentTime
-              var timeBeforeBtn = 0;
-              if (targetVideo) { try { timeBeforeBtn = targetVideo.currentTime; } catch(e) {} }
-              foundBtn.click();
-              await new Promise(function(resolve) { setTimeout(resolve, 400); });
-              // 验证 currentTime 是否停止增长
-              var timeAfterBtn = timeBeforeBtn;
-              if (targetVideo) { try { timeAfterBtn = targetVideo.currentTime; } catch(e) {} }
-              var isVideoStopped = targetVideo ? (targetVideo.paused || Math.abs(timeAfterBtn - timeBeforeBtn) < 0.15) : false;
-              var btnAfterLabel = (foundBtn.getAttribute('aria-label') || '').trim();
-              var isBtnToggled = btnAfterLabel.includes('播放');
-              console.log('[API客户端] 点击后验证: timeBefore=' + timeBeforeBtn.toFixed(2) + ', timeAfter=' + timeAfterBtn.toFixed(2) + ', isVideoStopped=' + isVideoStopped + ', btnLabel="' + btnAfterLabel + '"');
-              if (isVideoStopped && isBtnToggled) {
-                console.log('[API客户端] 点击按钮暂停成功');
-                return { success: true, isPaused: true, message: '暂停成功 (点击按钮)', byMethod: 'button_click' };
-              }
-              console.log('[API客户端] 点击后未确认暂停，继续重试');
-            }
-          }
-
-          // ========== 策略 4: 键盘空格键兜底 ==========
-          if (targetVideo) {
-            targetVideo.focus();
-          }
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', keyCode: 32, bubbles: true }));
-          document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', keyCode: 32, bubbles: true }));
-          await new Promise(function(resolve) { setTimeout(resolve, 300); });
-          var timeKbBefore = 0, timeKbAfter = 0;
-          if (targetVideo) {
-            try { timeKbBefore = targetVideo.currentTime; } catch(e) {}
-          }
-          await new Promise(function(resolve) { setTimeout(resolve, 100); });
-          if (targetVideo) {
-            try { timeKbAfter = targetVideo.currentTime; } catch(e) {}
-          }
-          var isKbStopped = targetVideo ? (targetVideo.paused || Math.abs(timeKbAfter - timeKbBefore) < 0.15) : false;
-          if (isKbStopped) {
-            console.log('[API客户端] 空格键暂停成功');
-            return { success: true, isPaused: true, message: '暂停成功 (空格键)', byMethod: 'keyboard' };
-          }
-
-          if (retry < maxRetries - 1) {
-            await new Promise(function(resolve) { setTimeout(resolve, retryDelay); });
-          }
-        }
-
-        console.log('[API客户端] 暂停失败: 所有策略均未生效');
-        return {
-          success: false,
-          isPaused: false,
-          message: '暂停失败: 所有策略均未生效',
-          triedMethods: ['video_element', 'xpath_button', 'css_button', 'keyboard']
-        };
-      }
 
       // 通用点击操作
       if (action === 'click_element' || action === 'click') {
@@ -2965,11 +3179,15 @@ window.__wx_api_client = {
 };
 
 // 自动初始化
+window.__wx_api_client.startAutoPause();
+window.addEventListener('pageshow', function() { window.__wx_api_client.startAutoPause(); });
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function () {
+    window.__wx_api_client.startAutoPause();
     window.__wx_api_client.init();
   });
 } else {
+  window.__wx_api_client.startAutoPause();
   window.__wx_api_client.init();
 }
 

@@ -132,6 +132,11 @@ func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	if path == "/__wx_channels_api/comment_operation_result" {
+		h.HandleCommentOperationResult(Conn)
+		return true
+	}
+
 	// fetch_video_comments 评论采集结果轮询（Node.js 轮询获取）
 	if path == "/__wx_channels_api/fetch_comments_result" {
 		h.HandleGetFetchCommentsResult(Conn)
@@ -271,12 +276,14 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	// 解析请求
 	var req struct {
-		Action  string `json:"action"`
-		Target  string `json:"target"`
-		Content string `json:"content"`
-		Index   int    `json:"index"`
-		URL     string `json:"url"`
-		TaskID  string `json:"task_id"`
+		Action       string `json:"action"`
+		Target       string `json:"target"`
+		Content      string `json:"content"`
+		Index        int    `json:"index"`
+		URL          string `json:"url"`
+		TaskID       string `json:"task_id"`
+		AsyncComment bool   `json:"async_comment"`
+		OperationID  string `json:"operation_id"`
 		// 回复专用字段（用于 do_reply_comment_v2）
 		ReplyContent string `json:"replyContent"`
 		// 精准匹配专用字段
@@ -317,6 +324,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	// 通过 WebSocket 调用前端 DOM 操作 API
 	domReq := websocket.DOMActionBody{
+		OperationID:    req.OperationID,
 		Action:         req.Action,
 		Target:         req.Target,
 		Content:        req.Content,
@@ -330,6 +338,25 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 		TimeFilter:     req.TimeFilter,
 		BlockWords:     req.BlockWords,
 		DedupUsernames: req.DedupUsernames,
+	}
+
+	if req.Action == "do_comment" && req.AsyncComment {
+		headers := http.Header{"Content-Type": {"application/json"}}
+		h.setCORSHeadersFromConn(Conn, headers)
+		if err := h.domActionHub.StartCommentOperation(req.OperationID, domReq); err != nil {
+			Conn.StopRequest(400, string(response.ErrorJSON(400, err.Error())), headers)
+			return
+		}
+		data, _ := json.Marshal(map[string]interface{}{
+			"accepted": true, "operation_id": req.OperationID,
+		})
+		Conn.StopRequest(202, string(data), headers)
+		return
+	}
+
+	if req.Action == "open_link" {
+		h.handleManualOpenLink(Conn, domReq)
+		return
 	}
 
 	// 【关键修复】导航操作（open_profile / enter_video）触发页面跳转，
@@ -511,6 +538,26 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	resultJSON, _ := json.Marshal(result)
 	Conn.StopRequest(200, string(resultJSON), headers)
+}
+
+func (h *APIHandler) HandleCommentOperationResult(Conn *SunnyNet.HttpConn) {
+	headers := http.Header{"Content-Type": {"application/json"}}
+	h.setCORSHeadersFromConn(Conn, headers)
+	if Conn.Request.Method != http.MethodGet {
+		Conn.StopRequest(405, string(response.ErrorJSON(405, "Method not allowed, use GET")), headers)
+		return
+	}
+	id := Conn.Request.URL.Query().Get("operation_id")
+	if id == "" {
+		Conn.StopRequest(400, string(response.ErrorJSON(400, "operation_id is required")), headers)
+		return
+	}
+	if h.domActionHub == nil {
+		Conn.StopRequest(503, string(response.ErrorJSON(503, "DOM Action service unavailable")), headers)
+		return
+	}
+	data, _ := json.Marshal(h.domActionHub.GetCommentOperation(id))
+	Conn.StopRequest(200, string(data), headers)
 }
 
 // HandleDOMActionHealth 健康检查（GET /__wx_channels_api/health）

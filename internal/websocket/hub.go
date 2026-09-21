@@ -22,6 +22,8 @@ type Hub struct {
 	mu         sync.RWMutex
 	lastClient *Client // 最后注册的客户端
 
+	clientSequence uint64 // 由 mu 保护，记录真实注册顺序，不能用请求负载或心跳排序
+
 	// API 调用管理
 	requests   map[string]chan APICallResponse
 	requestsMu sync.RWMutex
@@ -54,6 +56,9 @@ type Hub struct {
 	commentSnapshotStatus   map[string]*CommentSnapshotStatus
 	commentSnapshotStatusMu sync.RWMutex
 
+	commentOperations   map[string]*commentOperation
+	commentOperationsMu sync.Mutex
+
 	// 负载均衡选择器
 	selector ClientSelector
 
@@ -83,6 +88,8 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
+			h.clientSequence++
+			client.registeredSequence = h.clientSequence
 			h.clients[client] = true
 			h.lastClient = client // 记录最后注册的客户端
 			h.mu.Unlock()
@@ -266,7 +273,10 @@ func (h *Hub) CallAPI(key string, body interface{}, timeout time.Duration) (json
 	if err != nil {
 		return nil, err
 	}
+	return h.callAPIOnClient(client, key, body, timeout)
+}
 
+func (h *Hub) callAPIOnClient(client *Client, key string, body interface{}, timeout time.Duration) (json.RawMessage, error) {
 	// 【新增】如果是导航操作，记录该客户端为 navigatingClient
 	// 用于 waitForPageReady 时查询执行导航的那个客户端的 pagePath
 	if key == "key:channels:dom_action" {
@@ -334,6 +344,14 @@ func (h *Hub) CallAPI(key string, body interface{}, timeout time.Duration) (json
 	// 记录请求开始时间
 	startTime := time.Now()
 	utils.LogInfo("发送 API 请求: ID=%s, Key=%s, Timeout=%v", reqID, key, timeout)
+	domAction, isDOMAction := body.(DOMActionBody)
+	isPauseVideo := key == "key:channels:dom_action" && isDOMAction && domAction.Action == "pause_video"
+	if key == "key:channels:dom_action" && isDOMAction && domAction.Action == "do_comment" {
+		utils.LogInfo("[CommentOperation] dispatch operation_id=%s request_id=%s client=%s page=%s", domAction.OperationID, reqID, client.RemoteAddr, client.Status().PagePath)
+	}
+	if isPauseVideo {
+		utils.LogInfo("[PauseVideo] 发送: ID=%s, client=%s, page=%s", reqID, client.RemoteAddr, client.Status().PagePath)
+	}
 
 	// 发送请求
 	if err := client.Send(msgData); err != nil {
@@ -358,6 +376,9 @@ func (h *Hub) CallAPI(key string, body interface{}, timeout time.Duration) (json
 
 		utils.LogInfo("API 调用成功: ID=%s, Duration=%v, DataSize=%d",
 			reqID, duration, len(resp.Data))
+		if isPauseVideo {
+			utils.LogInfo("[PauseVideo] 结果: ID=%s, client=%s, data=%s", reqID, client.RemoteAddr, string(resp.Data))
+		}
 		return resp.Data, nil
 
 	case <-time.After(timeout):

@@ -5,7 +5,7 @@ import "fmt"
 // ================== 版本号唯一源 (Single Source of Truth) ==================
 // 整个项目里所有的版本号都从这一行读取:
 
-var Current = "1.1.0"
+var Current = "1.0.0"
 
 var BuildDate = ""
 

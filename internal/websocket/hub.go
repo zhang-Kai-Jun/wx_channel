@@ -988,17 +988,19 @@ func (h *Hub) GetMatchingProgress(taskID string) map[string]interface{} {
 
 // FetchCommentsData 评论采集结果数据结构
 type FetchCommentsData struct {
-	Success      bool        `json:"success"`
-	Message      string      `json:"message"`
-	PanelReady   bool        `json:"panel_ready"`
-	Items        interface{} `json:"items"`
-	Total        int         `json:"total"`
-	CommentCount int         `json:"comment_count"`
-	CurrentTotal int         `json:"current_total"`
-	HasMore      bool        `json:"has_more"`
-	Buffer       string      `json:"buffer"`
-	RawItems     interface{} `json:"raw_items"`
-	ReceivedAt   int64       `json:"received_at"`
+	Success       bool        `json:"success"`
+	RequiresReset bool        `json:"requires_reset"`
+	Reason        string      `json:"reason"`
+	Message       string      `json:"message"`
+	PanelReady    bool        `json:"panel_ready"`
+	Items         interface{} `json:"items"`
+	Total         int         `json:"total"`
+	CommentCount  int         `json:"comment_count"`
+	CurrentTotal  int         `json:"current_total"`
+	HasMore       bool        `json:"has_more"`
+	Buffer        string      `json:"buffer"`
+	RawItems      interface{} `json:"raw_items"`
+	ReceivedAt    int64       `json:"received_at"`
 }
 
 // CommentSnapshotStatus 评论快照采集状态

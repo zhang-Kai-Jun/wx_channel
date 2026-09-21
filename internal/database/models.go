@@ -32,81 +32,10 @@ type BrowseRecord struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
-// DownloadRecord 表示视频下载记录
-type DownloadRecord struct {
-	ID           string    `json:"id"`
-	VideoID      string    `json:"videoId"`
-	Title        string    `json:"title"`
-	Author       string    `json:"author"`
-	CoverURL     string    `json:"coverUrl"` // 封面图片 URL
-	Duration     int64     `json:"duration"`
-	FileSize     int64     `json:"fileSize"`
-	FilePath     string    `json:"filePath"`
-	Format       string    `json:"format"`
-	Resolution   string    `json:"resolution"`
-	Status       string    `json:"status"` // pending, in_progress, completed, failed
-	DownloadTime time.Time `json:"downloadTime"`
-	ErrorMessage string    `json:"errorMessage"`
-	LikeCount    int64     `json:"likeCount"`
-	CommentCount int64     `json:"commentCount"`
-	ForwardCount int64     `json:"forwardCount"`
-	FavCount     int64     `json:"favCount"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-}
-
-// DownloadStatus 常量
-const (
-	DownloadStatusPending    = "pending"
-	DownloadStatusInProgress = "in_progress"
-	DownloadStatusCompleted  = "completed"
-	DownloadStatusFailed     = "failed"
-)
-
-// QueueItem 表示下载队列项目
-type QueueItem struct {
-	ID              string    `json:"id"`
-	VideoID         string    `json:"videoId"`
-	Title           string    `json:"title"`
-	Author          string    `json:"author"`
-	CoverURL        string    `json:"coverUrl"` // 封面图片 URL
-	VideoURL        string    `json:"videoUrl"`
-	DecryptKey      string    `json:"decryptKey"` // 加密视频的解密密钥
-	Duration        int64     `json:"duration"`   // 视频时长（秒）
-	Resolution      string    `json:"resolution"` // 视频分辨率（例如 "1080p"）
-	TotalSize       int64     `json:"totalSize"`
-	DownloadedSize  int64     `json:"downloadedSize"`
-	Status          string    `json:"status"` // pending, downloading, paused, completed, failed
-	Priority        int       `json:"priority"`
-	AddedTime       time.Time `json:"addedTime"`
-	StartTime       time.Time `json:"startTime"`
-	Speed           int64     `json:"speed"`
-	ChunkSize       int64     `json:"chunkSize"`
-	ChunksTotal     int       `json:"chunksTotal"`
-	ChunksCompleted int       `json:"chunksCompleted"`
-	RetryCount      int       `json:"retryCount"`
-	ErrorMessage    string    `json:"errorMessage"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-}
-
-// QueueStatus 常量
-const (
-	QueueStatusPending     = "pending"
-	QueueStatusDownloading = "downloading"
-	QueueStatusPaused      = "paused"
-	QueueStatusCompleted   = "completed"
-	QueueStatusFailed      = "failed"
-)
-
 // Settings 表示应用程序设置
 type Settings struct {
-	DownloadDir        string `json:"downloadDir"`
-	ChunkSize          int64  `json:"chunkSize"`
-	ConcurrentLimit    int    `json:"concurrentLimit"`
 	AutoCleanupEnabled bool   `json:"autoCleanupEnabled"`
 	AutoCleanupDays    int    `json:"autoCleanupDays"`
-	MaxRetries         int    `json:"maxRetries"`
 	RadarEnabled       bool   `json:"radarEnabled"`
 	Theme              string `json:"theme"`
 }
@@ -114,12 +43,8 @@ type Settings struct {
 // DefaultSettings 返回默认设置
 func DefaultSettings() *Settings {
 	return &Settings{
-		DownloadDir:        "downloads",
-		ChunkSize:          10 * 1024 * 1024, // 10MB
-		ConcurrentLimit:    3,
 		AutoCleanupEnabled: false,
 		AutoCleanupDays:    30,
-		MaxRetries:         3,
 		RadarEnabled:       false,
 		Theme:              "light",
 	}
@@ -131,15 +56,6 @@ type PaginationParams struct {
 	PageSize int    `json:"pageSize"`
 	SortBy   string `json:"sortBy"`
 	SortDesc bool   `json:"sortDesc"`
-}
-
-// FilterParams 表示下载记录的过滤参数
-type FilterParams struct {
-	PaginationParams
-	StartDate *time.Time `json:"startDate"`
-	EndDate   *time.Time `json:"endDate"`
-	Status    string     `json:"status"`
-	Query     string     `json:"query"`
 }
 
 // PagedResult 表示分页结果
@@ -201,14 +117,14 @@ type RadarLog struct {
 type RadarVideoSummary struct {
 	VideoID string `json:"video_id"`
 	Title   string `json:"title"`
-	IsNew   bool   `json:"is_new"` // true=新视频并已加入队列，false=已存在
+	IsNew   bool   `json:"is_new"` // true=本次首次发现，false=已记录
 }
 
 // SearchTask 表示搜索任务记录
 type SearchTask struct {
-	DBID         int64     `json:"db_id"`          // 数据库自增主键
-	ID           string    `json:"id"`             // 任务ID，格式: search_keyword_videocontact_{timestamp}
-	TaskID       string    `json:"task_id"`        // 同上，业务键
+	DBID         int64     `json:"db_id"`         // 数据库自增主键
+	ID           string    `json:"id"`            // 任务ID，格式: search_keyword_videocontact_{timestamp}
+	TaskID       string    `json:"task_id"`       // 同上，业务键
 	Keyword      string    `json:"keyword"`       // 搜索关键词
 	TargetCount  int       `json:"target_count"`  // 目标数量
 	CurrentCount int       `json:"current_count"` // 当前已采集数量
@@ -218,7 +134,7 @@ type SearchTask struct {
 	StartedAt    time.Time `json:"started_at"`
 	CompletedAt  time.Time `json:"completed_at"`
 	ErrorMessage string    `json:"error_message"` // 错误信息
-	TaskType     string    `json:"task_type"`      // 任务类型
+	TaskType     string    `json:"task_type"`     // 任务类型
 	VideoList    string    `json:"video_list"`    // 采集到的视频列表 (JSON)
 }
 

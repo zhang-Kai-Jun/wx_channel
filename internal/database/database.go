@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // DB 是全局数据库实例
@@ -40,7 +40,7 @@ func Initialize(cfg *Config) error {
 
 	// 打开数据库连接
 	var err error
-	db, err = sql.Open("sqlite", cfg.DBPath+"?_foreign_keys=on&_journal_mode=WAL")
+	db, err = openDatabase(cfg.DBPath)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -61,6 +61,10 @@ func Initialize(cfg *Config) error {
 
 	initialized = true
 	return nil
+}
+
+func openDatabase(path string) (*sql.DB, error) {
+	return sql.Open("sqlite3", path+"?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000")
 }
 
 // GetDB 返回数据库实例

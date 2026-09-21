@@ -649,11 +649,7 @@ window.__wx_api_client = {
         }
       }
 
-      if (data.action === 'download_progress') {
-        // 派发自定义事件，供 UI 组件消费
-        var event = new CustomEvent('wx_download_progress', { detail: data.payload });
-        document.dispatchEvent(event);
-      }
+
 
       // DOM 操作指令
       if (data.action === 'dom_action') {
@@ -1001,10 +997,26 @@ window.__wx_api_client = {
           var fvcResult = null;
 
           try {
+            var closedNotices = document.querySelectorAll('.comment-panel .text-center.text-fg-3');
+            for (var closedNotice of closedNotices) {
+              if ((closedNotice.textContent || '').trim() !== '作者已关闭评论' || !closedNotice.getClientRects().length) continue;
+              var noticeVisible = true;
+              for (var noticeParent = closedNotice; noticeParent; noticeParent = noticeParent.parentElement) {
+                var noticeStyle = window.getComputedStyle(noticeParent);
+                if (noticeParent.hidden || noticeStyle.display === 'none' || noticeStyle.visibility === 'hidden' || noticeStyle.visibility === 'collapse') {
+                  noticeVisible = false;
+                  break;
+                }
+              }
+              if (noticeVisible) {
+                fvcResult = { reason: 'comments_disabled', _error: '作者已关闭评论', panel_ready: true, comment_count: 0, has_more: false, raw_items: [] };
+                break;
+              }
+            }
             // 等待 Pinia Store 就绪（最多 3 次，每次等 500ms）
             var maxRetries = 3;
             var retryDelay = 500;
-            for (var attempt = 1; attempt <= maxRetries; attempt++) {
+            for (var attempt = 1; fvcResult === null && attempt <= maxRetries; attempt++) {
               if (typeof window.__sph_fetch_video_comments === 'function') {
                 fvcResult = window.__sph_fetch_video_comments({});
                 // 函数执行成功，退出重试循环
@@ -1027,7 +1039,7 @@ window.__wx_api_client = {
           } finally {
             // 无论成功/失败/异常，都必须发回调，保证 Hub 缓存有数据
             clearTimeout(fvcTimeout);
-            resp({ success: !fvcResult._error, result: fvcResult });
+            resp({ success: !fvcResult._error, message: fvcResult._error || 'ok', result: fvcResult });
             self.sendFetchCommentsCallback(fvcTaskId, {
               success: !fvcResult._error,
               message: fvcResult._error || 'ok',
@@ -1436,7 +1448,7 @@ window.__wx_api_client = {
       // 方法3：检查 DOM 中是否有视频播放区域
       var hasVideoPlayer = document.querySelector('video') !== null;
       var hasLikeArea = document.querySelector('.like-area, [class*="like"]') !== null;
-      
+
       if (hasVideoPlayer && hasLikeArea && matches.length === 0) {
         result.isDetailPage = true;
       }
@@ -1761,17 +1773,17 @@ window.__wx_api_client = {
         var collector = window.__wx_channels_search_collector;
         if (collector && collector.feeds && collector.feeds.length > 0) {
           var cached = [];
-          
+
           collector.feeds.forEach(function(f) {
             if (!f || f.type !== 'media') return;
-            
+
             // 提取作者信息
             var authorNickname = '';
             var authorUsername = '';
             var authorData = f.author || f.contact || f.authorInfo || {};
             authorNickname = authorData.nickname || authorData.name || '';
             authorUsername = authorData.username || authorData.id || '';
-            
+
             cached.push({
               index: cached.length,
               title: (f.content && f.content.title) || f.title || '',

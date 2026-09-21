@@ -19,12 +19,8 @@ func NewSettingsRepository() *SettingsRepository {
 
 // 设置键
 const (
-	SettingKeyDownloadDir        = "download_dir"
-	SettingKeyChunkSize          = "chunk_size"
-	SettingKeyConcurrentLimit    = "concurrent_limit"
 	SettingKeyAutoCleanupEnabled = "auto_cleanup_enabled"
 	SettingKeyAutoCleanupDays    = "auto_cleanup_days"
-	SettingKeyMaxRetries         = "max_retries"
 	SettingKeyRadarEnabled       = "radar_enabled"
 	SettingKeyTheme              = "theme"
 )
@@ -95,30 +91,12 @@ func (r *SettingsRepository) Load() (*Settings, error) {
 
 	settings := DefaultSettings()
 
-	if v, ok := settingsMap[SettingKeyDownloadDir]; ok && v != "" {
-		settings.DownloadDir = v
-	}
-	if v, ok := settingsMap[SettingKeyChunkSize]; ok && v != "" {
-		if size, err := strconv.ParseInt(v, 10, 64); err == nil {
-			settings.ChunkSize = size
-		}
-	}
-	if v, ok := settingsMap[SettingKeyConcurrentLimit]; ok && v != "" {
-		if limit, err := strconv.Atoi(v); err == nil {
-			settings.ConcurrentLimit = limit
-		}
-	}
 	if v, ok := settingsMap[SettingKeyAutoCleanupEnabled]; ok {
 		settings.AutoCleanupEnabled = v == "true"
 	}
 	if v, ok := settingsMap[SettingKeyAutoCleanupDays]; ok && v != "" {
 		if days, err := strconv.Atoi(v); err == nil {
 			settings.AutoCleanupDays = days
-		}
-	}
-	if v, ok := settingsMap[SettingKeyMaxRetries]; ok && v != "" {
-		if retries, err := strconv.Atoi(v); err == nil {
-			settings.MaxRetries = retries
 		}
 	}
 	if v, ok := settingsMap[SettingKeyRadarEnabled]; ok {
@@ -148,12 +126,8 @@ func (r *SettingsRepository) Save(settings *Settings) error {
 
 	// Save each setting
 	settingsMap := map[string]string{
-		SettingKeyDownloadDir:        settings.DownloadDir,
-		SettingKeyChunkSize:          strconv.FormatInt(settings.ChunkSize, 10),
-		SettingKeyConcurrentLimit:    strconv.Itoa(settings.ConcurrentLimit),
 		SettingKeyAutoCleanupEnabled: strconv.FormatBool(settings.AutoCleanupEnabled),
 		SettingKeyAutoCleanupDays:    strconv.Itoa(settings.AutoCleanupDays),
-		SettingKeyMaxRetries:         strconv.Itoa(settings.MaxRetries),
 		SettingKeyRadarEnabled:       strconv.FormatBool(settings.RadarEnabled),
 		SettingKeyTheme:              settings.Theme,
 	}
@@ -174,26 +148,9 @@ func (r *SettingsRepository) Save(settings *Settings) error {
 
 // Validate 验证设置值
 func (r *SettingsRepository) Validate(settings *Settings) error {
-	// Validate chunk size (1MB to 100MB)
-	minChunkSize := int64(1 * 1024 * 1024)   // 1MB
-	maxChunkSize := int64(100 * 1024 * 1024) // 100MB
-	if settings.ChunkSize < minChunkSize || settings.ChunkSize > maxChunkSize {
-		return fmt.Errorf("chunk size must be between 1MB and 100MB")
-	}
-
-	// Validate concurrent limit (1 to 5)
-	if settings.ConcurrentLimit < 1 || settings.ConcurrentLimit > 5 {
-		return fmt.Errorf("concurrent limit must be between 1 and 5")
-	}
-
 	// Validate auto cleanup days (1 to 365)
 	if settings.AutoCleanupEnabled && (settings.AutoCleanupDays < 1 || settings.AutoCleanupDays > 365) {
 		return fmt.Errorf("auto cleanup days must be between 1 and 365")
-	}
-
-	// Validate max retries (0 to 10)
-	if settings.MaxRetries < 0 || settings.MaxRetries > 10 {
-		return fmt.Errorf("max retries must be between 0 and 10")
 	}
 
 	// Validate theme

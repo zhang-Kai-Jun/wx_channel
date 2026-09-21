@@ -51,6 +51,32 @@ function mediaState(element, paused = false, canPause = true) {
   return state;
 }
 
+for (const hidden of [false, true]) {
+  test(`comment collection recognizes only visible disabled notice: ${hidden}`, async () => {
+    const { window, document } = setup(`<div class="comment-panel" ${hidden ? 'hidden' : ''}><div class="text-center text-fg-3">作者已关闭评论</div></div>`);
+    const notice = document.querySelector('.text-center');
+    notice.getClientRects = () => [{}];
+    window.WXU = { API: {}, API2: {} };
+    let collected = 0, reply, callback;
+    window.__sph_fetch_video_comments = () => {
+      collected++;
+      return { panel_ready: true, comment_count: 1, raw_items: [] };
+    };
+    window.__wx_api_client.sendResponse = (_id, data) => { reply = data; };
+    window.__wx_api_client.sendFetchCommentsCallback = (_id, data) => { callback = data; };
+    try {
+      await window.__wx_api_client.handleAPICall({ id: 1, key: 'key:channels:dom_action', body: { action: 'fetch_video_comments', task_id: 'test' } });
+      assert.equal(reply.success, hidden);
+      assert.equal(callback.success, hidden);
+      assert.equal(collected, hidden ? 1 : 0);
+      if (!hidden) {
+        assert.equal(reply.result.reason, 'comments_disabled');
+        assert.equal(callback.message, '作者已关闭评论');
+      }
+    } finally { window.close(); }
+  });
+}
+
 function slide(media = '<audio class="h-0 w-0"></audio>', label = pauseLabel) {
   return `<div class="slides-item"><div ml-key="flow-image">${media}</div><div class="bottom-area"><button aria-label="${label}"><svg ml-key="flow-video-${label === pauseLabel ? 'pause' : 'play'}"></svg></button></div></div>`;
 }
@@ -499,23 +525,6 @@ test('pause action bypasses the generic DOM operator', async () => {
   window.__wx_dom_operator__ = { execute: () => assert.fail('wrong pause implementation') };
   assert.equal((await run()).success, true);
   assert.equal(state.paused, true);
-});
-
-test('download entry points share the pause implementation without scheduling resume', () => {
-  const script = fs.readFileSync(path.join(__dirname, '../internal/handlers/script.go'), 'utf8');
-  const code = script.slice(script.indexOf('window.__wx_channels_pause_video__ ='), script.indexOf('// 优化封面下载函数'));
-  let pauses = 0;
-  let downloads = 0;
-  const window = {
-    __wx_api_client: { pauseVideo: () => { pauses++; return Promise.resolve({ success: true }); } },
-    __wx_channels_handle_click_download__: () => { downloads++; },
-    __wx_channels_download_cur__: () => { downloads++; }
-  };
-  vm.runInNewContext(code, { window, setTimeout: () => assert.fail('must not resume playback') });
-  window.__wx_channels_handle_click_download__();
-  window.__wx_channels_download_cur__();
-  assert.equal(pauses, 2);
-  assert.equal(downloads, 2);
 });
 
 test('initially paused audio that autoplays during confirmation must be paused', async () => {

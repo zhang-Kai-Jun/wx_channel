@@ -8,10 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
+
 	"strconv"
 	"strings"
 	"time"
@@ -25,15 +22,13 @@ import (
 
 // ConsoleAPIHandler 处理 Web 控制台的 REST API 请求
 type ConsoleAPIHandler struct {
-	browseService   *services.BrowseHistoryService
-	downloadService *services.DownloadRecordService
-	queueService    *services.QueueService
-	settingsRepo    *database.SettingsRepository
-	statsService    *services.StatisticsService
-	exportService   *services.ExportService
-	searchService   *services.SearchService
-	wsHub           *websocket.Hub
-	radarService    *services.RadarService
+	browseService *services.BrowseHistoryService
+	settingsRepo  *database.SettingsRepository
+	statsService  *services.StatisticsService
+	exportService *services.ExportService
+	searchService *services.SearchService
+	wsHub         *websocket.Hub
+	radarService  *services.RadarService
 }
 
 const maxJSONBodyBytes = 8 << 20 // 8MB
@@ -41,15 +36,13 @@ const maxJSONBodyBytes = 8 << 20 // 8MB
 // NewConsoleAPIHandler 创建一个新的 ConsoleAPIHandler
 func NewConsoleAPIHandler(cfg *config.Config, wsHub *websocket.Hub, radarService *services.RadarService) *ConsoleAPIHandler {
 	return &ConsoleAPIHandler{
-		browseService:   services.NewBrowseHistoryService(),
-		downloadService: services.NewDownloadRecordService(),
-		queueService:    services.NewQueueService(),
-		settingsRepo:    database.NewSettingsRepository(),
-		statsService:    services.NewStatisticsService(),
-		exportService:   services.NewExportService(),
-		searchService:   services.NewSearchService(),
-		wsHub:           wsHub,
-		radarService:    radarService,
+		browseService: services.NewBrowseHistoryService(),
+		settingsRepo:  database.NewSettingsRepository(),
+		statsService:  services.NewStatisticsService(),
+		exportService: services.NewExportService(),
+		searchService: services.NewSearchService(),
+		wsHub:         wsHub,
+		radarService:  radarService,
 	}
 }
 
@@ -169,35 +162,6 @@ func getPaginationParams(r *http.Request) *database.PaginationParams {
 	}
 	if sortDesc := r.URL.Query().Get("sortDesc"); sortDesc != "" {
 		params.SortDesc = sortDesc == "true" || sortDesc == "1"
-	}
-
-	return params
-}
-
-// getFilterParams 从查询字符串中提取过滤参数
-func getFilterParams(r *http.Request) *database.FilterParams {
-	params := &database.FilterParams{
-		PaginationParams: *getPaginationParams(r),
-	}
-	params.SortBy = "download_time"
-
-	if startDate := r.URL.Query().Get("startDate"); startDate != "" {
-		if t, err := time.Parse("2006-01-02", startDate); err == nil {
-			params.StartDate = &t
-		}
-	}
-	if endDate := r.URL.Query().Get("endDate"); endDate != "" {
-		if t, err := time.Parse("2006-01-02", endDate); err == nil {
-			// 设置为当天的结束时间
-			t = t.Add(24*time.Hour - time.Second)
-			params.EndDate = &t
-		}
-	}
-	if status := r.URL.Query().Get("status"); status != "" {
-		params.Status = status
-	}
-	if query := r.URL.Query().Get("query"); query != "" {
-		params.Query = query
 	}
 
 	return params
@@ -361,385 +325,12 @@ func (h *ConsoleAPIHandler) HandleBrowseAPI(w http.ResponseWriter, r *http.Reque
 }
 
 // ============================================================================
-// 下载记录 API 处理器
 // Requirements: 14.2 - 下载记录 CRUD 操作的 REST API 端点
 // ============================================================================
 
-// HandleDownloadsList 处理 GET /api/downloads - 带过滤的分页列表
-func (h *ConsoleAPIHandler) HandleDownloadsList(w http.ResponseWriter, r *http.Request) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	params := getFilterParams(r)
-	result, err := h.downloadService.List(params)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	h.sendSuccess(w, r, result)
-}
-
-// HandleDownloadsGet 处理 GET /api/downloads/:id - 单条记录
-func (h *ConsoleAPIHandler) HandleDownloadsGet(w http.ResponseWriter, r *http.Request, id string) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	record, err := h.downloadService.GetByID(id)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if record == nil {
-		h.sendError(w, r, http.StatusNotFound, "record not found")
-		return
-	}
-
-	h.sendSuccess(w, r, record)
-}
-
-// HandleDownloadsDelete 处理 DELETE /api/downloads/:id - 删除单条记录
-func (h *ConsoleAPIHandler) HandleDownloadsDelete(w http.ResponseWriter, r *http.Request, id string) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	// 检查是否应删除文件
-	deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
-
-	err := h.downloadService.Delete(id, deleteFiles)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	h.sendSuccessMessage(w, r, "record deleted")
-}
-
-// HandleDownloadsDeleteMany 处理 DELETE /api/downloads - 批量删除
-func (h *ConsoleAPIHandler) HandleDownloadsDeleteMany(w http.ResponseWriter, r *http.Request) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	var req struct {
-		IDs         []string `json:"ids"`
-		DeleteFiles bool     `json:"deleteFiles"`
-	}
-	if err := h.parseJSON(r, &req); err != nil {
-		h.sendError(w, r, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if len(req.IDs) == 0 {
-		h.sendError(w, r, http.StatusBadRequest, "no IDs provided")
-		return
-	}
-
-	count, err := h.downloadService.DeleteMany(req.IDs, req.DeleteFiles)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	h.sendSuccess(w, r, map[string]interface{}{
-		"deleted": count,
-	})
-}
-
-// HandleDownloadsAPI 路由下载记录 API 请求
-func (h *ConsoleAPIHandler) HandleDownloadsAPI(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	// 处理 CORS 预检请求
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	// 从路径提取 ID
-	id := extractIDFromPath(path, "/api/downloads")
-
-	switch r.Method {
-	case "GET":
-		if id != "" {
-			h.HandleDownloadsGet(w, r, id)
-		} else {
-			h.HandleDownloadsList(w, r)
-		}
-	case "DELETE":
-		if id != "" {
-			h.HandleDownloadsDelete(w, r, id)
-		} else {
-			h.HandleDownloadsDeleteMany(w, r)
-		}
-	default:
-		h.sendError(w, r, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
 // ============================================================================
-// 下载队列 API 处理器
 // Requirements: 14.3 - 下载队列管理的 REST API 端点
 // ============================================================================
-
-// HandleQueueList 处理 GET /api/queue - 列出队列项目
-func (h *ConsoleAPIHandler) HandleQueueList(w http.ResponseWriter, r *http.Request) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	items, err := h.queueService.GetQueue()
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	h.sendSuccess(w, r, items)
-}
-
-// HandleQueueAdd 处理 POST /api/queue - 添加项目到队列
-func (h *ConsoleAPIHandler) HandleQueueAdd(w http.ResponseWriter, r *http.Request) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	var req struct {
-		Videos []services.VideoInfo `json:"videos"`
-	}
-	if err := h.parseJSON(r, &req); err != nil {
-		h.sendError(w, r, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if len(req.Videos) == 0 {
-		h.sendError(w, r, http.StatusBadRequest, "no videos provided")
-		return
-	}
-
-	items, err := h.queueService.AddToQueue(req.Videos)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// 通过 WebSocket 广播队列变更
-	// Requirements: 14.5 - 广播队列变更
-	hub := GetWebSocketHub()
-	for i := range items {
-		hub.BroadcastQueueAdd(&items[i])
-	}
-
-	h.sendSuccess(w, r, items)
-}
-
-// HandleQueuePause 处理 PUT /api/queue/:id/pause - 暂停下载
-func (h *ConsoleAPIHandler) HandleQueuePause(w http.ResponseWriter, r *http.Request, id string) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	err := h.queueService.Pause(id)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// 通过 WebSocket 广播队列更新
-	item, _ := h.queueService.GetByID(id)
-	if item != nil {
-		GetWebSocketHub().BroadcastQueueUpdate(item)
-	}
-
-	h.sendSuccessMessage(w, r, "download paused")
-}
-
-// HandleQueueResume 处理 PUT /api/queue/:id/resume - 恢复下载
-func (h *ConsoleAPIHandler) HandleQueueResume(w http.ResponseWriter, r *http.Request, id string) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	err := h.queueService.Resume(id)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// 通过 WebSocket 广播队列更新
-	item, _ := h.queueService.GetByID(id)
-	if item != nil {
-		GetWebSocketHub().BroadcastQueueUpdate(item)
-	}
-
-	h.sendSuccessMessage(w, r, "download resumed")
-}
-
-// HandleQueueRemove 处理 DELETE /api/queue/:id - 从队列移除
-func (h *ConsoleAPIHandler) HandleQueueRemove(w http.ResponseWriter, r *http.Request, id string) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	err := h.queueService.RemoveFromQueue(id)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// 通过 WebSocket 广播队列移除
-	GetWebSocketHub().BroadcastQueueRemove(id)
-
-	h.sendSuccessMessage(w, r, "item removed from queue")
-}
-
-// HandleQueueReorder 处理 PUT /api/queue/reorder - 重新排序队列
-func (h *ConsoleAPIHandler) HandleQueueReorder(w http.ResponseWriter, r *http.Request) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	var req struct {
-		IDs []string `json:"ids"`
-	}
-	if err := h.parseJSON(r, &req); err != nil {
-		h.sendError(w, r, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if len(req.IDs) == 0 {
-		h.sendError(w, r, http.StatusBadRequest, "no IDs provided")
-		return
-	}
-
-	err := h.queueService.Reorder(req.IDs)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// 通过 WebSocket 广播队列重新排序
-	queue, _ := h.queueService.GetQueue()
-	GetWebSocketHub().BroadcastQueueReorder(queue)
-
-	h.sendSuccessMessage(w, r, "queue reordered")
-}
-
-// HandleQueueComplete 处理 PUT /api/queue/:id/complete - 标记下载为完成
-func (h *ConsoleAPIHandler) HandleQueueComplete(w http.ResponseWriter, r *http.Request, id string) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	err := h.queueService.CompleteDownload(id)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// 获取更新后的项目以进行 WebSocket 广播
-	item, _ := h.queueService.GetByID(id)
-	if item != nil {
-		GetWebSocketHub().BroadcastQueueUpdate(item)
-	}
-
-	h.sendSuccessMessage(w, r, "download completed")
-}
-
-// HandleQueueFail 处理 PUT /api/queue/:id/fail - 标记下载为失败
-func (h *ConsoleAPIHandler) HandleQueueFail(w http.ResponseWriter, r *http.Request, id string) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	var req struct {
-		Error string `json:"error"`
-	}
-	if err := h.parseJSON(r, &req); err != nil {
-		h.sendError(w, r, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	errorMsg := req.Error
-	if errorMsg == "" {
-		errorMsg = "下载失败"
-	}
-
-	err := h.queueService.FailDownload(id, errorMsg)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// Get updated item for WebSocket broadcast
-	item, _ := h.queueService.GetByID(id)
-	if item != nil {
-		GetWebSocketHub().BroadcastQueueUpdate(item)
-	}
-
-	h.sendSuccessMessage(w, r, "download marked as failed")
-}
-
-// HandleQueueAPI 路由队列 API 请求
-func (h *ConsoleAPIHandler) HandleQueueAPI(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	// Handle CORS preflight
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	// 处理重排序端点
-	if path == "/api/queue/reorder" && r.Method == "PUT" {
-		h.HandleQueueReorder(w, r)
-		return
-	}
-
-	// 从路径提取 ID 和操作
-	// 路径格式: /api/queue/:id 或 /api/queue/:id/pause 或 /api/queue/:id/resume
-	pathParts := strings.Split(strings.TrimPrefix(path, "/api/queue/"), "/")
-	id := ""
-	action := ""
-	if len(pathParts) > 0 && pathParts[0] != "" {
-		id = pathParts[0]
-	}
-	if len(pathParts) > 1 {
-		action = pathParts[1]
-	}
-
-	switch r.Method {
-	case "GET":
-		h.HandleQueueList(w, r)
-	case "POST":
-		h.HandleQueueAdd(w, r)
-	case "PUT":
-		if id == "" {
-			h.sendError(w, r, http.StatusBadRequest, "ID required")
-			return
-		}
-		switch action {
-		case "pause":
-			h.HandleQueuePause(w, r, id)
-		case "resume":
-			h.HandleQueueResume(w, r, id)
-		case "complete":
-			h.HandleQueueComplete(w, r, id)
-		case "fail":
-			h.HandleQueueFail(w, r, id)
-		default:
-			h.sendError(w, r, http.StatusBadRequest, "invalid action")
-		}
-	case "DELETE":
-		if id == "" {
-			h.sendError(w, r, http.StatusBadRequest, "ID required")
-			return
-		}
-		h.HandleQueueRemove(w, r, id)
-	default:
-		h.sendError(w, r, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
 
 // ============================================================================
 // 设置 API 处理器
@@ -780,7 +371,6 @@ func (h *ConsoleAPIHandler) HandleSettingsUpdate(w http.ResponseWriter, r *http.
 	}
 
 	// 验证并保存设置
-	// Requirements: 11.3, 11.4 - 验证分片大小 (1-100MB) 和并发限制 (1-5)
 	if err := h.settingsRepo.SaveAndValidate(&settings); err != nil {
 		h.sendError(w, r, http.StatusBadRequest, err.Error())
 		return
@@ -857,32 +447,13 @@ func (h *ConsoleAPIHandler) HandleStartCommentCollection(w http.ResponseWriter, 
 	h.sendSuccessMessage(w, r, "comment collection triggered")
 }
 
-// HandleStatsChart 处理 GET /api/stats/chart - 获取图表数据
-func (h *ConsoleAPIHandler) HandleStatsChart(w http.ResponseWriter, r *http.Request) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	// 默认为 7 天
-	days := 7
-	if d := r.URL.Query().Get("days"); d != "" {
-		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 && parsed <= 30 {
-			days = parsed
-		}
-	}
-
-	chartData, err := h.statsService.GetChartData(days)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	h.sendSuccess(w, r, chartData)
-}
-
 // HandleStatsAPI 路由统计 API 请求
 func (h *ConsoleAPIHandler) HandleStatsAPI(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path != "/api/stats" && path != "/api/v1/stats" {
+		h.sendError(w, r, http.StatusNotFound, "endpoint not found")
+		return
+	}
 
 	// Handle CORS preflight
 	if h.HandleCORS(w, r) {
@@ -894,16 +465,12 @@ func (h *ConsoleAPIHandler) HandleStatsAPI(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if path == "/api/stats/chart" {
-		h.HandleStatsChart(w, r)
-	} else {
-		h.HandleStatsGet(w, r)
-	}
+	h.HandleStatsGet(w, r)
 }
 
 // ============================================================================
 // 导出 API 处理器
-// Requirements: 4.1, 4.2 - 导出浏览和下载记录
+// Requirements: 4.1, 4.2 - 导出浏览记录
 // ============================================================================
 
 // HandleExportBrowse 处理 GET /api/export/browse - 导出浏览记录
@@ -938,38 +505,6 @@ func (h *ConsoleAPIHandler) HandleExportBrowse(w http.ResponseWriter, r *http.Re
 	w.Write(result.Data)
 }
 
-// HandleExportDownloads 处理 GET /api/export/downloads - 导出下载记录
-func (h *ConsoleAPIHandler) HandleExportDownloads(w http.ResponseWriter, r *http.Request) {
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	// Get format (default: json)
-	format := services.ExportFormatJSON
-	if f := r.URL.Query().Get("format"); f == "csv" {
-		format = services.ExportFormatCSV
-	}
-
-	// Get optional IDs for selective export
-	var ids []string
-	if idsParam := r.URL.Query().Get("ids"); idsParam != "" {
-		ids = strings.Split(idsParam, ",")
-	}
-
-	result, err := h.exportService.ExportDownloadRecords(format, ids)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// Set headers for file download
-	w.Header().Set("Content-Type", result.ContentType)
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+result.Filename+"\"")
-	h.setCORSHeaders(w, r)
-	w.WriteHeader(http.StatusOK)
-	w.Write(result.Data)
-}
-
 // HandleExportAPI 路由导出 API 请求
 func (h *ConsoleAPIHandler) HandleExportAPI(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -987,8 +522,6 @@ func (h *ConsoleAPIHandler) HandleExportAPI(w http.ResponseWriter, r *http.Reque
 	switch path {
 	case "/api/export/browse":
 		h.HandleExportBrowse(w, r)
-	case "/api/export/downloads":
-		h.HandleExportDownloads(w, r)
 	default:
 		h.sendError(w, r, http.StatusNotFound, "endpoint not found")
 	}
@@ -996,7 +529,7 @@ func (h *ConsoleAPIHandler) HandleExportAPI(w http.ResponseWriter, r *http.Reque
 
 // ============================================================================
 // 搜索 API 处理器
-// Requirements: 12.1, 12.2 - 跨浏览和下载记录的全局搜索
+// Requirements: 12.1, 12.2 - 跨浏览记录的全局搜索
 // ============================================================================
 
 // HandleSearch 处理 GET /api/search - 全局搜索
@@ -1114,14 +647,6 @@ func (h *ConsoleAPIHandler) HandleAPIRequest(w http.ResponseWriter, r *http.Requ
 		h.HandleExportAPI(w, r)
 	case strings.HasPrefix(path, "/api/browse"):
 		h.HandleBrowseAPI(w, r)
-	case strings.HasPrefix(path, "/api/downloads"):
-		h.HandleDownloadsAPI(w, r)
-	case strings.HasPrefix(path, "/api/queue"):
-		h.HandleQueueAPI(w, r)
-	case strings.HasPrefix(path, "/api/files"):
-		h.HandleFilesAPI(w, r)
-	case path == "/api/video/stream":
-		h.HandleVideoStream(w, r)
 	case path == "/api/video/play":
 		h.HandleVideoPlay(w, r)
 	default:
@@ -1180,112 +705,6 @@ func (h *ConsoleAPIHandler) HandleVerifyToken(w http.ResponseWriter, r *http.Req
 // 文件 API 处理器 - 打开文件夹和播放视频
 // ============================================================================
 
-// HandleFilesAPI 路由文件操作 API 请求
-func (h *ConsoleAPIHandler) HandleFilesAPI(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	// Handle CORS preflight
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	if r.Method != "POST" {
-		h.sendError(w, r, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	switch path {
-	case "/api/files/open-folder":
-		h.HandleOpenFolder(w, r)
-	case "/api/files/play":
-		h.HandlePlayVideo(w, r)
-	default:
-		h.sendError(w, r, http.StatusNotFound, "endpoint not found")
-	}
-}
-
-// HandleOpenFolder 处理 POST /api/files/open-folder - 在资源管理器中打开文件夹
-func (h *ConsoleAPIHandler) HandleOpenFolder(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Path string `json:"path"`
-	}
-	if err := h.parseJSON(r, &req); err != nil {
-		h.sendError(w, r, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.Path == "" {
-		h.sendError(w, r, http.StatusBadRequest, "path is required")
-		return
-	}
-
-	downloadsDir, err := h.getConfig().GetResolvedDownloadsDir()
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, "failed to resolve downloads directory")
-		return
-	}
-	absPath, err := validatePathInBase(downloadsDir, req.Path, true)
-	if err != nil {
-		if pe, ok := err.(*pathValidationError); ok {
-			h.sendError(w, r, pe.status, pe.msg)
-			return
-		}
-		h.sendError(w, r, http.StatusInternalServerError, "failed to validate path")
-		return
-	}
-
-	// 在文件管理器中打开文件夹
-	if err := openFileExplorer(absPath); err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	h.sendSuccessMessage(w, r, "folder opened")
-}
-
-// HandlePlayVideo 处理 POST /api/files/play - 使用默认播放器播放视频
-func (h *ConsoleAPIHandler) HandlePlayVideo(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Path string `json:"path"`
-	}
-	if err := h.parseJSON(r, &req); err != nil {
-		h.sendError(w, r, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.Path == "" {
-		h.sendError(w, r, http.StatusBadRequest, "path is required")
-		return
-	}
-
-	downloadsDir, err := h.getConfig().GetResolvedDownloadsDir()
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, "failed to resolve downloads directory")
-		return
-	}
-	absPath, err := validatePathInBase(downloadsDir, req.Path, false)
-	if err != nil {
-		if pe, ok := err.(*pathValidationError); ok {
-			h.sendError(w, r, pe.status, pe.msg)
-			return
-		}
-		h.sendError(w, r, http.StatusInternalServerError, "failed to validate path")
-		return
-	}
-	if !isAllowedVideoExtension(absPath) {
-		h.sendError(w, r, http.StatusBadRequest, "unsupported video file extension")
-		return
-	}
-
-	// 使用默认播放器播放视频
-	if err := openWithDefaultApp(absPath); err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	h.sendSuccessMessage(w, r, "video player opened")
-}
-
 // CORSMiddleware 包装 http.Handler 以支持 CORS
 // Requirements: 14.6 - 在所有响应中包含 CORS 头
 func (h *ConsoleAPIHandler) CORSMiddleware(next http.Handler) http.Handler {
@@ -1309,253 +728,9 @@ func (h *ConsoleAPIHandler) CORSMiddleware(next http.Handler) http.Handler {
 // 特定平台的文件操作
 // ============================================================================
 
-// openFileExplorer 在系统文件管理器中打开包含该文件的文件夹
-func openFileExplorer(filePath string) error {
-	info, err := os.Stat(filePath)
-	if err != nil {
-		return err
-	}
-	isDir := info.IsDir()
-	dir := filePath
-	if !isDir {
-		dir = filepath.Dir(filePath)
-	}
-
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		if isDir {
-			cmd = exec.Command("explorer", filepath.FromSlash(dir))
-		} else {
-			// 在 Windows 上，使用 explorer 打开文件夹并选择文件
-			// 转换为 Windows 路径格式 (反斜杠)
-			winPath := filepath.FromSlash(filePath)
-			cmd = exec.Command("explorer", "/select,", winPath)
-		}
-	case "darwin":
-		// 在 macOS 上，对目录直接 open，对文件使用 open -R 显示文件
-		if isDir {
-			cmd = exec.Command("open", dir)
-		} else {
-			cmd = exec.Command("open", "-R", filePath)
-		}
-	default:
-		// 在 Linux 上，使用 xdg-open 打开文件夹
-		cmd = exec.Command("xdg-open", dir)
-	}
-
-	return cmd.Start()
-}
-
-// openWithDefaultApp 使用系统默认应用程序打开文件
-func openWithDefaultApp(filePath string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		// 转换为 Windows 路径格式 (反斜杠)
-		winPath := filepath.FromSlash(filePath)
-		cmd = exec.Command("cmd", "/c", "start", "", winPath)
-	case "darwin":
-		cmd = exec.Command("open", filePath)
-	default:
-		cmd = exec.Command("xdg-open", filePath)
-	}
-
-	return cmd.Start()
-}
-
 // ============================================================================
 // Video Stream API Handler
 // ============================================================================
-
-// HandleVideoStream 处理 GET /api/video/stream - 视频文件流
-func (h *ConsoleAPIHandler) HandleVideoStream(w http.ResponseWriter, r *http.Request) {
-	// Handle CORS preflight
-	if h.HandleCORS(w, r) {
-		return
-	}
-
-	if r.Method != "GET" {
-		h.sendError(w, r, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	// 从查询参数获取文件路径
-	filePath := r.URL.Query().Get("path")
-	if filePath == "" {
-		h.sendError(w, r, http.StatusBadRequest, "path parameter is required")
-		return
-	}
-
-	downloadsDir, err := h.getConfig().GetResolvedDownloadsDir()
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, "failed to resolve downloads directory")
-		return
-	}
-	resolvedPath, err := validatePathInBase(downloadsDir, filePath, false)
-	if err != nil {
-		if pe, ok := err.(*pathValidationError); ok {
-			h.sendError(w, r, pe.status, pe.msg)
-			return
-		}
-		h.sendError(w, r, http.StatusInternalServerError, "failed to validate path")
-		return
-	}
-	fileInfo, err := os.Stat(resolvedPath)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, "failed to access file")
-		return
-	}
-
-	// 打开文件
-	file, err := os.Open(resolvedPath)
-	if err != nil {
-		h.sendError(w, r, http.StatusInternalServerError, "failed to open file")
-		return
-	}
-	defer file.Close()
-
-	// 根据文件扩展名确定内容类型
-	ext := strings.ToLower(filepath.Ext(resolvedPath))
-	contentType := "application/octet-stream"
-	switch ext {
-	case ".mp4":
-		contentType = "video/mp4"
-	case ".webm":
-		contentType = "video/webm"
-	case ".ogg", ".ogv":
-		contentType = "video/ogg"
-	case ".mov":
-		contentType = "video/quicktime"
-	case ".avi":
-		contentType = "video/x-msvideo"
-	case ".mkv":
-		contentType = "video/x-matroska"
-	}
-
-	// 设置 CORS 头
-	h.setCORSHeaders(w, r)
-
-	// 处理视频跳转的范围请求
-	fileSize := fileInfo.Size()
-	rangeHeader := r.Header.Get("Range")
-
-	if rangeHeader != "" {
-		// 解析范围头
-		var start, end int64
-		_, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
-		if err != nil {
-			// 尝试不带结束位置解析
-			_, err = fmt.Sscanf(rangeHeader, "bytes=%d-", &start)
-			if err != nil {
-				h.sendError(w, r, http.StatusBadRequest, "invalid range header")
-				return
-			}
-			end = fileSize - 1
-		}
-
-		// 验证范围
-		if start < 0 || start >= fileSize || end >= fileSize || start > end {
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", fileSize))
-			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-			return
-		}
-
-		// 跳转到起始位置
-		_, err = file.Seek(start, 0)
-		if err != nil {
-			h.sendError(w, r, http.StatusInternalServerError, "failed to seek file")
-			return
-		}
-
-		// 设置部分内容的响应头
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, fileSize))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
-		w.Header().Set("Accept-Ranges", "bytes")
-		w.WriteHeader(http.StatusPartialContent)
-
-		// 复制请求的范围
-		io.CopyN(w, file, end-start+1)
-	} else {
-		// 完整文件请求
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", fileSize))
-		w.Header().Set("Accept-Ranges", "bytes")
-		w.WriteHeader(http.StatusOK)
-
-		// 复制整个文件
-		io.Copy(w, file)
-	}
-}
-
-// isPathWithinBase returns true when targetPath is within baseDir.
-func isPathWithinBase(baseDir, targetPath string) bool {
-	rel, err := filepath.Rel(baseDir, targetPath)
-	if err != nil {
-		return false
-	}
-	if rel == "." {
-		return true
-	}
-	if rel == ".." {
-		return false
-	}
-	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return !filepath.IsAbs(rel)
-}
-
-func validatePathInBase(baseDir, targetPath string, allowDir bool) (string, error) {
-	absPath, err := filepath.Abs(targetPath)
-	if err != nil {
-		return "", &pathValidationError{status: http.StatusBadRequest, msg: "invalid path"}
-	}
-
-	absBaseDir, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", &pathValidationError{status: http.StatusInternalServerError, msg: "failed to resolve downloads directory"}
-	}
-	realBaseDir, err := filepath.EvalSymlinks(absBaseDir)
-	if err != nil {
-		realBaseDir = absBaseDir
-	}
-
-	if !isPathWithinBase(realBaseDir, absPath) {
-		return "", &pathValidationError{status: http.StatusForbidden, msg: "access to path outside downloads directory is forbidden"}
-	}
-
-	info, err := os.Stat(absPath)
-	if os.IsNotExist(err) {
-		return "", &pathValidationError{status: http.StatusNotFound, msg: "file not found"}
-	}
-	if err != nil {
-		return "", &pathValidationError{status: http.StatusInternalServerError, msg: "failed to access file"}
-	}
-	if !allowDir && info.IsDir() {
-		return "", &pathValidationError{status: http.StatusBadRequest, msg: "path is a directory"}
-	}
-
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		realPath = absPath
-	}
-	if !isPathWithinBase(realBaseDir, realPath) {
-		return "", &pathValidationError{status: http.StatusForbidden, msg: "access to path outside downloads directory is forbidden"}
-	}
-
-	return realPath, nil
-}
-
-func isAllowedVideoExtension(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".mp4", ".webm", ".ogg", ".ogv", ".mov", ".avi", ".mkv":
-		return true
-	default:
-		return false
-	}
-}
 
 // validateVideoPlayTargetURL validates upstream video URL and blocks local/private targets.
 func validateVideoPlayTargetURL(rawURL string) (string, error) {

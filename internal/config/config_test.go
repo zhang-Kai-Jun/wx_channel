@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+
 	"wx_channel/internal/version"
 
 	"github.com/spf13/viper"
@@ -40,7 +41,6 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.NotNil(t, cfg)
 	assert.Equal(t, 2025, cfg.Port)
 	assert.Equal(t, version.Current, cfg.Version)
-	assert.Equal(t, int64(2<<20), cfg.ChunkSize)
 	assert.Equal(t, 500*time.Millisecond, cfg.SaveDelay)
 }
 
@@ -65,7 +65,7 @@ func TestLoad_ConfigFile(t *testing.T) {
 	content := []byte(`
 port: 8888
 version: "6.0.0"
-download_dir: "/tmp/downloads"
+data_dir: "/tmp/downloads"
 `)
 	if err := os.WriteFile(configFile, content, 0644); err != nil {
 		t.Fatalf("无法创建配置文件: %v", err)
@@ -78,11 +78,23 @@ download_dir: "/tmp/downloads"
 
 	assert.Equal(t, 8888, cfg.Port)
 	assert.Equal(t, "6.0.0", cfg.Version)
-	assert.Equal(t, "/tmp/downloads", cfg.DownloadsDir)
+	assert.Equal(t, "/tmp/downloads", cfg.DataDir)
 }
 
 func TestSetPort(t *testing.T) {
 	cfg := &Config{Port: 8080}
 	cfg.SetPort(9090)
 	assert.Equal(t, 9090, cfg.Port)
+}
+
+func TestLegacyDataDirectory(t *testing.T) {
+	setupIsolatedTestEnv(t)
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(file, []byte("download_dir: legacy-data\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	viper.SetConfigFile(file)
+	assert.Equal(t, "legacy-data", Load().DataDir)
+	t.Setenv("WX_CHANNEL_DATA_DIR", "collection-data")
+	assert.Equal(t, "collection-data", Reload().DataDir)
 }

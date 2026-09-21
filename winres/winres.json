@@ -11,7 +11,7 @@
       "0409": {
         "identity": {
           "name": "video_channel",
-          "version": "1.2.0"
+          "version": ""
         },
         "description": "video_channel",
         "minimum-os": "win7",
@@ -35,22 +35,22 @@
     "#1": {
       "0000": {
         "fixed": {
-          "file_version": "1.2.0",
-          "product_version": "1.2.0"
+          "file_version": "",
+          "product_version": ""
         },
         "info": {
           "0409": {
             "Comments": "video_channel",
-            "CompanyName": "zhangkj",
-            "FileDescription": "video_channel",
-            "FileVersion": "1.2.0",
+            "CompanyName": "sph",
+            "FileDescription": "视频号",
+            "FileVersion": "",
             "InternalName": "video_channel",
             "LegalCopyright": "2024SR1900728",
             "LegalTrademarks": "",
             "OriginalFilename": "video_channel.exe",
             "PrivateBuild": "",
-            "ProductName": "video_channel",
-            "ProductVersion": "1.2.0",
+            "ProductName": "视频号",
+            "ProductVersion": "",
             "SpecialBuild": ""
           }
         }

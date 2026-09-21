@@ -18,8 +18,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "wx_channel",
-	Short: "WeChat Channel Video Downloader",
-	Long:  `A tool to download videos from WeChat Channels with auto-decryption and de-duplication.`,
+	Short: "WeChat Channel Assistant",
+	Long:  `A local tool for WeChat Channels data collection, search, and page automation.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		// 应用标志到配置

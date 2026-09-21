@@ -145,7 +145,7 @@ func (h *APIHandler) saveDynamicHTML(htmlContent string, parsedURL *url.URL, ful
 		saveTime = time.Unix(0, timestamp*int64(time.Millisecond))
 	}
 
-	downloadsDir, err := utils.ResolveDownloadDir(cfg.DownloadsDir)
+	downloadsDir, err := utils.ResolveDataDir(cfg.DataDir)
 	if err != nil {
 		utils.HandleError(err, "解析下载目录用于保存页面内容")
 		return
@@ -229,33 +229,4 @@ func (h *APIHandler) saveDynamicHTML(htmlContent string, parsedURL *url.URL, ful
 	utils.PrintSeparator()
 	fmt.Println()
 	fmt.Println()
-}
-
-// HandleStaticFiles 处理静态文件请求（jszip, FileSaver等）
-func HandleStaticFiles(Conn *SunnyNet.HttpConn, zipJS, fileSaverJS []byte) bool {
-	path := Conn.Request.URL.Path
-
-	// 处理 jszip.min.js 请求
-	if strings.HasSuffix(path, "/jszip.min.js") {
-		headers := http.Header{}
-		headers.Set("Content-Type", "application/javascript")
-		headers.Set("Cache-Control", "public, max-age=31536000")
-		headers.Set("Access-Control-Allow-Origin", "*") // 允许跨域
-
-		Conn.StopRequest(200, string(zipJS), headers)
-		return true
-	}
-
-	// 处理 FileSaver.min.js 请求
-	if strings.HasSuffix(path, "/FileSaver.min.js") {
-		headers := http.Header{}
-		headers.Set("Content-Type", "application/javascript")
-		headers.Set("Cache-Control", "public, max-age=31536000")
-		headers.Set("Access-Control-Allow-Origin", "*") // 允许跨域
-
-		Conn.StopRequest(200, string(fileSaverJS), headers)
-		return true
-	}
-
-	return false
 }

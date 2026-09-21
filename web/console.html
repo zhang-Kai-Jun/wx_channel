@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>视频号下载控制台</title>
+    <title>视频号采集控制台</title>
     <link rel="icon" type="image/png" href="icon.png">
     <link rel="stylesheet" href="css/app.css?v=1764987636">
 </head>
@@ -24,7 +24,7 @@
         <!-- Sidebar Navigation -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <h1>视频号下载助手</h1>
+                <h1>视频号采集助手</h1>
                 <p>—— 视频管理控制台 ——</p>
             </div>
 
@@ -48,39 +48,14 @@
                         </svg>
                         <span>浏览记录</span>
                     </a>
-                    <a class="nav-item" data-page="downloads" onclick="navigateTo('downloads')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                            <polyline points="7 10 12 15 17 10" />
-                            <line x1="12" y1="15" x2="12" y2="3" />
-                        </svg>
-                        <span>下载记录</span>
-                    </a>
-                    <a class="nav-item" data-page="queue" onclick="navigateTo('queue')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="8" y1="6" x2="21" y2="6" />
-                            <line x1="8" y1="12" x2="21" y2="12" />
-                            <line x1="8" y1="18" x2="21" y2="18" />
-                            <line x1="3" y1="6" x2="3.01" y2="6" />
-                            <line x1="3" y1="12" x2="3.01" y2="12" />
-                            <line x1="3" y1="18" x2="3.01" y2="18" />
-                        </svg>
-                        <span>下载队列</span>
-                    </a>
+
+
                 </div>
 
                 <!-- 工具 -->
                 <div class="nav-group">
                     <div class="nav-group-title">工具</div>
-                    <a class="nav-item" data-page="batch" onclick="navigateTo('batch')">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                            <polyline points="14 2 14 8 20 8" />
-                            <line x1="12" y1="18" x2="12" y2="12" />
-                            <line x1="9" y1="15" x2="15" y2="15" />
-                        </svg>
-                        <span>批量下载</span>
-                    </a>
+
                     <a class="nav-item" data-page="radar" onclick="navigateTo('radar')">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -185,131 +160,17 @@
                             </svg>
                         </div>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-content">
-                            <div class="stat-label">总下载数</div>
-                            <div class="stat-value" id="statTotalDownload">0</div>
-                            <div class="stat-trend up">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
-                                    <polyline points="17 6 23 6 23 12" />
-                                </svg>
-                                <span>已完成</span>
-                            </div>
-                        </div>
-                        <div class="stat-icon download">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="7 10 12 15 17 10" />
-                                <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-content">
-                            <div class="stat-label">今日下载</div>
-                            <div class="stat-value" id="statTodayDownload">0</div>
-                            <div class="stat-trend up">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
-                                    <polyline points="17 6 23 6 23 12" />
-                                </svg>
-                                <span>今日活跃</span>
-                            </div>
-                        </div>
-                        <div class="stat-icon today">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                                <line x1="16" y1="2" x2="16" y2="6" />
-                                <line x1="8" y1="2" x2="8" y2="6" />
-                                <line x1="3" y1="10" x2="21" y2="10" />
-                            </svg>
-                        </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-content">
-                            <div class="stat-label">存储空间</div>
-                            <div class="stat-value" id="statStorage">0 MB</div>
-                            <div class="stat-trend">
-                                <span style="color: var(--text-muted);">已使用</span>
-                            </div>
-                        </div>
-                        <div class="stat-icon storage">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-                            </svg>
-                        </div>
-                    </div>
+
+
+
                 </div>
 
                 <!-- Dashboard Content Grid -->
                 <div class="dashboard-grid">
                     <!-- Statistics Chart - Requirements: 7.2 -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">下载统计</h3>
-                            <a class="card-link" href="#" onclick="navigateTo('downloads'); return false;">
-                                更多
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 14px; height: 14px;">
-                                    <polyline points="9 18 15 12 9 6" />
-                                </svg>
-                            </a>
-                        </div>
-                        <div class="chart-container" id="chartContainer">
-                            <div class="chart-bars" id="chartBars">
-                                <div class="chart-empty">加载中...</div>
-                            </div>
-                        </div>
-                        <!-- Chart Legend -->
-                        <div class="chart-legend" id="chartLegend">
-                            <div class="chart-legend-item">
-                                <div class="chart-legend-left">
-                                    <span class="chart-legend-dot" style="background: var(--primary-color);"></span>
-                                    <span class="chart-legend-label">已完成</span>
-                                </div>
-                                <span class="chart-legend-value" id="legendCompleted">0</span>
-                            </div>
-                            <div class="chart-legend-item">
-                                <div class="chart-legend-left">
-                                    <span class="chart-legend-dot" style="background: var(--warning-color);"></span>
-                                    <span class="chart-legend-label">进行中</span>
-                                </div>
-                                <span class="chart-legend-value" id="legendPending">0</span>
-                            </div>
-                            <div class="chart-legend-item">
-                                <div class="chart-legend-left">
-                                    <span class="chart-legend-dot" style="background: var(--danger-color);"></span>
-                                    <span class="chart-legend-label">失败</span>
-                                </div>
-                                <span class="chart-legend-value" id="legendFailed">0</span>
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- Recent Download List - Requirements: 7.4 -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3 class="card-title">下载历史</h3>
-                            <a class="card-link" href="#" onclick="navigateTo('downloads'); return false;">
-                                更多
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 14px; height: 14px;">
-                                    <polyline points="9 18 15 12 9 6" />
-                                </svg>
-                            </a>
-                        </div>
-                        <div class="recent-list" id="recentDownloadList">
-                            <div class="empty-state">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                    <polyline points="7 10 12 15 17 10" />
-                                    <line x1="12" y1="15" x2="12" y2="3" />
-                                </svg>
-                                <p>暂无下载记录</p>
-                            </div>
-                        </div>
-                    </div>
+
+
                 </div>
 
                 <!-- Recent Browse List - Requirements: 7.3 -->
@@ -345,24 +206,8 @@
                             <span id="browseSelectedCount">已选择 0 项</span>
                         </div>
                         <div style="display: flex; gap: 8px;">
-                            <button class="btn btn-primary" onclick="downloadSelectedBrowse()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 16px; height: 16px;">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                    <polyline points="7 10 12 15 17 10" />
-                                    <line x1="12" y1="15" x2="12" y2="3" />
-                                </svg>
-                                下载
-                            </button>
-                            <button class="btn btn-primary" onclick="exportForBatchDownload()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 16px; height: 16px;">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                    <polyline points="7 10 12 15 17 10" />
-                                    <line x1="12" y1="15" x2="12" y2="3" />
-                                </svg>
-                                批量下载
-                            </button>
+
+
                             <button class="btn btn-secondary" onclick="exportSelectedBrowse()">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                                     style="width: 16px; height: 16px;">
@@ -470,521 +315,11 @@
                 </div>
             </div>
 
-            <!-- Downloads Page - Requirements: 2.1, 2.2, 2.3, 2.4, 9.1, 9.2, 9.4 -->
-            <div class="page-view" id="page-downloads">
-                <!-- Batch Actions Bar - Requirements: 9.1, 9.2, 9.4 -->
-                <div class="card batch-actions-bar download-batch-bar" id="downloadBatchActions" style="display: none;">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <span id="downloadSelectedCount">已选择 0 项</span>
-                        </div>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="btn btn-secondary" onclick="exportSelectedDownloads()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 16px; height: 16px;">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                    <polyline points="17 8 12 3 7 8" />
-                                    <line x1="12" y1="3" x2="12" y2="15" />
-                                </svg>
-                                导出
-                            </button>
-                            <button class="btn btn-danger" onclick="deleteSelectedDownloads()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 16px; height: 16px;">
-                                    <polyline points="3 6 5 6 21 6" />
-                                    <path
-                                        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                                </svg>
-                                删除
-                            </button>
-                            <button class="btn btn-secondary" onclick="clearDownloadSelection()">取消选择</button>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- Filter Bar -->
-                <div class="filter-bar">
-                    <div class="filter-left">
-                        <!-- Status Filter - Requirements: 2.4 -->
-                        <select id="downloadStatusFilter" onchange="filterDownloads()" class="filter-btn"
-                            style="cursor: pointer;">
-                            <option value="">全部状态</option>
-                            <option value="completed">已完成</option>
-                            <option value="failed">失败</option>
-                            <option value="in_progress">进行中</option>
-                        </select>
-                        <!-- Date Range Filter - Requirements: 2.3 -->
-                        <div class="date-picker">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                                <line x1="16" y1="2" x2="16" y2="6" />
-                                <line x1="8" y1="2" x2="8" y2="6" />
-                                <line x1="3" y1="10" x2="21" y2="10" />
-                            </svg>
-                            <input type="date" id="downloadDateStart" onchange="filterDownloads()"
-                                style="border: none; background: transparent; font-size: 13px; width: 110px;">
-                            <span style="color: var(--text-muted);">-</span>
-                            <input type="date" id="downloadDateEnd" onchange="filterDownloads()"
-                                style="border: none; background: transparent; font-size: 13px; width: 110px;">
-                        </div>
-                        <!-- Page Size Selector -->
-                        <select id="downloadPageSize" onchange="changeDownloadPageSize(this.value)" class="filter-btn"
-                            style="cursor: pointer;">
-                            <option value="20">20条/页</option>
-                            <option value="50">50条/页</option>
-                            <option value="100">100条/页</option>
-                        </select>
-                        <button class="btn btn-secondary" onclick="clearDownloadFilters()" style="padding: 8px 12px;">
-                            清除筛选
-                        </button>
-                    </div>
-                    <div class="filter-right">
-                        <button class="btn btn-primary" onclick="exportAllDownloads()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="17 8 12 3 7 8" />
-                                <line x1="12" y1="3" x2="12" y2="15" />
-                            </svg>
-                            导出
-                        </button>
-                    </div>
-                </div>
 
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title">下载记录</h3>
-                    </div>
 
-                    <!-- Download Records Table - Requirements: 2.1 -->
-                    <div id="downloadRecordList" style="overflow-x: auto;">
-                        <table class="data-table" id="downloadTable">
-                            <thead>
-                                <tr>
-                                    <th style="width: 40px;">
-                                        <input type="checkbox" id="downloadSelectAll"
-                                            onchange="toggleDownloadSelectAll(this.checked)">
-                                    </th>
-                                    <th style="width: 80px;">缩略图</th>
-                                    <th>标题</th>
-                                    <th style="width: 110px;">大小</th>
-                                    <th style="width: 80px;">格式</th>
-                                    <th style="width: 140px;">下载时间</th>
-                                    <th style="width: 120px;">状态</th>
-                                    <th style="width: 120px;">操作</th>
-                                </tr>
-                            </thead>
-                            <tbody id="downloadTableBody">
-                                <tr>
-                                    <td colspan="8"
-                                        style="text-align: center; color: var(--text-secondary); padding: 40px;">
-                                        加载中...
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
 
-                    <!-- Pagination -->
-                    <div class="pagination" id="downloadPagination"></div>
-                </div>
 
-                <!-- Download Detail Panel - Requirements: 2.2 -->
-                <div class="card video-detail-panel" id="downloadDetailPanel" style="display: none;">
-                    <div class="card-header">
-                        <h3 class="card-title">下载详情</h3>
-                        <button class="btn btn-secondary" onclick="closeDownloadDetailPanel()"
-                            style="padding: 4px 12px;">关闭</button>
-                    </div>
-                    <div class="video-detail-content" id="downloadDetailContent">
-                        <!-- Detail content will be rendered here -->
-                    </div>
-                </div>
-            </div>
-
-            <!-- Batch Download Page -->
-            <div class="page-view" id="page-batch">
-                <!-- 提示卡片 -->
-                <div class="alert alert-info" style="margin-bottom: 20px;">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        style="width: 20px; height: 20px; flex-shrink: 0;">
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="12" y1="16" x2="12" y2="12" />
-                        <line x1="12" y1="8" x2="12.01" y2="8" />
-                    </svg>
-                    <span>从浏览记录页面点击"批量下载"按钮可以快速导入视频列表</span>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title">批量下载</h3>
-                    </div>
-                    <div class="form-group">
-                        <label>视频列表（JSON 格式）</label>
-                        <textarea id="batchVideoList" rows="12" placeholder='请输入 JSON 格式的视频列表，或从浏览记录导入...'
-                            style="font-family: monospace; font-size: 13px;"></textarea>
-                        <div class="form-hint">支持从浏览记录页面导出的 JSON 格式</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="forceRedownload">
-                            <span>强制重新下载（即使文件已存在）</span>
-                        </label>
-                    </div>
-                    <div style="display: flex; gap: 12px;">
-                        <button class="btn btn-primary" onclick="startBatchDownload()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="7 10 12 15 17 10" />
-                                <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                            开始下载
-                        </button>
-                        <button class="btn btn-secondary" onclick="loadBatchExample()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                                <polyline points="14 2 14 8 20 8" />
-                            </svg>
-                            加载示例
-                        </button>
-                        <button class="btn btn-secondary"
-                            onclick="document.getElementById('batchVideoList').value = ''">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path
-                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            </svg>
-                            清空
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Batch Progress -->
-                <div class="card" id="batchProgressCard" style="display: none;">
-                    <div class="card-header">
-                        <h3 class="card-title">下载进度</h3>
-                        <span id="batchStatusText" style="font-size: 13px; color: var(--text-muted);">准备中...</span>
-                    </div>
-
-                    <!-- 进度条 -->
-                    <div class="batch-progress-wrapper" style="margin-bottom: 24px;">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                            <span style="font-size: 13px; color: var(--text-secondary);">总进度</span>
-                            <span id="batchProgressText"
-                                style="font-size: 13px; font-weight: 600; color: var(--primary-color);">0%</span>
-                        </div>
-                        <div style="background: var(--bg-hover); height: 10px; border-radius: 5px; overflow: hidden;">
-                            <div id="batchProgressBar"
-                                style="height: 100%; background: linear-gradient(90deg, var(--primary-color) 0%, #16a34a 100%); width: 0%; transition: width 0.3s ease; border-radius: 5px;">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 统计数据 -->
-                    <div class="stats-grid" style="margin-bottom: 24px;">
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">总任务</div>
-                                <div class="stat-value" id="batchTotal" style="font-size: 24px;">0</div>
-                            </div>
-                        </div>
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">已完成</div>
-                                <div class="stat-value" id="batchDone"
-                                    style="font-size: 24px; color: var(--success-color);">0</div>
-                            </div>
-                        </div>
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">失败</div>
-                                <div class="stat-value" id="batchFailed"
-                                    style="font-size: 24px; color: var(--danger-color);">0</div>
-                            </div>
-                        </div>
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">进行中</div>
-                                <div class="stat-value" id="batchRunning"
-                                    style="font-size: 24px; color: var(--info-color);">0</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 当前任务信息（保留兼容性，但隐藏） -->
-                    <div id="batchCurrentTask" class="queue-item downloading"
-                        style="display: none; margin-bottom: 20px;">
-                        <div class="queue-item-info" style="flex: 1;">
-                            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">正在下载</div>
-                            <div id="batchCurrentTitle" class="queue-item-title"></div>
-                            <div class="queue-item-meta">
-                                <span>作者: <span id="batchCurrentAuthor">-</span></span>
-                            </div>
-                        </div>
-                        <div class="queue-item-progress">
-                            <div class="queue-progress-bar">
-                                <div class="queue-progress-fill" id="batchCurrentProgressBar" style="width: 0%;"></div>
-                            </div>
-                            <div class="queue-progress-text">
-                                <span id="batchCurrentProgress">0%</span> · <span id="batchCurrentSize">0 MB</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 所有正在下载的任务列表 -->
-                    <div id="batchDownloadingTasks" style="margin-bottom: 20px;"></div>
-
-                    <!-- 操作按钮 -->
-                    <div id="batchButtons" style="display: flex; gap: 12px; flex-wrap: wrap;">
-                        <button class="btn btn-danger" id="batchCancelBtn" onclick="cancelBatchDownload()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10" />
-                                <line x1="15" y1="9" x2="9" y2="15" />
-                                <line x1="9" y1="9" x2="15" y2="15" />
-                            </svg>
-                            取消下载
-                        </button>
-                        <button class="btn btn-primary" id="batchResumeBtn" onclick="resumeBatchDownload()"
-                            style="display: none;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polygon points="5 3 19 12 5 21 5 3" />
-                            </svg>
-                            继续下载
-                        </button>
-                        <button class="btn btn-secondary" id="batchClearBtn" onclick="clearBatchTasks()"
-                            style="display: none;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path
-                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            </svg>
-                            清除任务
-                        </button>
-                        <button class="btn btn-secondary" id="batchResetBtn" onclick="resetBatchDownload()"
-                            style="display: none;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="23 4 23 10 17 10" />
-                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                            </svg>
-                            重新开始
-                        </button>
-                        <button class="btn btn-secondary" id="batchExportFailedBtn" onclick="exportFailedTasks()"
-                            style="display: none;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="17 8 12 3 7 8" />
-                                <line x1="12" y1="3" x2="12" y2="15" />
-                            </svg>
-                            导出失败
-                        </button>
-                        <button class="btn btn-primary" id="batchRetryFailedBtn" onclick="retryFailedTasks()"
-                            style="display: none;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="23 4 23 10 17 10" />
-                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                            </svg>
-                            重试失败
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 下载日志 -->
-                <div class="card" id="batchLogCard" style="display: none;">
-                    <div class="card-header">
-                        <h3 class="card-title">下载日志</h3>
-                        <button class="btn btn-secondary" onclick="clearBatchLog()"
-                            style="padding: 6px 12px; font-size: 12px;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                style="width: 14px; height: 14px;">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path
-                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            </svg>
-                            清空
-                        </button>
-                    </div>
-                    <div id="batchLogList" class="batch-log-container">
-                        <div class="batch-log-item" style="color: var(--text-muted);">等待下载任务...</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Download Queue Page - Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 3.3 -->
-            <div class="page-view" id="page-queue">
-                <!-- Batch Download Progress (shown when batch download is active) -->
-                <div class="card" id="queueBatchProgressCard" style="display: none;">
-                    <div class="card-header">
-                        <h3 class="card-title">批量下载进度</h3>
-                        <span id="queueBatchStatusText" style="font-size: 13px; color: var(--text-muted);">进行中...</span>
-                    </div>
-
-                    <!-- 进度条 -->
-                    <div class="batch-progress-wrapper" style="margin-bottom: 24px;">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                            <span style="font-size: 13px; color: var(--text-secondary);">总进度</span>
-                            <span id="queueBatchProgressText"
-                                style="font-size: 13px; font-weight: 600; color: var(--primary-color);">0%</span>
-                        </div>
-                        <div style="background: var(--bg-hover); height: 10px; border-radius: 5px; overflow: hidden;">
-                            <div id="queueBatchProgressBar"
-                                style="height: 100%; background: linear-gradient(90deg, var(--primary-color) 0%, #16a34a 100%); width: 0%; transition: width 0.3s ease; border-radius: 5px;">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 统计数据 -->
-                    <div class="stats-grid" style="margin-bottom: 24px;">
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">总任务</div>
-                                <div class="stat-value" id="queueBatchTotal" style="font-size: 24px;">0</div>
-                            </div>
-                        </div>
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">已完成</div>
-                                <div class="stat-value" id="queueBatchDone"
-                                    style="font-size: 24px; color: var(--success-color);">0</div>
-                            </div>
-                        </div>
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">失败</div>
-                                <div class="stat-value" id="queueBatchFailed"
-                                    style="font-size: 24px; color: var(--danger-color);">0</div>
-                            </div>
-                        </div>
-                        <div class="stat-card" style="padding: 16px;">
-                            <div class="stat-content">
-                                <div class="stat-label">进行中</div>
-                                <div class="stat-value" id="queueBatchRunning"
-                                    style="font-size: 24px; color: var(--info-color);">0</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 当前任务信息（保留兼容性，但隐藏） -->
-                    <div id="queueBatchCurrentTask" class="queue-item downloading"
-                        style="display: none; margin-bottom: 20px;">
-                        <div class="queue-item-info" style="flex: 1;">
-                            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">正在下载</div>
-                            <div id="queueBatchCurrentTitle" class="queue-item-title"></div>
-                            <div class="queue-item-meta">
-                                <span>作者: <span id="queueBatchCurrentAuthor">-</span></span>
-                            </div>
-                        </div>
-                        <div class="queue-item-progress">
-                            <div class="queue-progress-bar">
-                                <div class="queue-progress-fill" id="queueBatchCurrentProgressBar" style="width: 0%;">
-                                </div>
-                            </div>
-                            <div class="queue-progress-text">
-                                <span id="queueBatchCurrentProgress">0%</span> · <span id="queueBatchCurrentSize">0
-                                    MB</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 所有正在下载的任务列表 -->
-                    <div id="queueBatchDownloadingTasks" style="margin-bottom: 20px;"></div>
-
-                    <!-- 操作按钮 -->
-                    <div id="queueBatchButtons" style="display: flex; gap: 12px; flex-wrap: wrap;">
-                        <button class="btn btn-danger" id="queueBatchCancelBtn" onclick="cancelBatchDownload()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10" />
-                                <line x1="15" y1="9" x2="9" y2="15" />
-                                <line x1="9" y1="9" x2="15" y2="15" />
-                            </svg>
-                            取消下载
-                        </button>
-                        <button class="btn btn-primary" id="queueBatchResumeBtn" onclick="resumeBatchDownload()"
-                            style="display: none;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polygon points="5 3 19 12 5 21 5 3" />
-                            </svg>
-                            继续下载
-                        </button>
-                        <button class="btn btn-secondary" id="queueBatchClearBtn" onclick="clearBatchTasks()"
-                            style="display: none;">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path
-                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            </svg>
-                            清除任务
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Queue Statistics -->
-                <div class="card">
-                    <div class="queue-stats" id="queueStats">
-                        <div class="queue-stat">
-                            <span class="queue-stat-label">总任务:</span>
-                            <span class="queue-stat-value" id="queueTotalCount">0</span>
-                        </div>
-                        <div class="queue-stat">
-                            <span class="queue-stat-label">下载中:</span>
-                            <span class="queue-stat-value" id="queueDownloadingCount">0</span>
-                        </div>
-                        <div class="queue-stat">
-                            <span class="queue-stat-label">等待中:</span>
-                            <span class="queue-stat-value" id="queuePendingCount">0</span>
-                        </div>
-                        <div class="queue-stat">
-                            <span class="queue-stat-label">已暂停:</span>
-                            <span class="queue-stat-value" id="queuePausedCount">0</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Queue List with Drag-and-Drop - Requirements: 10.1, 10.4 -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title">下载队列</h3>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="btn btn-secondary" onclick="pauseAllDownloads()" id="pauseAllBtn">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 16px; height: 16px;">
-                                    <rect x="6" y="4" width="4" height="16" />
-                                    <rect x="14" y="4" width="4" height="16" />
-                                </svg>
-                                全部暂停
-                            </button>
-                            <button class="btn btn-primary" onclick="resumeAllDownloads()" id="resumeAllBtn">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 16px; height: 16px;">
-                                    <polygon points="5 3 19 12 5 21 5 3" />
-                                </svg>
-                                全部恢复
-                            </button>
-                            <button class="btn btn-danger" onclick="clearCompletedQueue()">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                    style="width: 16px; height: 16px;">
-                                    <polyline points="3 6 5 6 21 6" />
-                                    <path
-                                        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                                </svg>
-                                清除已完成
-                            </button>
-                        </div>
-                    </div>
-                    <div class="queue-list" id="downloadQueueList">
-                        <div class="queue-empty-state">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="8" y1="6" x2="21" y2="6" />
-                                <line x1="8" y1="12" x2="21" y2="12" />
-                                <line x1="8" y1="18" x2="21" y2="18" />
-                                <line x1="3" y1="6" x2="3.01" y2="6" />
-                                <line x1="3" y1="12" x2="3.01" y2="12" />
-                                <line x1="3" y1="18" x2="3.01" y2="18" />
-                            </svg>
-                            <p>下载队列为空</p>
-                            <p style="margin-top: 8px; font-size: 12px;">从浏览记录中选择视频添加到队列</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
 
             <!-- Settings Page - Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 13.7 -->
             <div class="page-view" id="page-settings">
@@ -1034,63 +369,7 @@
                     </div>
                 </div>
 
-                <!-- Download Settings - Requirements: 11.1, 11.2, 11.3, 11.4 -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3 class="card-title">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                                style="width: 20px; height: 20px; margin-right: 8px; vertical-align: middle;">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="7 10 12 15 17 10" />
-                                <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                            下载设置
-                        </h3>
-                    </div>
-                    <div class="settings-section">
-                        <div class="settings-item">
-                            <div class="settings-item-info">
-                                <div class="settings-item-label">下载目录</div>
-                                <div class="settings-item-desc">视频文件保存的目录路径</div>
-                            </div>
-                            <div class="settings-item-control" style="width: 280px;">
-                                <input type="text" id="settingDownloadDir" placeholder="downloads"
-                                    onblur="validateDownloadDir()" style="width: 100%;">
-                            </div>
-                        </div>
-                        <div class="settings-item">
-                            <div class="settings-item-info">
-                                <div class="settings-item-label">分片大小</div>
-                                <div class="settings-item-desc">超长视频下载时的分片大小 (1-100 MB)</div>
-                            </div>
-                            <div class="settings-item-control" style="width: 120px;">
-                                <input type="number" id="settingChunkSize" value="10" min="1" max="100"
-                                    onblur="validateChunkSize()" style="width: 100%; text-align: center;">
-                            </div>
-                        </div>
-                        <div class="settings-item">
-                            <div class="settings-item-info">
-                                <div class="settings-item-label">并发下载数</div>
-                                <div class="settings-item-desc">同时下载的最大任务数 (1-5)</div>
-                            </div>
-                            <div class="settings-item-control" style="width: 120px;">
-                                <input type="number" id="settingConcurrentLimit" value="3" min="1" max="5"
-                                    onblur="validateConcurrentLimit()" style="width: 100%; text-align: center;">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="form-error" id="downloadDirError"></div>
-                    <div class="form-error" id="chunkSizeError"></div>
-                    <div class="form-error" id="concurrentLimitError"></div>
-                    <button class="btn btn-primary" onclick="saveDownloadSettings()">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                            <polyline points="17 21 17 13 7 13 7 21" />
-                            <polyline points="7 3 7 8 15 8" />
-                        </svg>
-                        保存下载设置
-                    </button>
-                </div>
+
 
                 <!-- Auto Cleanup Settings - Requirements: 11.5 -->
                 <div class="card">
@@ -1183,14 +462,7 @@
                             </svg>
                             导出浏览记录
                         </button>
-                        <button class="btn btn-secondary" onclick="exportAllDownloads()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="17 8 12 3 7 8" />
-                                <line x1="12" y1="3" x2="12" y2="15" />
-                            </svg>
-                            导出下载记录
-                        </button>
+
                     </div>
                 </div>
 
@@ -1218,13 +490,7 @@
                             </svg>
                             清空浏览记录
                         </button>
-                        <button class="btn btn-danger" onclick="clearAllDownloadRecords()">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path d="" 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            </svg>
-                            清空下载记录
-                        </button>
+
                         <button class="btn btn-secondary" onclick="resetSettings()">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polyline points="23 4 23 10 17 10" />
@@ -1260,7 +526,7 @@
                             <line x1="12" y1="16" x2="12" y2="12" />
                             <line x1="12" y1="8" x2="12.01" y2="8" />
                         </svg>
-                        <span>系统会在后台静默轮询以下博主，发现新视频后会自动推入您的下载队列。(如果博主列表为空，请先在视频号添加博主)</span>
+                        <span>系统会在后台静默轮询以下博主，发现新作品后会记录检测结果。(如果博主列表为空，请先在视频号添加博主)</span>
                     </div>
 
                     <div id="radarTargetList">
@@ -1299,7 +565,7 @@
                                 <option value="INSTALLATION">安装指南</option>
                                 <option value="CONFIGURATION">配置说明</option>
                                 <option value="API">API 文档</option>
-                                <option value="BATCH_DOWNLOAD_GUIDE">批量下载指南</option>
+
                                 <option value="WEB_CONSOLE">Web 控制台</option>
                                 <option value="COMMENT_CAPTURE">评论采集</option>
                                 <option value="BUILD">构建说明</option>
@@ -1467,12 +733,8 @@
                     </div>
                 </div>
 
-                <!-- Delete files option (for downloads only) - Requirements: 5.3 -->
                 <div class="clear-files-option" id="clearFilesOption" style="display: none;">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="clearDeleteFiles">
-                        <span>同时删除已下载的视频文件</span>
-                    </label>
+
                     <div class="form-hint" style="margin-left: 26px; margin-top: 4px;">
                         勾选后将永久删除本地视频文件，释放磁盘空间
                     </div>
@@ -1580,15 +842,7 @@
                             </svg>
                             <span>浏览记录</span>
                         </label>
-                        <label class="cleanup-type-option" onclick="selectCleanupType('downloads')">
-                            <input type="radio" name="cleanupType" value="downloads">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                <polyline points="7 10 12 15 17 10" />
-                                <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                            <span>下载记录</span>
-                        </label>
+
                     </div>
                 </div>
 
@@ -1622,12 +876,8 @@
                     </div>
                 </div>
 
-                <!-- Delete files option (for downloads only) -->
                 <div class="clear-files-option" id="cleanupFilesOption" style="display: none;">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="cleanupDeleteFiles">
-                        <span>同时删除已下载的视频文件</span>
-                    </label>
+
                 </div>
             </div>
             <div class="dialog-footer">
@@ -1804,7 +1054,7 @@
     <script src="js/ui.js?v=1764987636"></script>
     <script src="js/radar.js?v=1764987636"></script>
     <script src="js/pages-browse.js?v=1764987636"></script>
-    <script src="js/pages-download.js?v=1764987636"></script>
+
     <script src="js/pages-settings.js?v=1764987636"></script>
     <script src="js/video-player.js?v=1764987636"></script>
 </body>

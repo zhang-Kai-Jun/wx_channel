@@ -1,7 +1,9 @@
 package database
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -335,11 +337,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_videos_unique ON task_videos(task_id,
 CREATE TABLE IF NOT EXISTS __placeholder__ (dummy INTEGER);
 `,
 	},
+	{
+		Version:     18,
+		Description: "Track radar discoveries independently of downloads",
+		Up: `CREATE TABLE IF NOT EXISTS radar_seen_videos (
+    target_id TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (target_id, video_id),
+    FOREIGN KEY(target_id) REFERENCES radar_targets(id) ON DELETE CASCADE
+);`,
+	},
+	{
+		Version:     19,
+		Description: "Normalize legacy Go timestamps for the native SQLite driver",
+	},
 }
 
 type colInfo struct{ Name, Type string }
 
-func loadColumns(dbConn *sql.DB, table string) ([]colInfo, error) {
+func loadColumns(dbConn interface {
+	Query(string, ...any) (*sql.Rows, error)
+}, table string) ([]colInfo, error) {
 	rows, err := dbConn.Query(fmt.Sprintf("PRAGMA table_info(%q)", table))
 	if err != nil {
 		return nil, err
@@ -376,7 +395,7 @@ func hasPKInt(cols []colInfo) bool {
 	return false
 }
 
-func migrateSearchTasksV17() error {
+func migrateSearchTasksV17() (retErr error) {
 	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name='search_tasks'`)
 	if err != nil {
 		return err
@@ -399,12 +418,30 @@ func migrateSearchTasksV17() error {
 
 	fmt.Println("Applying migration 17: fix search_tasks / task_videos schema")
 
-	tx, err := db.Begin()
+	// 外键开关必须在事务外设置，并固定在同一连接上。
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
+	var foreignKeys int
+	if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	defer func() {
+		_, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA foreign_keys = %d", foreignKeys))
+		retErr = errors.Join(retErr, err)
+	}()
 
-	_, _ = tx.Exec("PRAGMA foreign_keys = OFF")
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 
 	if _, err = tx.Exec(`CREATE TABLE search_tasks_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -481,13 +518,21 @@ FROM search_tasks`, taskIDSrc, saSrc, caSrc, emSrc, ttSrc, vlSrc)
 	}
 
 	// 同样处理 task_videos
-	tvRows, _ := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_videos'`)
-	tvExists := tvRows != nil && tvRows.Next()
-	if tvRows != nil {
-		tvRows.Close()
+	tvRows, err := tx.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_videos'`)
+	if err != nil {
+		return err
+	}
+	tvExists := tvRows.Next()
+	err = tvRows.Err()
+	tvRows.Close()
+	if err != nil {
+		return err
 	}
 	if tvExists {
-		tvCols, _ := loadColumns(db, "task_videos")
+		tvCols, err := loadColumns(tx, "task_videos")
+		if err != nil {
+			return err
+		}
 		tvCS := colSet(tvCols)
 		if _, err = tx.Exec(`CREATE TABLE task_videos_new (
     id TEXT PRIMARY KEY,
@@ -502,7 +547,7 @@ FROM search_tasks`, taskIDSrc, saSrc, caSrc, emSrc, ttSrc, vlSrc)
 		}
 		viSrc := "video_index"
 		if !tvCS["video_index"] {
-			viSrc = "CAST(video_index AS TEXT)"
+			viSrc = "CAST(id AS TEXT)"
 		}
 		if _, err = tx.Exec(fmt.Sprintf(`INSERT INTO task_videos_new
     (id, task_id, video_data, video_index, created_at)
@@ -549,15 +594,13 @@ SELECT id, task_id, video_data, %s, created_at FROM task_videos`, viSrc)); err !
 		}
 	}
 
-	_, _ = tx.Exec("PRAGMA foreign_keys = ON")
+	if _, err = tx.Exec(`INSERT INTO schema_migrations (version) VALUES (17)`); err != nil {
+		return fmt.Errorf("record migration 17: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 
-	// 记录版本 17
-	if _, err = db.Exec(`INSERT INTO schema_migrations (version) VALUES (17)`); err != nil {
-		return fmt.Errorf("record migration 17: %w", err)
-	}
 	fmt.Println("Applied migration 17: Fix search_tasks / task_videos schema to match code design")
 	return nil
 }
@@ -582,9 +625,18 @@ func runMigrations() error {
 		return fmt.Errorf("failed to get current schema version: %w", err)
 	}
 
-	// 运行待处理的迁移（v17 由 migrateSearchTasksV17 处理）
+	// 按版本顺序执行，确保专用迁移失败时不会提前记录后续版本。
 	for _, m := range migrations {
-		if m.Version > currentVersion && m.Version != 17 {
+		if m.Version > currentVersion {
+			if m.Version == 17 {
+				if err := migrateSearchTasksV17(); err != nil {
+					return fmt.Errorf("migrateSearchTasksV17: %w", err)
+				}
+				if _, err := db.Exec("INSERT OR IGNORE INTO schema_migrations (version) VALUES (17)"); err != nil {
+					return fmt.Errorf("record migration 17: %w", err)
+				}
+				continue
+			}
 			// 开启事务
 			tx, err := db.Begin()
 			if err != nil {
@@ -592,7 +644,11 @@ func runMigrations() error {
 			}
 
 			// 执行迁移
-			_, err = tx.Exec(m.Up)
+			if m.Version == 19 {
+				err = normalizeLegacyTimestamps(tx)
+			} else {
+				_, err = tx.Exec(m.Up)
+			}
 			if err != nil {
 				tx.Rollback()
 				return fmt.Errorf("failed to execute migration %d (%s): %w", m.Version, m.Description, err)
@@ -611,12 +667,6 @@ func runMigrations() error {
 			}
 
 			fmt.Printf("Applied migration %d: %s\n", m.Version, m.Description)
-		}
-	}
-
-	if currentVersion < 17 {
-		if err := migrateSearchTasksV17(); err != nil {
-			return fmt.Errorf("migrateSearchTasksV17: %w", err)
 		}
 	}
 

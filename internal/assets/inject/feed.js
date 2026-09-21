@@ -1,9 +1,9 @@
 /**
- * @file Feed页面功能模块 - 视频详情页下载按钮注入
+ * @file Feed页面功能模块 - 视频详情页工具注入
  */
 console.log('[feed.js] 加载Feed页面模块');
 
-// ==================== Feed页面下载按钮注入 ====================
+// ==================== Feed页面工具注入 ====================
 
 function __build_feed_header_icon(id, title, svgMarkup) {
   var wrapper = document.createElement('div');
@@ -426,7 +426,7 @@ function __start_feed_slide_monitor() {
     console.log('[feed.js] 检测到当前视频切换:', activeFeedId);
 
     // 视频切换时，重新注入按钮（因为Vue可能会重新渲染工具栏）
-    __insert_download_btn_to_feed_toolbar().then(function(success) {
+    __insert_tools_to_feed_toolbar().then(function(success) {
       if (success) {
         console.log('[feed.js] 视频切换后按钮已重新注入');
       }
@@ -446,16 +446,16 @@ function __start_feed_slide_monitor() {
 
     if (!container) return;
 
-    var btns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon');
+    var btns = container.querySelectorAll('#wx-feed-comment-icon');
     if (btns.length < 2) {
       console.log('[feed.js] 检测到按钮消失，尝试重新注入...');
-      __insert_download_btn_to_feed_toolbar();
+      __insert_tools_to_feed_toolbar();
     }
   }, 2000);
 }
 
 /** 注入Feed页面顶部工具栏按钮 */
-async function __insert_download_btn_to_feed_toolbar() {
+async function __insert_tools_to_feed_toolbar() {
   // 查找顶部工具栏容器
   var findToolbarContainer = function () {
     return document.querySelector('header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center') ||
@@ -471,7 +471,7 @@ async function __insert_download_btn_to_feed_toolbar() {
     }
 
     // 每次都移除可能存在的旧按钮，确保全新注入
-    var oldBtns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-download-icon, #wx-feed-copy-link-icon, #wx-feed-dom-icon, #wx-feed-export-icon, #wx-feed-store-snapshot-icon, #wx-feed-comment-snapshot-icon, #wx-feed-comment-count-icon');
+    var oldBtns = container.querySelectorAll('#wx-feed-comment-icon, #wx-feed-copy-link-icon, #wx-feed-dom-icon, #wx-feed-store-snapshot-icon, #wx-feed-comment-snapshot-icon, #wx-feed-comment-count-icon');
     if (oldBtns.length > 0) {
       console.log('[feed.js] 移除旧的工具栏按钮 (' + oldBtns.length + '个)');
       oldBtns.forEach(function(btn) { btn.remove(); });
@@ -601,28 +601,6 @@ async function __insert_download_btn_to_feed_toolbar() {
       }
     };
 
-    // 创建下载图标
-    var downloadIconWrapper = __build_feed_header_icon(
-      'wx-feed-download-icon',
-      '下载视频',
-      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>'
-    );
-
-    downloadIconWrapper.onclick = function () {
-      __handle_feed_download_click();
-    };
-
-    // Create Export icon
-    var exportIconWrapper = __build_feed_header_icon(
-      'wx-feed-export-icon',
-      '导出CSV',
-      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M8 3.75h5.25L18 8.5v11.75H8c-1.1 0-2-.9-2-2V5.75c0-1.1.9-2 2-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M13 3.75V8.5h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M9.5 12.5h5M9.5 15.5h5M9.5 18.5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>'
-    );
-
-    exportIconWrapper.onclick = function () { 
-      __handle_export_click();
-    };
-
     // 创建 Store 快照按钮
     var storeSnapshotIconWrapper = __build_feed_header_icon(
       'wx-feed-store-snapshot-icon',
@@ -725,17 +703,15 @@ async function __insert_download_btn_to_feed_toolbar() {
     };
 
     // Insert into container
-    container.insertBefore(exportIconWrapper, container.firstChild);
-    container.insertBefore(commentSnapshotIconWrapper, exportIconWrapper);
+    container.insertBefore(commentSnapshotIconWrapper, container.firstChild);
     container.insertBefore(storeSnapshotIconWrapper, commentSnapshotIconWrapper);
     container.insertBefore(commentCountIconWrapper, storeSnapshotIconWrapper);
-    container.insertBefore(downloadIconWrapper, commentCountIconWrapper);
     container.insertBefore(domIconWrapper, container.firstChild);
     container.insertBefore(commentIconWrapper, container.firstChild);
     container.insertBefore(copyLinkIconWrapper, container.firstChild);
 
     console.log('[feed.js] ✅ 工具栏按钮注入成功');
-    __wx_log({ msg: "注入评论和下载按钮成功!" });
+    __wx_log({ msg: "注入评论工具成功!" });
     return true;
   };
 
@@ -812,52 +788,6 @@ async function __insert_download_btn_to_feed_toolbar() {
   });
 }
 
-/** Feed页面下载按钮点击处理 */
-function __handle_feed_download_click() {
-  var currentProfile = __wx_channels_store__ && __wx_channels_store__.profile;
-
-  // 直接在页面上显示提示
-  showFeedDebugInfo('📥 点击下载按钮 | 当前profile: ' + (currentProfile ? '已存储' : '为空'));
-
-  console.log('[feed.js] 点击下载按钮，当前 profile:', currentProfile);
-
-  // 尝试从 runtime 获取
-  var profile = __sync_feed_profile_with_runtime(false);
-  console.log('[feed.js] runtime 同步后的 profile:', profile);
-
-  if (!profile || !profile.url) {
-    // runtime 失败，尝试从后端 API 获取
-    showFeedDebugInfo('⏳ 正在从服务器获取视频数据...');
-    console.log('[feed.js] 尝试从后端获取视频数据');
-
-    fetch('/__wx_channels_api/get_current_profile', {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
-    })
-    .then(function(response) { return response.json(); })
-    .then(function(data) {
-      console.log('[feed.js] 后端返回的profile数据:', data);
-      if (data && data.id) {
-        profile = data;
-        __wx_channels_store__.profile = profile;
-        showFeedDebugInfo('✅ 从服务器获取到视频: ' + (profile.title || profile.id).substring(0, 15));
-        __show_feed_download_options(profile);
-      } else {
-        showFeedDebugInfo('❌ 服务器没有视频数据 - 请先播放视频');
-      }
-    })
-    .catch(function(err) {
-      console.error('[feed.js] 获取视频数据失败:', err);
-      showFeedDebugInfo('❌ 获取视频数据失败');
-    });
-
-    return;
-  }
-
-  showFeedDebugInfo('✅ 视频数据已就绪: ' + (profile.title || profile.id).substring(0, 20));
-  __show_feed_download_options(profile);
-}
-
 // 在页面上显示调试信息
 function showFeedDebugInfo(msg) {
   // 创建临时提示元素
@@ -877,115 +807,12 @@ function showFeedDebugInfo(msg) {
   }, 3000);
 }
 
-/** Feed页面下载选项菜单 */
-function __show_feed_download_options(profile) {
-  console.log('[feed.js] 显示下载选项菜单', profile);
-
-  // 移除已存在的菜单
-  var existingMenu = document.getElementById('wx-download-menu');
-  if (existingMenu) existingMenu.remove();
-  var existingOverlay = document.getElementById('wx-download-overlay');
-  if (existingOverlay) existingOverlay.remove();
-
-  var menu = document.createElement('div');
-  menu.id = 'wx-download-menu';
-  menu.style.cssText = 'position:fixed;z-index:99999;background:#2b2b2b;color:#e5e5e5;border-radius:8px;padding:0;width:280px;box-shadow:0 8px 24px rgba(0,0,0,0.5);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:14px;';
-
-  var title = profile.title || '未知视频';
-  var shortTitle = title.length > 30 ? title.substring(0, 30) + '...' : title;
-
-  var html = '';
-
-  // 标题栏
-  html += '<div style="padding:16px 20px;border-bottom:1px solid rgba(255,255,255,0.08);">';
-  html += '<div style="font-size:15px;font-weight:500;color:#fff;margin-bottom:8px;">下载选项</div>';
-  html += '<div style="font-size:13px;color:#999;line-height:1.4;">' + shortTitle + '</div>';
-  html += '</div>';
-
-  // 选项区域
-  html += '<div style="padding:16px 20px;">';
-
-  // 视频下载选项
-  if (profile.spec && profile.spec.length > 0) {
-    html += '<div style="margin-bottom:12px;font-size:12px;color:#999;">选择画质:</div>';
-    profile.spec.forEach(function (spec, index) {
-      var label = spec.fileFormat || ('画质' + (index + 1));
-      if (spec.width && spec.height) {
-        label += ' (' + spec.width + 'x' + spec.height + ')';
-      }
-      html += '<div class="download-option" data-index="' + index + '" style="padding:10px 16px;margin:8px 0;background:rgba(255,255,255,0.08);border-radius:6px;cursor:pointer;text-align:center;transition:background 0.2s;font-size:13px;">' + label + '</div>';
-    });
-  } else {
-    html += '<div class="download-option" data-index="-1" style="padding:10px 16px;margin:8px 0;background:rgba(255,255,255,0.08);border-radius:6px;cursor:pointer;text-align:center;font-size:13px;">下载视频</div>';
-  }
-
-  // 封面下载
-  html += '<div class="download-cover" style="padding:10px 16px;margin:8px 0;background:rgba(7,193,96,0.15);color:#07c160;border-radius:6px;cursor:pointer;text-align:center;font-size:13px;font-weight:500;">下载封面</div>';
-
-  html += '</div>';
-
-  // 底部按钮
-  html += '<div style="padding:12px 20px;border-top:1px solid rgba(255,255,255,0.08);">';
-  html += '<div class="close-menu" style="padding:8px;text-align:center;cursor:pointer;color:#999;font-size:13px;">取消</div>';
-  html += '</div>';
-
-  menu.innerHTML = html;
-  document.body.appendChild(menu);
-
-  var anchor = document.getElementById('wx-feed-download-icon');
-  if (anchor && anchor.getBoundingClientRect) {
-    var rect = anchor.getBoundingClientRect();
-    var menuWidth = 280;
-    var left = Math.max(16, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 16));
-    var top = Math.max(56, rect.bottom + 12);
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
-  } else {
-    menu.style.top = '60px';
-    menu.style.right = '20px';
-  }
-
-  // 添加遮罩
-  var overlay = document.createElement('div');
-  overlay.id = 'wx-download-overlay';
-  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:99998;';
-  document.body.appendChild(overlay);
-
-  function closeMenu() {
-    menu.remove();
-    overlay.remove();
-  }
-
-  // 绑定事件
-  menu.querySelectorAll('.download-option').forEach(function (el) {
-    el.onmouseover = function () { this.style.background = 'rgba(255,255,255,0.15)'; };
-    el.onmouseout = function () { this.style.background = 'rgba(255,255,255,0.08)'; };
-    el.onclick = function () {
-      var index = parseInt(this.getAttribute('data-index'));
-      var spec = index >= 0 && profile.spec ? profile.spec[index] : null;
-      closeMenu();
-      __wx_channels_handle_click_download__(spec);
-    };
-  });
-
-  var coverBtn = menu.querySelector('.download-cover');
-  coverBtn.onmouseover = function () { this.style.background = 'rgba(7,193,96,0.25)'; };
-  coverBtn.onmouseout = function () { this.style.background = 'rgba(7,193,96,0.15)'; };
-  coverBtn.onclick = function () {
-    closeMenu();
-    __wx_channels_handle_download_cover();
-  };
-
-  menu.querySelector('.close-menu').onclick = closeMenu;
-  overlay.onclick = closeMenu;
-}
-
 /** Feed页面按钮注入入口 */
-async function __insert_download_btn_to_feed_page() {
+async function __insert_tools_to_feed_page() {
   console.log('[feed.js] 开始注入Feed页面按钮到顶部工具栏...');
   __start_feed_slide_monitor();
 
-  var success = await __insert_download_btn_to_feed_toolbar();
+  var success = await __insert_tools_to_feed_toolbar();
   if (success) {
     setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 120);
     setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 500);
@@ -1003,7 +830,7 @@ async function __insert_download_btn_to_feed_page() {
       retries++;
       console.log('[feed.js] 重试注入 (' + retries + '/' + maxRetries + ')...');
 
-      var retrySuccess = await __insert_download_btn_to_feed_toolbar();
+      var retrySuccess = await __insert_tools_to_feed_toolbar();
       if (retrySuccess) {
         clearInterval(retryTimer);
         setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 120);
@@ -1031,65 +858,7 @@ async function __insert_download_btn_to_feed_page() {
 }
 
 /** Feed页面导出按钮点击处理 */
-async function __handle_export_click() {
-  console.log('[feed.js] 点击导出CSV');
 
-  try {
-    // 检查依赖
-    if (typeof WXU === 'undefined') {
-      throw new Error('WXU 工具库未加载');
-    }
-
-    // 移除外部依赖，使用原生方式下载
-    // if (typeof saveAs === 'undefined') { ... }
-
-    __wx_log({ msg: '⏳ 正在导出下载记录...' });
-
-    const headers = {};
-    if (window.__WX_LOCAL_TOKEN__) {
-      headers['X-Local-Auth'] = window.__WX_LOCAL_TOKEN__;
-    }
-
-    const response = await fetch('/api/export/downloads?format=csv', {
-      headers: headers
-    });
-
-    if (!response.ok) throw new Error('导出请求失败: ' + response.status + ' ' + response.statusText);
-
-    const blob = await response.blob();
-    const filename = `wx_channels_downloads_${new Date().toISOString().slice(0, 10)}.csv`;
-
-    // 使用原生方式保存文件 (替代 FileSaver.js)
-    if (window.navigator && window.navigator.msSaveOrOpenBlob) {
-      window.navigator.msSaveOrOpenBlob(blob, filename);
-    } else {
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    }
-
-    __wx_log({ msg: '✅ 导出成功: ' + filename });
-  } catch (e) {
-    console.error('[feed.js] Export error:', e);
-
-    var errorMsg = e.message || String(e);
-    // 处理加载脚本错误的特殊对象
-    if (typeof e === 'object' && e.isTrusted) {
-      errorMsg = "依赖脚本加载失败 (Network Error)";
-    }
-
-    if (typeof __wx_log === 'function') {
-      __wx_log({ msg: '❌ 导出失败: ' + errorMsg });
-    }
-    alert('导出失败: ' + errorMsg);
-  }
-}
 
 console.log('[feed.js] Feed页面模块加载完成');
 
@@ -1221,5 +990,3 @@ window.__snapshotTaskId = '';
 window.__try_open_feed_comment_panel = __try_open_feed_comment_panel;
 window.__start_feed_comment_collection_with_open_panel = __start_feed_comment_collection_with_open_panel;
 window.dumpAllPiniaStores = dumpAllPiniaStores;
-window.__wx_channels_start_comment_collection = __wx_channels_start_comment_collection;
-

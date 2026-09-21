@@ -23,7 +23,6 @@ type APIRouter struct {
 	exportService      *api.ExportAPI
 	proxyService       *api.ProxyService
 	certificateService *api.CertificateService
-	versionService     *api.VersionAPI
 	radarAPI           *api.RadarServiceAPI
 	taskAPI            *api.TaskAPI
 	allowedOrigins     []string
@@ -65,7 +64,6 @@ func NewAPIRouter(cfg *config.Config, hub *websocket.Hub, sunny *SunnyNet.Sunny)
 		exportService:      api.NewExportAPI(),
 		proxyService:       api.NewProxyService(sunny, cfg.Port),
 		certificateService: api.NewCertificateService(sunny),
-		versionService:     api.NewVersionAPI(),
 		radarAPI:           api.NewRadarServiceAPI(),
 		taskAPI:            api.NewTaskAPI(hub),
 		allowedOrigins:     cfg.AllowedOrigins,
@@ -88,19 +86,10 @@ func (r *APIRouter) registerRoutes() {
 	r.logsService.RegisterRoutes(r.mux)
 	r.proxyService.RegisterRoutes(r.mux)
 	r.certificateService.RegisterRoutes(r.mux)
-	r.versionService.RegisterRoutes(r.mux)
 
 	// 控制台 API - 浏览历史
 	r.mux.HandleFunc("/api/browse", r.consoleHandler.HandleBrowseAPI)
 	r.mux.HandleFunc("/api/browse/", r.consoleHandler.HandleBrowseAPI)
-
-	// 控制台 API - 下载记录
-	r.mux.HandleFunc("/api/downloads", r.consoleHandler.HandleDownloadsAPI)
-	r.mux.HandleFunc("/api/downloads/", r.consoleHandler.HandleDownloadsAPI)
-
-	// 控制台 API - 队列管理
-	r.mux.HandleFunc("/api/queue", r.consoleHandler.HandleQueueAPI)
-	r.mux.HandleFunc("/api/queue/", r.consoleHandler.HandleQueueAPI)
 
 	// Console API - Settings
 	// 设置管理
@@ -116,17 +105,10 @@ func (r *APIRouter) registerRoutes() {
 	// 搜索
 	r.mux.HandleFunc("/api/search", r.consoleHandler.HandleSearch)
 
-	// 文件操作
-	r.mux.HandleFunc("/api/files/", r.consoleHandler.HandleFilesAPI)
-
-	// 系统信息
-
 	// 控制台 API - 导出功能
 	r.mux.HandleFunc("/api/export/browse", r.exportService.HandleExportBrowseHistory)
-	r.mux.HandleFunc("/api/export/downloads", r.exportService.HandleExportDownloadRecords)
 
 	// 控制台 API - 视频相关
-	r.mux.HandleFunc("/api/video/stream", r.consoleHandler.HandleVideoStream)
 	r.mux.HandleFunc("/api/video/play", r.consoleHandler.HandleVideoPlay)
 
 	// 控制台 API - 触发评论采集
@@ -135,10 +117,6 @@ func (r *APIRouter) registerRoutes() {
 	// v1 版本化路由（别名）
 	r.mux.HandleFunc("/api/v1/browse", r.consoleHandler.HandleBrowseAPI)
 	r.mux.HandleFunc("/api/v1/browse/", r.consoleHandler.HandleBrowseAPI)
-	r.mux.HandleFunc("/api/v1/downloads", r.consoleHandler.HandleDownloadsAPI)
-	r.mux.HandleFunc("/api/v1/downloads/", r.consoleHandler.HandleDownloadsAPI)
-	r.mux.HandleFunc("/api/v1/queue", r.consoleHandler.HandleQueueAPI)
-	r.mux.HandleFunc("/api/v1/queue/", r.consoleHandler.HandleQueueAPI)
 	r.mux.HandleFunc("/api/v1/settings", r.consoleHandler.HandleSettingsAPI)
 	r.mux.HandleFunc("/api/v1/stats", r.consoleHandler.HandleStatsAPI)
 	r.mux.HandleFunc("/api/v1/stats/", r.consoleHandler.HandleStatsAPI)

@@ -1,69 +1,26 @@
-
+# 视频号采集助手完整配置
 port: 2025
-
-download_dir: downloads
-
-records_file: download_records.csv
-
+default_port: 2025
+# 保留原数据目录，供采集数据库、评论及诊断数据使用。
+data_dir: downloads
 cert_file: SunnyRoot.cer
+cert_install_delay: 3s
+save_delay: 500ms
 
-cloud_enabled: false
+secret_token: ""
+web_console_token: "@dongzuren"
+allowed_origins: []
 
-cloud_hub_url: ""
-
-cloud_secret: ""
-
-machine_id: ""
-
-bind_token: ""
-
-download_concurrency: 5
-
-download_retry_count: 3
-
-download_resume_enabled: true
-
-download_timeout: 30
-
-max_retries: 3
-
-chunk_size: 2097152  # 2MB
-
-max_upload_size: 67108864  # 64MB
-
-buffer_size: 65536  # 64KB
-
-upload_chunk_concurrency: 4
-
-upload_merge_concurrency: 1
-
-log_file: logs/video_channel.log
-
+log_file: logs/wx_channel.log
 max_log_size_mb: 5
-
 save_page_snapshot: false
-
 save_search_data: false
-
 save_page_js: false
-
 show_log_button: false
+enable_log_interception: false
 
 load_balancer_strategy: leastconn
-
 compression_enabled: true
-
-compression_threshold: 1024  # 1KB
-
-metrics_enabled: false
-
-metrics_port: 9090
-
-web_console_token: "@dongzuren112s"
-
-allowed_origins:
-  - "*"
-
-cert_install_delay: 3
-
-save_delay: 500
+compression_threshold: 1024
+# 雷达仅检测新作品并记录结果。
+radar_enabled: false

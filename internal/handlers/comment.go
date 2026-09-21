@@ -146,7 +146,7 @@ func (h *CommentHandler) savePiniaStoreSnapshot(snapshot map[string]interface{})
 		return "", fmt.Errorf("获取基础目录失败: %v", err)
 	}
 
-	snapshotDir := filepath.Join(baseDir, h.getConfig().DownloadsDir, "comment_data", "store_snapshots")
+	snapshotDir := filepath.Join(baseDir, h.getConfig().DataDir, "comment_data", "store_snapshots")
 	if err := utils.EnsureDir(snapshotDir); err != nil {
 		return "", fmt.Errorf("创建快照目录失败: %v", err)
 	}
@@ -181,7 +181,7 @@ func (h *CommentHandler) saveRawCommentAPIData(data []byte) error {
 	}
 
 	// 创建原始API数据目录
-	rawDataDir := filepath.Join(baseDir, h.getConfig().DownloadsDir, "comment_data", "raw_api")
+	rawDataDir := filepath.Join(baseDir, h.getConfig().DataDir, "comment_data", "raw_api")
 	if err := utils.EnsureDir(rawDataDir); err != nil {
 		return fmt.Errorf("创建原始API数据目录失败: %v", err)
 	}
@@ -308,7 +308,7 @@ func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, vide
 	}
 
 	// 创建评论数据目录
-	downloadsDir := filepath.Join(baseDir, h.getConfig().DownloadsDir)
+	downloadsDir := filepath.Join(baseDir, h.getConfig().DataDir)
 	commentDataRoot := filepath.Join(downloadsDir, "comment_data")
 	if err := utils.EnsureDir(commentDataRoot); err != nil {
 		return fmt.Errorf("创建评论数据根目录失败: %v", err)

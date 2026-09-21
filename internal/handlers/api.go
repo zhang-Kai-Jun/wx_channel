@@ -390,6 +390,10 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 			wsRespData, err := h.domActionHub.CallAPI("key:channels:dom_action", domReq, 30*time.Second)
 			if err != nil {
 				utils.LogError("[DOMAction] fetch_video_comments 后台 CallAPI 异常: %v", err)
+				h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
+					Success: false, RequiresReset: true, Reason: "request_failed",
+					Message: "评论采集请求失败或超时，需关闭旧页面后继续", ReceivedAt: time.Now().Unix(),
+				})
 				return
 			}
 			utils.LogInfo("[DOMAction] fetch_video_comments 后台 CallAPI 完成, task_id=%s", req.TaskID)
@@ -397,8 +401,10 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 			// inject 通过 resp() 发来的 WebSocket 响应数据写入缓存
 			// inject 发送: { success, result: { panel_ready, comment_count, has_more, items, last_comment_id, ... } }
 			var wsResp struct {
-				Success bool `json:"success"`
+				Success bool   `json:"success"`
+				Message string `json:"message"`
 				Result  struct {
+					Reason        string      `json:"reason"`
 					PanelReady    bool        `json:"panel_ready"`
 					Items         interface{} `json:"items"`
 					Total         int         `json:"total"`
@@ -412,10 +418,16 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 			}
 			if parseErr := json.Unmarshal(wsRespData, &wsResp); parseErr != nil {
 				utils.LogError("[DOMAction] 解析 fetch_video_comments 响应失败: %v", parseErr)
+				h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
+					Success: false, RequiresReset: true, Reason: "invalid_response",
+					Message: "评论采集响应解析失败，需关闭旧页面后继续", ReceivedAt: time.Now().Unix(),
+				})
 				return
 			}
 			h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
 				Success:      wsResp.Success,
+				Message:      wsResp.Message,
+				Reason:       wsResp.Result.Reason,
 				PanelReady:   wsResp.Result.PanelReady,
 				Items:        wsResp.Result.Items,
 				Total:        wsResp.Result.Total,
@@ -1046,6 +1058,7 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 		Result  struct {
+			Reason        string      `json:"reason"`
 			PanelReady    bool        `json:"panel_ready"`
 			Items         interface{} `json:"items"`
 			Total         int         `json:"total"`
@@ -1074,6 +1087,7 @@ func (h *APIHandler) HandleFetchCommentsCallback(Conn *SunnyNet.HttpConn) {
 	h.domActionHub.SetFetchCommentsResult(payload.TaskID, &websocket.FetchCommentsData{
 		Success:      payload.Success,
 		Message:      payload.Message,
+		Reason:       payload.Result.Reason,
 		PanelReady:   payload.Result.PanelReady,
 		Items:        payload.Result.Items,
 		Total:        payload.Result.Total,
@@ -1136,16 +1150,18 @@ func (h *APIHandler) HandleGetFetchCommentsResult(Conn *SunnyNet.HttpConn) {
 	var responseData map[string]interface{}
 	if result != nil {
 		responseData = map[string]interface{}{
-			"success":       result.Success,
-			"message":       result.Message,
-			"panel_ready":   result.PanelReady,
-			"items":         result.Items,
-			"total":         result.Total,
-			"comment_count": result.CommentCount,
-			"current_total": result.CurrentTotal,
-			"has_more":      result.HasMore,
-			"buffer":        result.Buffer,
-			"raw_items":     result.RawItems,
+			"success":        result.Success,
+			"requires_reset": result.RequiresReset,
+			"reason":         result.Reason,
+			"message":        result.Message,
+			"panel_ready":    result.PanelReady,
+			"items":          result.Items,
+			"total":          result.Total,
+			"comment_count":  result.CommentCount,
+			"current_total":  result.CurrentTotal,
+			"has_more":       result.HasMore,
+			"buffer":         result.Buffer,
+			"raw_items":      result.RawItems,
 		}
 	} else {
 		responseData = map[string]interface{}{

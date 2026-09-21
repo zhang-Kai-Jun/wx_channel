@@ -60,6 +60,7 @@ $RECYCLE.BIN/
 *.code-workspace
 .agent
 
+.codex-prune/
 .idea/
 *.iml
 *.iws

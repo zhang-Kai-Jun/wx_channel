@@ -147,7 +147,7 @@ window.__wx_channels_search_collector = {
             // 使用 WXU.format_feed 格式化数据（与其他页面统一）
             var formatted = WXU.format_feed(feed);
 
-            // 添加视频和直播数据（保留直播数据显示，但暂时不能下载）
+            // 添加视频和直播数据（保留直播数据显示）
             if (formatted && (formatted.type === 'media' || formatted.type === 'live')) {
               this.feeds.push(formatted);
               // 只有视频类型才默认选中
@@ -165,10 +165,7 @@ window.__wx_channels_search_collector = {
 
     // 只在有新数据时才更新UI和打印日志
     if (addedCount > 0) {
-      // 如果通用批量下载UI已打开，更新它（包含所有数据：视频和直播）
-      if (window.__wx_batch_download_manager__ && window.__wx_batch_download_manager__.isVisible) {
-        __update_batch_download_ui__(this.feeds, '搜索结果');
-      }
+
 
       var elapsed = Date.now() - startTime;
 
@@ -208,7 +205,7 @@ window.__wx_channels_search_collector = {
     var tryInject = function () {
       var container = findIconContainer();
       if (!container) return false;
-      if (container.querySelector('#wx-search-download-icon')) return true;
+      if (container.querySelector('#wx-search-results-icon')) return true;
       if (container.querySelector('#wx-search-more-icon')) return true;
 
       // 获取DOM按钮
@@ -241,26 +238,22 @@ window.__wx_channels_search_collector = {
         }
       };
 
-      // 下载按钮
+      // 采集结果按钮
       var iconWrapper = document.createElement('div');
-      iconWrapper.id = 'wx-search-download-icon';
+      iconWrapper.id = 'wx-search-results-icon';
       iconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
       iconWrapper.title = '搜索结果采集';
       iconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>';
 
       iconWrapper.onclick = function () {
-        // 使用通用批量下载组件
-        if (window.__wx_batch_download_manager__ && window.__wx_batch_download_manager__.isVisible) {
-          __close_batch_download_ui__();
-        } else {
-          // 显示批量下载UI（包含所有数据：视频和直播）
-          if (self.feeds.length === 0) {
-            __wx_log({ msg: '⚠️ 暂无搜索结果' });
-            return;
-          }
-
-          __show_batch_download_ui__(self.feeds, '搜索结果');
+        var panel = document.getElementById('wx-channels-search-ui');
+        if (!panel) {
+          self.addSearchUI();
+          panel = document.getElementById('wx-channels-search-ui');
         }
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        self.updateSearchUI();
+        self.renderItemList();
       };
 
       // 获取更多视频按钮
@@ -277,7 +270,7 @@ window.__wx_channels_search_collector = {
       container.insertBefore(iconWrapper, container.firstChild);
       container.insertBefore(moreIconWrapper, container.firstChild);
       container.insertBefore(domIconWrapper, container.firstChild);
-      console.log('[搜索] ✅ 下载图标已注入到工具栏');
+      console.log('[搜索] ✅ 采集图标已注入到工具栏');
       return true;
     };
 
@@ -480,7 +473,6 @@ window.__wx_channels_search_collector = {
       '<span id="search-selected-count" style="font-size:13px;color:#07c160;">已选 0 个</span>' +
       '</div>' +
       '<div style="display:flex;gap:8px;">' +
-      '<button id="search-download-btn" style="flex:1;background:#07c160;color:#fff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;">下载选中</button>' +
       '<button id="search-export-btn" style="flex:1;background:transparent;color:#999;border:1px solid rgba(255,255,255,0.12);padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;">导出数据</button>' +
       '</div>' +
       '</div>';
@@ -496,8 +488,7 @@ window.__wx_channels_search_collector = {
       // 全选
       document.getElementById('search-select-all').addEventListener('change', function () { self.toggleSelectAll(this.checked); });
 
-      // 下载和导出
-      document.getElementById('search-download-btn').addEventListener('click', function () { self.downloadSelected(); });
+      // 导出采集结果
       document.getElementById('search-export-btn').addEventListener('click', function () { self.exportData(); });
     }, 100);
   },
@@ -739,22 +730,7 @@ window.__wx_channels_search_collector = {
     }
   },
 
-  // 下载选中的视频
-  downloadSelected: function () {
-    // 获取选中的动态（视频）
-    var selectedFeeds = this.feeds.filter(function (f) {
-      return this._selectedItems[f.id] === true && f.url;
-    }, this);
 
-    if (selectedFeeds.length === 0) {
-      WXU.toast('没有选中可下载的内容');
-      return;
-    }
-
-    __wx_log({ msg: '🚀 [搜索] 开始下载 ' + selectedFeeds.length + ' 个视频' });
-    // TODO: 实现视频下载逻辑
-    WXU.toast('开始下载 ' + selectedFeeds.length + ' 个视频');
-  },
 
   // 导出数据
   exportData: function () {

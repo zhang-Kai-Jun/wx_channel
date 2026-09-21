@@ -30,15 +30,13 @@ type ExportResult struct {
 // ExportService 处理数据导出操作
 // Requirements: 4.1, 4.2, 4.3, 9.4
 type ExportService struct {
-	browseRepo   *database.BrowseHistoryRepository
-	downloadRepo *database.DownloadRecordRepository
+	browseRepo *database.BrowseHistoryRepository
 }
 
 // NewExportService 创建一个新的 ExportService
 func NewExportService() *ExportService {
 	return &ExportService{
-		browseRepo:   database.NewBrowseHistoryRepository(),
-		downloadRepo: database.NewDownloadRecordRepository(),
+		browseRepo: database.NewBrowseHistoryRepository(),
 	}
 }
 
@@ -87,50 +85,6 @@ func (s *ExportService) ExportBrowseHistory(format ExportFormat, ids []string) (
 	return &ExportResult{
 		Data:        data,
 		Filename:    GenerateTimestampFilename("browse_history", format),
-		ContentType: contentType,
-		RecordCount: len(records),
-		ExportTime:  time.Now(),
-	}, nil
-}
-
-// ExportDownloadRecords 导出下载记录
-// Requirements: 4.2 - 以 JSON 或 CSV 格式导出下载记录
-func (s *ExportService) ExportDownloadRecords(format ExportFormat, ids []string) (*ExportResult, error) {
-	var records []database.DownloadRecord
-	var err error
-
-	// 获取记录 - 所有或按特定 ID
-	// Requirements: 9.4 - 按 ID 选择性导出
-	if len(ids) > 0 {
-		records, err = s.downloadRepo.GetByIDs(ids)
-	} else {
-		records, err = s.downloadRepo.GetAll()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get download records: %w", err)
-	}
-
-	var data []byte
-	var contentType string
-
-	switch format {
-	case ExportFormatJSON:
-		data, err = s.exportDownloadRecordsToJSON(records)
-		contentType = "application/json"
-	case ExportFormatCSV:
-		data, err = s.exportDownloadRecordsToCSV(records)
-		contentType = "text/csv"
-	default:
-		return nil, fmt.Errorf("unsupported export format: %s", format)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &ExportResult{
-		Data:        data,
-		Filename:    GenerateTimestampFilename("download_records", format),
 		ContentType: contentType,
 		RecordCount: len(records),
 		ExportTime:  time.Now(),
@@ -199,69 +153,6 @@ func (s *ExportService) exportBrowseRecordsToCSV(records []database.BrowseRecord
 	return buf.Bytes(), nil
 }
 
-// exportDownloadRecordsToJSON 将下载记录导出为 JSON 格式
-func (s *ExportService) exportDownloadRecordsToJSON(records []database.DownloadRecord) ([]byte, error) {
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal download records to JSON: %w", err)
-	}
-	return data, nil
-}
-
-// exportDownloadRecordsToCSV 将下载记录导出为 CSV 格式
-func (s *ExportService) exportDownloadRecordsToCSV(records []database.DownloadRecord) ([]byte, error) {
-	var buf bytes.Buffer
-	// 写入 UTF-8 BOM 以兼容 Excel
-	buf.Write([]byte{0xEF, 0xBB, 0xBF})
-
-	writer := csv.NewWriter(&buf)
-
-	// 写入表头
-	header := []string{
-		"ID", "VideoID", "Title", "Author", "Duration", "FileSize",
-		"FilePath", "Format", "Resolution", "Status", "DownloadTime",
-		"LikeCount", "CommentCount", "ForwardCount", "FavCount",
-		"ErrorMessage", "CreatedAt", "UpdatedAt",
-	}
-	if err := writer.Write(header); err != nil {
-		return nil, fmt.Errorf("failed to write CSV header: %w", err)
-	}
-
-	// 写入记录
-	for _, record := range records {
-		row := []string{
-			record.ID,
-			record.VideoID,
-			record.Title,
-			record.Author,
-			formatDuration(record.Duration),
-			formatFileSize(record.FileSize),
-			record.FilePath,
-			record.Format,
-			record.Resolution,
-			record.Status,
-			record.DownloadTime.Format(time.RFC3339),
-			fmt.Sprintf("%d", record.LikeCount),
-			fmt.Sprintf("%d", record.CommentCount),
-			fmt.Sprintf("%d", record.ForwardCount),
-			fmt.Sprintf("%d", record.FavCount),
-			record.ErrorMessage,
-			record.CreatedAt.Format(time.RFC3339),
-			record.UpdatedAt.Format(time.RFC3339),
-		}
-		if err := writer.Write(row); err != nil {
-			return nil, fmt.Errorf("failed to write CSV row: %w", err)
-		}
-	}
-
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return nil, fmt.Errorf("failed to flush CSV writer: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
 // formatDuration 将毫秒持续时间格式化为 MM:SS 字符串
 func formatDuration(ms int64) string {
 	seconds := ms / 1000
@@ -290,16 +181,6 @@ func ParseBrowseRecordsFromJSON(data []byte) ([]database.BrowseRecord, error) {
 	var records []database.BrowseRecord
 	if err := json.Unmarshal(data, &records); err != nil {
 		return nil, fmt.Errorf("failed to parse browse records from JSON: %w", err)
-	}
-	return records, nil
-}
-
-// ParseDownloadRecordsFromJSON 从 JSON 数据解析下载记录
-// 用于导入/往返测试
-func ParseDownloadRecordsFromJSON(data []byte) ([]database.DownloadRecord, error) {
-	var records []database.DownloadRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return nil, fmt.Errorf("failed to parse download records from JSON: %w", err)
 	}
 	return records, nil
 }

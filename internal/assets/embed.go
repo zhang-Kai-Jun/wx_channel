@@ -7,20 +7,8 @@ import (
 //go:embed certs/SunnyRoot.cer
 var CertData []byte
 
-//go:embed lib/FileSaver.min.js
-var FileSaverJS []byte
-
-//go:embed lib/jszip.min.js
-var ZipJS []byte
-
 //go:embed inject/core.js
 var CoreJS []byte
-
-//go:embed inject/decrypt.js
-var DecryptJS []byte
-
-//go:embed inject/download.js
-var DownloadJS []byte
 
 //go:embed inject/home.js
 var HomeJS []byte
@@ -33,9 +21,6 @@ var ProfileJS []byte
 
 //go:embed inject/search.js
 var SearchJS []byte
-
-//go:embed inject/batch_download.js
-var BatchDownloadJS []byte
 
 //go:embed inject/lib/mitt.umd.js
 var MittJS []byte

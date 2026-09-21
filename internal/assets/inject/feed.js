@@ -529,6 +529,7 @@ async function __insert_tools_to_feed_toolbar() {
       var trimmedUrl = base + "?" + filteredParams.toString();
       __copy_to_clipboard(trimmedUrl);
     };
+    copyLinkIconWrapper.style.display = 'none';
 
     // 复制到剪贴板函数
     function __copy_to_clipboard(text) {

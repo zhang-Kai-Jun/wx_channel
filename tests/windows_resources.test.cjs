@@ -36,7 +36,7 @@ test('Windows resources use the single project version and product metadata', {
   assert.notDeepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
   const resource = JSON.parse(bytes.toString('utf8'));
   const info = resource.RT_VERSION['#1']['0000'].info['0409'];
-  assert.equal(info.FileDescription, '万相Link 视频号服务应用');
+  assert.equal(info.FileDescription, '视频号');
   assert.equal(info.ProductName, '视频号');
   assert.equal(info.FileVersion, version);
   assert.equal(info.ProductVersion, version);
@@ -98,12 +98,12 @@ test('Batch resource preparation includes the generated object without packaging
   assert.doesNotMatch(batch, /^\s*go build\b/m, 'The resource smoke test must not package the application');
   fs.writeFileSync(path.join(dir, 'build.bat'),
     (batch + '\nexit /b 0\n:fail\nexit /b 1\n').replace(/\r?\n/g, '\r\n'));
-  for (const args of [[], ['--plain']]) {
+  for (const args of [[], ['--obfuscate']]) {
     const result = spawnSync('cmd.exe', ['/d', '/c', 'build.bat', ...args], {
       cwd: dir, encoding: 'utf8', timeout: 120000,
     });
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, args.length ? /Protection: OFF/ : /Protection: Garble v0\.14\.2/);
+    assert.match(result.stdout, args.includes('--obfuscate') ? /Protection: Garble v0\.14\.2/ : /Protection: OFF/);
     assert.match(result.stdout, /Generating Windows resources/);
     assert.equal(fs.existsSync(path.join(dir, 'video_channel.exe')), false);
   }

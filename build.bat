@@ -9,8 +9,9 @@ REM     2. Go ldflags           (runtime: video_channel.exe version)
 REM  You only need to change the `var Current` line in version.go.
 REM
 REM  Usage:
-REM    build.bat                          Obfuscated build (uses version.go Current)
-REM    build.bat --plain                  Plain build for troubleshooting
+REM    build.bat                          Plain build (uses version.go Current)
+REM    build.bat --obfuscate              Obfuscated build (uses Garble)
+REM    build.bat --plain                  Plain build
 REM    build.bat --upload                 Build and upload zip to remote bucket
 REM ============================================================
 
@@ -20,7 +21,7 @@ chcp 65001 >nul
 REM ---------- Default arguments ----------
 set "VERSION="
 set "DO_UPLOAD=0"
-set "OBFUSCATE=1"
+set "OBFUSCATE=0"
 set "GARBLE_VERSION=v0.14.2"
 set "GARBLE_EXE="
 set "RESOURCE_JSON=%~dp0winres\winres.build.json"
@@ -32,6 +33,8 @@ REM ---------- Parse command line ----------
 :parse_args
 if "%~1"=="" goto parse_done
 if /i "%~1"=="--upload"    ( set "DO_UPLOAD=1"  & shift & goto parse_args )
+if /i "%~1"=="--obfuscate" ( set "OBFUSCATE=1"  & shift & goto parse_args )
+if /i "%~1"=="--garble"    ( set "OBFUSCATE=1"  & shift & goto parse_args )
 if /i "%~1"=="--plain"     ( set "OBFUSCATE=0"  & shift & goto parse_args )
 echo [ERROR] Unsupported argument. Set the version in internal\version\version.go.
 goto fail
@@ -56,7 +59,7 @@ echo   Version: %VERSION%   (source: internal\version\version.go)
 if "%OBFUSCATE%"=="1" (
     echo   Protection: Garble %GARBLE_VERSION%, project packages and literals
 ) else (
-    echo   Protection: OFF ^(--plain troubleshooting build^)
+    echo   Protection: OFF ^(plain build^)
 )
 echo.
 echo   [Sync targets]

@@ -93,7 +93,7 @@ window.__wx_channels_search_collector = {
     xhr.send();
   },
 
-    // 恢复任务（从 listening 状态，等待 start_scroll 指令）
+  // 恢复任务（从 listening 状态，等待 start_scroll 指令）
   _recoverTask: function (task) {
     console.log('[任务采集] 恢复任务:', task.task_id, '| keyword:', task.keyword, '| target:', task.target_count);
 
@@ -122,70 +122,84 @@ window.__wx_channels_search_collector = {
     console.log('[任务采集] 任务已恢复，正在监听视频，等待 start_scroll 指令...');
   },
 
+  // 同步当前 feeds 到 window.__wx_cached_cards 供 RPA/API 客户端消费
+  syncToCachedCards: function () {
+    if (!this.feeds || this.feeds.length === 0) return;
+    var cached = [];
+    this.feeds.forEach(function (f) {
+      if (!f || (f.type !== 'media' && f.type !== 'video')) return;
+
+      var authorData = f.author || f.contact || f.authorInfo || {};
+      var authorNickname = authorData.nickname || authorData.name || f.nickname || '';
+      var authorUsername = authorData.username || authorData.id || f.username || '';
+
+      cached.push({
+        index: cached.length,
+        title: (f.content && f.content.title) || f.title || (f.objectDesc && f.objectDesc.description) || '',
+        videoTitle: (f.content && f.content.title) || f.title || (f.objectDesc && f.objectDesc.description) || '',
+        nickname: authorNickname,
+        username: authorUsername,
+        author_name: authorNickname,
+        feed_id: (f.content && f.content.id) || f.id || '',
+        html: (f.content && f.content.html) ? f.content.html.substring(0, 500) : '',
+        raw: f
+      });
+    });
+    window.__wx_cached_cards = cached;
+    console.log('[搜索] 已同步 ' + cached.length + ' 个视频到 window.__wx_cached_cards');
+  },
+
   // 从API添加搜索结果
   addSearchResult: function (data) {
     if (!data) return;
 
-    // 防抖：如果正在处理或距离上次处理时间太短，则延迟处理
-    var now = Date.now();
-    if (this._processing || (now - this._lastProcessTime) < this._processDelay) {
-      return;
-    }
-
-    this._processing = true;
-    this._lastProcessTime = now;
-
     var startTime = Date.now();
     var initialCount = this.feeds.length;
 
-    // 处理动态（视频）- objectList
-    if (data.feeds && Array.isArray(data.feeds)) {
-      data.feeds.forEach(function (feed) {
-        var feedId = feed.id;
-        if (feed && feedId && !this.feeds.find(function (f) { return f.id === feedId; })) {
-          if (this.feeds.length < this._maxItems) {
-            // 使用 WXU.format_feed 格式化数据（与其他页面统一）
-            var formatted = WXU.format_feed(feed);
+    try {
+      // 处理动态（视频）- 支持 data.feeds, 数组直接传入, 或 data.objectList
+      var rawFeeds = data.feeds || (Array.isArray(data) ? data : (data.objectList || []));
+      if (rawFeeds && Array.isArray(rawFeeds)) {
+        rawFeeds.forEach(function (feed) {
+          var feedId = feed.id;
+          if (feed && feedId && !this.feeds.find(function (f) { return f.id === feedId; })) {
+            if (this.feeds.length < this._maxItems) {
+              // 使用 WXU.format_feed 格式化数据（与其他页面统一）
+              var formatted = WXU.format_feed(feed);
 
-            // 添加视频和直播数据（保留直播数据显示）
-            if (formatted && (formatted.type === 'media' || formatted.type === 'live')) {
-              this.feeds.push(formatted);
-              // 只有视频类型才默认选中
-              if (formatted.type === 'media') {
-                this._selectedItems[feedId] = true;
+              // 添加视频和直播数据（保留直播数据显示）
+              if (formatted && (formatted.type === 'media' || formatted.type === 'live')) {
+                this.feeds.push(formatted);
+                // 只有视频类型才默认选中
+                if (formatted.type === 'media') {
+                  this._selectedItems[feedId] = true;
+                }
               }
             }
           }
-        }
-      }, this);
-    }
-
-    var newCount = this.feeds.length;
-    var addedCount = newCount - initialCount;
-
-    // 只在有新数据时才更新UI和打印日志
-    if (addedCount > 0) {
-
-
-      var elapsed = Date.now() - startTime;
-
-      // 统计视频和直播数量
-      var videoCount = this.feeds.filter(function (f) { return f.type === 'media'; }).length;
-      var liveCount = this.feeds.filter(function (f) { return f.type === 'live'; }).length;
-
-      // 打印出视频数据
-      // __wx_log({ msg: '视频数据: ' + JSON.stringify(this.feeds[0]) });
-      console.log('[搜索] 新增 ' + addedCount + ' 条数据，总计: ' + videoCount + ' 个视频' + (liveCount > 0 ? ', ' + liveCount + ' 个直播' : '') + ' (耗时: ' + elapsed + 'ms)');
-
-      // 只在整十数时打印到后台日志
-      if (newCount % 50 === 0) {
-        var msg = '📊 [搜索] 已采集- ' + videoCount + ' 个视频';
-        if (liveCount > 0) msg += ', ' + liveCount + ' 个直播';
-        __wx_log({ msg: msg });
+        }, this);
       }
-    }
 
-    this._processing = false;
+      var newCount = this.feeds.length;
+      var addedCount = newCount - initialCount;
+
+      // 只在有新数据时才更新UI和打印日志
+      if (addedCount > 0) {
+        var elapsed = Date.now() - startTime;
+        var videoCount = this.feeds.filter(function (f) { return f.type === 'media'; }).length;
+        var liveCount = this.feeds.filter(function (f) { return f.type === 'live'; }).length;
+
+        console.log('[搜索] 新增 ' + addedCount + ' 条数据，总计: ' + videoCount + ' 个视频' + (liveCount > 0 ? ', ' + liveCount + ' 个直播' : '') + ' (耗时: ' + elapsed + 'ms)');
+        if (typeof __wx_log === 'function') {
+          __wx_log({ msg: '📊 [搜索] 成功解析视频: +' + addedCount + '，当前总计: ' + videoCount + ' 个视频' });
+        }
+
+        // 关键：实时将视频数据同步到 window.__wx_cached_cards，供 fetch_search_video_cards 直接消费
+        this.syncToCachedCards();
+      }
+    } catch (err) {
+      console.error('[搜索] addSearchResult 解析异常:', err);
+    }
   },
 
   // 在工具栏注入图标
@@ -818,14 +832,16 @@ window.__wx_channels_search_task_collector = {
     this._waitingForPageLoad = false;
     this._expectedKeyword = null;
 
-    // 【修复】清理 collector 中的旧数据，防止关键词切换时数据污染
-    // 关键词切换时 collector 可能残留上一个关键词的数据，导致新任务一开始就采集到旧数据
-    if (window.__wx_channels_search_collector && window.__wx_channels_search_collector.feeds) {
+    // 仅在关键词真正变动时才清理旧数据，防止抹杀当前页面已加载的首批视频
+    var keywordChanged = this._lastActiveKeyword && this._lastActiveKeyword !== taskData.keyword;
+    this._lastActiveKeyword = taskData.keyword;
+    if (keywordChanged && window.__wx_channels_search_collector && window.__wx_channels_search_collector.feeds) {
       var oldLen = window.__wx_channels_search_collector.feeds.length;
       window.__wx_channels_search_collector.feeds = [];
+      window.__wx_cached_cards = null;
       if (oldLen > 0) {
-        console.log('[任务采集] 已清理 collector 中的 ' + oldLen + ' 条旧数据');
-        this.sendLog('info', '已清理 collector 中的 ' + oldLen + ' 条旧数据');
+        console.log('[任务采集] 关键词变动，已清理 collector 中的 ' + oldLen + ' 条旧数据');
+        this.sendLog('info', '关键词变动，已清理 collector 中的 ' + oldLen + ' 条旧数据');
       }
     }
     this._isWatching = true;
@@ -1470,9 +1486,6 @@ if (!window.__wx_search_event_registered) {
       return;
     }
 
-    console.log('[搜索] ★★★ onSearchResultLoaded, feeds:', (data.feeds || data.objectList || []).length);
-    console.log('[搜索] ★★★ 原始数据 keys:', Object.keys(data));
-
     // 添加到常规采集器
     window.__wx_channels_search_collector.addSearchResult(data);
 
@@ -1484,8 +1497,6 @@ if (!window.__wx_search_event_registered) {
         var formatted = WXU.format_feed(feed);
         if (formatted && formatted.type === 'media') {
           taskCollector._handleNewVideo(formatted);
-        } else {
-          console.log('[搜索] format_feed跳过: id=', feed.id, '| mediaType=', feed.objectDesc ? feed.objectDesc.mediaType : '无');
         }
       });
     }
@@ -1535,7 +1546,7 @@ function checkWaitingTask() {
 
   // 检查 URL 是否包含期望的关键词
   if (currentUrl.includes('q=' + encodeURIComponent(expectedKeyword)) ||
-      currentUrl.includes('q=' + expectedKeyword)) {
+    currentUrl.includes('q=' + expectedKeyword)) {
     console.log('[任务采集] ★★★ 页面已加载到目标关键词，重新初始化任务...');
     taskCollector.sendLog('info', '页面已加载到目标关键词:' + expectedKeyword + '，重新初始化');
 
@@ -1575,7 +1586,7 @@ function checkWaitingTask() {
 
 // 监听 URL 变化（用于检测 SPA 页面跳转）
 var lastUrl = window.location.href;
-setInterval(function() {
+setInterval(function () {
   if (window.location.href !== lastUrl) {
     lastUrl = window.location.href;
     console.log('[任务采集] URL 变化检测:', window.location.href);

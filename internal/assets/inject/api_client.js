@@ -1680,6 +1680,11 @@ window.__wx_api_client = {
         var scrollContainer = document.querySelector('.search-result-page');
         if (!scrollContainer) {
           console.error('[API客户端] 未找到搜索页滚动容器 .search-result-page');
+          // 即使未找到滚动容器，也尝试同步已有 collector 缓存
+          var collector = window.__wx_channels_search_collector;
+          if (collector && typeof collector.syncToCachedCards === 'function') {
+            collector.syncToCachedCards();
+          }
           return { success: false, message: '未找到搜索页滚动容器' };
         }
 
@@ -1694,7 +1699,7 @@ window.__wx_api_client = {
           var collector = window.__wx_channels_search_collector;
           if (collector && collector.feeds) {
             // 只计算 media 类型
-            return collector.feeds.filter(function(f) { return f && f.type === 'media'; }).length;
+            return collector.feeds.filter(function(f) { return f && (f.type === 'media' || f.type === 'video'); }).length;
           }
           return 0;
         };
@@ -1771,28 +1776,30 @@ window.__wx_api_client = {
 
         // ★★★ 滚动结束后，将 collector 中的完整数据缓存，供 fetch_search_video_cards 直接消费
         var collector = window.__wx_channels_search_collector;
-        if (collector && collector.feeds && collector.feeds.length > 0) {
+        if (collector && typeof collector.syncToCachedCards === 'function') {
+          collector.syncToCachedCards();
+        } else if (collector && collector.feeds && collector.feeds.length > 0) {
           var cached = [];
-
           collector.feeds.forEach(function(f) {
-            if (!f || f.type !== 'media') return;
+            if (!f || (f.type !== 'media' && f.type !== 'video')) return;
 
             // 提取作者信息
             var authorNickname = '';
             var authorUsername = '';
             var authorData = f.author || f.contact || f.authorInfo || {};
-            authorNickname = authorData.nickname || authorData.name || '';
-            authorUsername = authorData.username || authorData.id || '';
+            authorNickname = authorData.nickname || authorData.name || f.nickname || '';
+            authorUsername = authorData.username || authorData.id || f.username || '';
 
             cached.push({
               index: cached.length,
-              title: (f.content && f.content.title) || f.title || '',
-              videoTitle: (f.content && f.content.title) || f.title || '',
+              title: (f.content && f.content.title) || f.title || (f.objectDesc && f.objectDesc.description) || '',
+              videoTitle: (f.content && f.content.title) || f.title || (f.objectDesc && f.objectDesc.description) || '',
               nickname: authorNickname,
               username: authorUsername,
               author_name: authorNickname,
               feed_id: (f.content && f.content.id) || f.id || '',
-              html: (f.content && f.content.html) ? f.content.html.substring(0, 500) : ''
+              html: (f.content && f.content.html) ? f.content.html.substring(0, 500) : '',
+              raw: f
             });
           });
           window.__wx_cached_cards = cached;
@@ -1806,7 +1813,7 @@ window.__wx_api_client = {
       if (action === 'fetch_search_video_cards') {
         console.log('[API客户端] fetch_search_video_cards 开始执行');
 
-        // 使用 scroll 阶段缓存的数据
+        // 1. 优先使用已缓存的数据
         if (window.__wx_cached_cards && window.__wx_cached_cards.length > 0) {
           console.log('[API客户端] 使用 scroll 缓存: ' + window.__wx_cached_cards.length + ' 个视频');
           return {
@@ -1817,8 +1824,44 @@ window.__wx_api_client = {
           };
         }
 
-        // 无缓存时返回空（说明没有执行过滚动或滚动失败）
-        console.log('[API客户端] 无缓存数据，请先执行 scroll_search_to_bottom');
+        // 2. 尝试从 search_collector 中直接提取并同步
+        var collector = window.__wx_channels_search_collector;
+        if (collector && typeof collector.syncToCachedCards === 'function') {
+          collector.syncToCachedCards();
+        } else if (collector && collector.feeds && collector.feeds.length > 0) {
+          var fallbackCached = [];
+          collector.feeds.forEach(function(f) {
+            if (!f || (f.type !== 'media' && f.type !== 'video')) return;
+            var authorData = f.author || f.contact || f.authorInfo || {};
+            var authorNickname = authorData.nickname || authorData.name || f.nickname || '';
+            var authorUsername = authorData.username || authorData.id || f.username || '';
+            fallbackCached.push({
+              index: fallbackCached.length,
+              title: (f.content && f.content.title) || f.title || (f.objectDesc && f.objectDesc.description) || '',
+              videoTitle: (f.content && f.content.title) || f.title || (f.objectDesc && f.objectDesc.description) || '',
+              nickname: authorNickname,
+              username: authorUsername,
+              author_name: authorNickname,
+              feed_id: (f.content && f.content.id) || f.id || '',
+              html: (f.content && f.content.html) ? f.content.html.substring(0, 500) : '',
+              raw: f
+            });
+          });
+          window.__wx_cached_cards = fallbackCached;
+        }
+
+        if (window.__wx_cached_cards && window.__wx_cached_cards.length > 0) {
+          console.log('[API客户端] 成功从 search_collector 提取并同步到缓存: ' + window.__wx_cached_cards.length + ' 个视频');
+          return {
+            success: true,
+            videos: window.__wx_cached_cards,
+            count: window.__wx_cached_cards.length,
+            message: '从采集器提取，找到 ' + window.__wx_cached_cards.length + ' 个视频'
+          };
+        }
+
+        // 3. 无缓存且无数据
+        console.log('[API客户端] 无缓存数据且未采集到视频，请先执行 scroll_search_to_bottom');
         return {
           success: false,
           videos: [],

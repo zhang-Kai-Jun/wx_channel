@@ -419,15 +419,6 @@ func (h *APIHandler) HandleTip(Conn *SunnyNet.HttpConn) bool {
 		return false
 	}
 
-	if Conn.Request.Method == http.MethodOptions {
-		headers := http.Header{}
-		headers.Set("Access-Control-Allow-Origin", "*")
-		headers.Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-		headers.Set("Access-Control-Allow-Headers", "Content-Type, X-Local-Auth")
-		Conn.StopRequest(204, "", headers)
-		return true
-	}
-
 	if h.getConfig() != nil && h.getConfig().SecretToken != "" {
 		if Conn.Request.Header.Get("X-Local-Auth") != h.getConfig().SecretToken {
 			headers := http.Header{}

@@ -426,23 +426,30 @@ func (h *ScriptHandler) handleVirtualSvgIcons(path string, content string) (stri
 
 	// 拦截搜索API - finderPCSearch（PC端搜索）
 	// 函数格式: async finderPCSearch(n){...return(...),t}async
-	searchPCRegex := regexp.MustCompile(`(?s)(async\s+finderPCSearch\s*\([^)]+\)\s*\{.*?)(,[a-zA-Z0-9_$]+\}async)`)
+	// 在最后的 return 之前插入代码，然后保持 ,t}async 不变
+	searchPCRegex := regexp.MustCompile(`(async finderPCSearch\([^)]+\)\{.*?)(,t\}async)`)
+
 	if searchPCRegex.MatchString(content) {
-		utils.LogInfo("[API拦截] ✅ 在virtual_svg-icons-register中成功拦截 finderPCSearch 函数")
-		searchPCReplace := `$1,t&&t.data&&(function(){try{var lives=t.data.liveObjectList||[];var accounts=[];var liveCount=0;var accountSrc=t.data.acctList||t.data.infoList||[];accountSrc.forEach(function(info){if(info.liveStatus===1){liveCount++;}if(info.liveStatus===1&&info.liveInfo){lives.push({id:info.contact.username,objectId:info.contact.username,nickname:info.contact.nickname,username:info.contact.username,description:info.liveInfo.description||"",streamUrl:info.liveInfo.streamUrl,coverUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",thumbUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",liveInfo:info.liveInfo,type:"live"});}accounts.push(info);});var rawFeeds=t.data.objectList||t.data.object||t.data.feeds||t.data.feedList||[];if((!rawFeeds||rawFeeds.length===0)&&Array.isArray(t.data.multiFeedStream)&&t.data.multiFeedStream.length>0){t.data.multiFeedStream.forEach(function(stream){if(stream&&Array.isArray(stream.objectList)){rawFeeds=rawFeeds.concat(stream.objectList);}});}var searchData={feeds:rawFeeds,accounts:accounts,lives:lives,raw:t.data};WXU.emit("SearchResultLoaded",searchData);}catch(err){console.error("[搜索API-PC] 拦截异常:",err);}})()$2`
+		utils.LogFileInfo("[API拦截] ✅ 在virtual_svg-icons-register中成功拦截 finderPCSearch 函数")
+		// 在 ,t 之前插入代码，保持 ,t}async 完整
+		// 从 acctList 中提取正在直播的账号，添加调试日志
+		searchPCReplace := `$1,t&&t.data&&(function(){var lives=t.data.liveObjectList||[];var accounts=[];var liveCount=0;if(t.data.acctList){t.data.acctList.forEach(function(info){if(info.liveStatus===1){liveCount++;console.log("[搜索API] 发现直播账号:",info.contact?info.contact.nickname:"未知",info.liveStatus,info.liveInfo);}if(info.liveStatus===1&&info.liveInfo){lives.push({id:info.contact.username,objectId:info.contact.username,nickname:info.contact.nickname,username:info.contact.username,description:info.liveInfo.description||"",streamUrl:info.liveInfo.streamUrl,coverUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",thumbUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",liveInfo:info.liveInfo,type:"live"});}accounts.push(info);});}if(liveCount>0){console.log("[搜索API] 共发现",liveCount,"个直播账号，成功提取",lives.length,"个");}var searchData={feeds:t.data.objectList||[],accounts:accounts,lives:lives};WXU.emit("SearchResultLoaded",searchData);})()$2`
 		content = searchPCRegex.ReplaceAllString(content, searchPCReplace)
 	} else {
-		utils.LogInfo("[API拦截] ❌ 在virtual_svg-icons-register中未找到 finderPCSearch 函数")
+		utils.LogFileInfo("[API拦截] ❌ 在virtual_svg-icons-register中未找到 finderPCSearch 函数")
 	}
 
 	// 拦截搜索API - finderSearch（移动端搜索）
-	searchRegex := regexp.MustCompile(`(?s)(async\s+finderSearch\s*\([^)]+\)\s*\{.*?)(,[a-zA-Z0-9_$]+\}async)`)
+	// 使用非贪婪匹配，匹配到最后的 ,t}async 模式
+	searchRegex := regexp.MustCompile(`(async finderSearch\([^)]+\)\{.*?)(,t\}async)`)
+
 	if searchRegex.MatchString(content) {
-		utils.LogInfo("[API拦截] ✅ 在virtual_svg-icons-register中成功拦截 finderSearch 函数")
-		searchReplace := `$1,t&&t.data&&(function(){try{var lives=[];var accounts=[];var liveCount=0;var accountSrc=t.data.acctList||t.data.infoList||[];accountSrc.forEach(function(info){if(info.liveStatus===1){liveCount++;}if(info.liveStatus===1&&info.liveInfo){lives.push({id:info.contact.username,objectId:info.contact.username,nickname:info.contact.nickname,username:info.contact.username,description:info.liveInfo.description||"",streamUrl:info.liveInfo.streamUrl,coverUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",thumbUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",liveInfo:info.liveInfo,type:"live"});}accounts.push(info);});var rawFeeds=t.data.objectList||t.data.object||t.data.feeds||t.data.feedList||[];if((!rawFeeds||rawFeeds.length===0)&&Array.isArray(t.data.multiFeedStream)&&t.data.multiFeedStream.length>0){t.data.multiFeedStream.forEach(function(stream){if(stream&&Array.isArray(stream.objectList)){rawFeeds=rawFeeds.concat(stream.objectList);}});}var searchData={feeds:rawFeeds,accounts:accounts,lives:lives,raw:t.data};WXU.emit("SearchResultLoaded",searchData);}catch(err){console.error("[搜索API-Mobile] 拦截异常:",err);}})()$2`
+		utils.LogFileInfo("[API拦截] ✅ 在virtual_svg-icons-register中成功拦截 finderSearch 函数")
+		// 从 infoList 中提取正在直播的账号，添加调试日志
+		searchReplace := `$1,t&&t.data&&(function(){var lives=[];var accounts=[];var liveCount=0;if(t.data.infoList){t.data.infoList.forEach(function(info){if(info.liveStatus===1){liveCount++;console.log("[搜索API] 发现直播账号:",info.contact?info.contact.nickname:"未知",info.liveStatus,info.liveInfo);}if(info.liveStatus===1&&info.liveInfo){lives.push({id:info.contact.username,objectId:info.contact.username,nickname:info.contact.nickname,username:info.contact.username,description:info.liveInfo.description||"",streamUrl:info.liveInfo.streamUrl,coverUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",thumbUrl:info.liveInfo.media&&info.liveInfo.media[0]?info.liveInfo.media[0].thumbUrl:"",liveInfo:info.liveInfo,type:"live"});}accounts.push(info);});}if(liveCount>0){console.log("[搜索API] 共发现",liveCount,"个直播账号，成功提取",lives.length,"个");}var searchData={feeds:t.data.objectList||[],accounts:accounts,lives:lives};WXU.emit("SearchResultLoaded",searchData);})()$2`
 		content = searchRegex.ReplaceAllString(content, searchReplace)
 	} else {
-		utils.LogInfo("[API拦截] ❌ 在virtual_svg-icons-register中未找到 finderSearch 函数")
+		utils.LogFileInfo("[API拦截] ❌ 在virtual_svg-icons-register中未找到 finderSearch 函数")
 	}
 
 	// 拦截 export 语句，提取所有导出的 API 函数

@@ -70,7 +70,7 @@ func NewApp(cfgParam *config.Config) *App {
 	app := &App{
 		Sunny:   SunnyNet.NewSunny(),
 		Cfg:     cfgParam,
-		Version: fmt.Sprintf("?t=%s_%d", cfgParam.Version, time.Now().Unix()),
+		Version: "?t=" + cfgParam.Version,
 		Port:    cfgParam.Port,
 	}
 

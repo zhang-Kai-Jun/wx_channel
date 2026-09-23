@@ -9,7 +9,8 @@ REM     2. Go ldflags           (runtime: video_channel.exe version)
 REM  You only need to change the `var Current` line in version.go.
 REM
 REM  Usage:
-REM    build.bat                          Plain build (uses version.go Current)
+REM    build.bat                          Plain build & upload to remote bucket
+REM    build.bat --no-upload              Build only without uploading
 REM    build.bat --obfuscate              Obfuscated build (uses Garble)
 REM    build.bat --plain                  Plain build
 REM    build.bat --upload                 Build and upload zip to remote bucket
@@ -20,7 +21,7 @@ chcp 65001 >nul
 
 REM ---------- Default arguments ----------
 set "VERSION="
-set "DO_UPLOAD=0"
+set "DO_UPLOAD=1"
 set "OBFUSCATE=0"
 set "GARBLE_VERSION=v0.14.2"
 set "GARBLE_EXE="
@@ -33,6 +34,7 @@ REM ---------- Parse command line ----------
 :parse_args
 if "%~1"=="" goto parse_done
 if /i "%~1"=="--upload"    ( set "DO_UPLOAD=1"  & shift & goto parse_args )
+if /i "%~1"=="--no-upload" ( set "DO_UPLOAD=0"  & shift & goto parse_args )
 if /i "%~1"=="--obfuscate" ( set "OBFUSCATE=1"  & shift & goto parse_args )
 if /i "%~1"=="--garble"    ( set "OBFUSCATE=1"  & shift & goto parse_args )
 if /i "%~1"=="--plain"     ( set "OBFUSCATE=0"  & shift & goto parse_args )

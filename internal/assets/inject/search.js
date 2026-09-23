@@ -93,7 +93,7 @@ window.__wx_channels_search_collector = {
     xhr.send();
   },
 
-  // 恢复任务（从 listening 状态，等待 start_scroll 指令）
+    // 恢复任务（从 listening 状态，等待 start_scroll 指令）
   _recoverTask: function (task) {
     console.log('[任务采集] 恢复任务:', task.task_id, '| keyword:', task.keyword, '| target:', task.target_count);
 
@@ -161,11 +161,27 @@ window.__wx_channels_search_collector = {
       var rawFeeds = data.feeds || (Array.isArray(data) ? data : (data.objectList || []));
       if (rawFeeds && Array.isArray(rawFeeds)) {
         rawFeeds.forEach(function (feed) {
-          var feedId = feed.id;
-          if (feed && feedId && !this.feeds.find(function (f) { return f.id === feedId; })) {
+          var feedId = feed.id || feed.objectId || feed.object_id;
+          if (feed && feedId && !this.feeds.find(function (f) { return (f.id === feedId || f.objectId === feedId); })) {
             if (this.feeds.length < this._maxItems) {
               // 使用 WXU.format_feed 格式化数据（与其他页面统一）
               var formatted = WXU.format_feed(feed);
+
+              // 如果 format_feed 未能识别，但存在视频描述或媒体，兜底组装格式
+              if (!formatted && (feed.objectDesc || feed.media || feed.url)) {
+                var desc = feed.objectDesc || {};
+                var firstMedia = (desc.media && desc.media[0]) || feed.media || {};
+                formatted = {
+                  ...feed,
+                  type: 'media',
+                  id: feedId,
+                  title: desc.description || feed.title || '',
+                  nickname: (feed.contact && feed.contact.nickname) || feed.nickname || '',
+                  coverUrl: firstMedia.thumbUrl || firstMedia.coverUrl || feed.coverUrl || '',
+                  thumbUrl: firstMedia.thumbUrl || firstMedia.coverUrl || feed.thumbUrl || '',
+                  url: firstMedia.url || feed.url || ''
+                };
+              }
 
               // 添加视频和直播数据（保留直播数据显示）
               if (formatted && (formatted.type === 'media' || formatted.type === 'live')) {
@@ -308,7 +324,10 @@ window.__wx_channels_search_collector = {
     }
 
     // 找到搜索结果页面的滚动容器
-    var scrollContainer = document.querySelector('[data-v-3932dd4a].search-result-page');
+    var scrollContainer = document.querySelector('.search-result-page') ||
+                          document.querySelector('[data-v-3932dd4a].search-result-page') ||
+                          document.querySelector('.search-content') ||
+                          document.querySelector('.page-content');
     if (!scrollContainer) {
       console.error('[搜索] 未找到滚动容器 .search-result-page');
       __wx_log({ msg: '❌ 未找到滚动容器' });
@@ -334,13 +353,13 @@ window.__wx_channels_search_collector = {
         return;
       }
 
-      // 检查 infinite-scroll-disabled 属性（Vue infinite-scroll 组件设置）
+      // 检查 infinite-scroll-disabled 属性（仅在已经执行过至少一次滚动后才检查，防止首屏初始状态误判退出）
       var disabled = scrollContainer.getAttribute('infinite-scroll-disabled');
       var loadingNode = scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]');
       console.log('[搜索] scroll #' + (self._scrollCount + 1) + ' | disabled: ' + disabled + ' | loading节点: ' + (loadingNode ? '存在' : '不存在'));
 
-      // disabled=true 且没有 loading 节点 → 已无更多
-      if (disabled === 'true' && !loadingNode) {
+      // 只有在至少滚动过一次后，且 disabled=true 且没有 loading 节点 → 已无更多
+      if (self._scrollCount > 0 && disabled === 'true' && !loadingNode) {
         console.log('[搜索] disabled=true 且无loading节点，已无更多数据');
         self._scrollLoading = false;
         self._noMoreData = true;
@@ -365,12 +384,18 @@ window.__wx_channels_search_collector = {
       // 执行滚动：超过容器高度触发 infinite-scroll
       var scrollHeight = scrollContainer.scrollHeight;
       scrollContainer.scrollTop = scrollHeight + 600;
+      try {
+        scrollContainer.dispatchEvent(new Event('scroll', { bubbles: true }));
+        window.dispatchEvent(new Event('scroll'));
+      } catch (e) {}
       console.log('[搜索] 滚动后，scrollHeight: ' + scrollHeight + '，当前: ' + beforeCount + ' 个');
 
       // 轮询等待 loading 节点消失（即本轮数据加载完毕）
       var pollInterval;
       var pollCount = 0;
       var maxPoll = 15; // 最多等待 15 * 1000 = 15秒
+      var retryCount = 0;
+      var maxRetries = 3;
 
       var checkLoaded = function () {
         pollCount++;
@@ -400,13 +425,23 @@ window.__wx_channels_search_collector = {
           // 有新增，继续滚动
           console.log('[搜索] 新增 ' + newFeeds + ' 个，继续滚动...');
           setTimeout(scrollOnce, 500);
+        } else if (retryCount < maxRetries) {
+          // 暂无新增，尝试再次滚动派发事件重试
+          retryCount++;
+          console.log('[搜索] 本轮暂无新增数据，重试滚动 #' + retryCount);
+          scrollContainer.scrollTop = scrollContainer.scrollHeight + 600;
+          try {
+            scrollContainer.dispatchEvent(new Event('scroll', { bubbles: true }));
+            window.dispatchEvent(new Event('scroll'));
+          } catch (e) {}
+          setTimeout(checkLoaded, 1500);
         } else {
-          // 没有新增，等 3 秒再确认一次（避免异步数据延迟）
-          console.log('[搜索] 无新增，等待 3 秒确认...');
+          // 重试完成仍无新增，等 3 秒最终确认
+          console.log('[搜索] 重试完成仍无新增，等待 3 秒最终确认...');
           setTimeout(function () {
             var confirmedCount = self.feeds.length;
             var confirmedNew = confirmedCount - beforeCount;
-            console.log('[搜索] 确认: 新增 ' + confirmedNew + ' 个，总计: ' + confirmedCount);
+            console.log('[搜索] 最终确认: 新增 ' + confirmedNew + ' 个，总计: ' + confirmedCount);
 
             if (confirmedNew > 0) {
               // 确认有新数据，继续
@@ -1108,7 +1143,7 @@ window.__wx_channels_search_task_collector = {
     if (scrollContainer) {
       var disabled = scrollContainer.getAttribute('infinite-scroll-disabled');
       console.log('[任务采集] 滚动前检查: infinite-scroll-disabled=' + disabled);
-      var alreadyNoMore = (disabled === 'true' && !scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]'));
+      var alreadyNoMore = (this._scrollCount > 0 && disabled === 'true' && !scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]'));
       if (alreadyNoMore) {
         console.log('[任务采集] 已标记无更多数据（infinite-scroll-disabled=true），停止');
         this._isScrolling = false;
@@ -1546,7 +1581,7 @@ function checkWaitingTask() {
 
   // 检查 URL 是否包含期望的关键词
   if (currentUrl.includes('q=' + encodeURIComponent(expectedKeyword)) ||
-    currentUrl.includes('q=' + expectedKeyword)) {
+      currentUrl.includes('q=' + expectedKeyword)) {
     console.log('[任务采集] ★★★ 页面已加载到目标关键词，重新初始化任务...');
     taskCollector.sendLog('info', '页面已加载到目标关键词:' + expectedKeyword + '，重新初始化');
 
@@ -1586,7 +1621,7 @@ function checkWaitingTask() {
 
 // 监听 URL 变化（用于检测 SPA 页面跳转）
 var lastUrl = window.location.href;
-setInterval(function () {
+setInterval(function() {
   if (window.location.href !== lastUrl) {
     lastUrl = window.location.href;
     console.log('[任务采集] URL 变化检测:', window.location.href);

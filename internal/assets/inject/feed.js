@@ -483,6 +483,7 @@ async function __insert_tools_to_feed_toolbar() {
       '采集评论',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.85 18.825L3 20.1l1.275-3.85A7.95 7.95 0 0 1 4 14.15c0-4.28 3.57-7.75 8-7.75s8 3.47 8 7.75-3.57 7.75-8 7.75c-.73 0-1.44-.1-2.1-.3a8.23 8.23 0 0 1-3.05-1.775Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
     );
+    commentIconWrapper.style.display = 'none';
 
     commentIconWrapper.onclick = function () {
       __start_feed_comment_collection_with_open_panel();
@@ -528,6 +529,7 @@ async function __insert_tools_to_feed_toolbar() {
       var trimmedUrl = base + "?" + filteredParams.toString();
       __copy_to_clipboard(trimmedUrl);
     };
+    copyLinkIconWrapper.style.display = 'none';
 
     // 复制到剪贴板函数
     function __copy_to_clipboard(text) {
@@ -567,6 +569,8 @@ async function __insert_tools_to_feed_toolbar() {
       '获取DOM',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>'
     );
+
+    domIconWrapper.style.display = 'none';
 
     domIconWrapper.onclick = function () {
       try {
@@ -608,6 +612,8 @@ async function __insert_tools_to_feed_toolbar() {
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h6M9 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
     );
 
+    storeSnapshotIconWrapper.style.display = 'none';
+
     storeSnapshotIconWrapper.onclick = function () {
       dumpAllPiniaStores();
     };
@@ -618,6 +624,7 @@ async function __insert_tools_to_feed_toolbar() {
       '评论快照',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h6M9 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="17" cy="17" r="4" fill="currentColor"/></svg>'
     );
+    commentSnapshotIconWrapper.style.display = 'none';
 
     commentSnapshotIconWrapper.onclick = function () {
       var originalWxLog = typeof __wx_log === 'function' ? __wx_log : null;
@@ -655,6 +662,7 @@ async function __insert_tools_to_feed_toolbar() {
       '评论总数',
       '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 20v-8m0 0V4m0 8h8m-8 0H4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     );
+    commentCountIconWrapper.style.display = 'none';
 
     commentCountIconWrapper.onclick = function () {
       var commentCount = 0;

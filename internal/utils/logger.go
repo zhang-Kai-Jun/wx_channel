@@ -198,22 +198,22 @@ func (l *Logger) SetLevel(level LogLevel) {
 
 // Debug 调试日志
 func (l *Logger) Debug(format string, args ...interface{}) {
-	l.zLogger.Debug().Msgf(format, args...)
+	// l.zLogger.Debug().Msgf(format, args...)
 }
 
 // Info 信息日志
 func (l *Logger) Info(format string, args ...interface{}) {
-	l.zLogger.Info().Msgf(format, args...)
+	// l.zLogger.Info().Msgf(format, args...)
 }
 
 // Warn 警告日志
 func (l *Logger) Warn(format string, args ...interface{}) {
-	l.zLogger.Warn().Msgf(format, args...)
+	// l.zLogger.Warn().Msgf(format, args...)
 }
 
 // Error 错误日志
 func (l *Logger) Error(format string, args ...interface{}) {
-	l.zLogger.Error().Msgf(format, args...)
+	// l.zLogger.Error().Msgf(format, args...)
 }
 
 // Close 关闭日志文件
@@ -231,34 +231,34 @@ func (l *Logger) Close() error {
 
 // Info 信息日志
 func Info(format string, args ...interface{}) {
-	GetLogger().Info(format, args...)
+	// GetLogger().Info(format, args...)
 }
 
 // Warn 警告日志
 func Warn(format string, args ...interface{}) {
-	GetLogger().Warn(format, args...)
+	// GetLogger().Warn(format, args...)
 }
 
 // Error 错误日志
 func Error(format string, args ...interface{}) {
-	GetLogger().Error(format, args...)
+	// GetLogger().Error(format, args...)
 }
 
 // LogDebug 全局便捷函数
 func LogDebug(format string, args ...interface{}) {
-	GetLogger().Debug(format, args...)
+	// GetLogger().Debug(format, args...)
 }
 
 func LogInfo(format string, args ...interface{}) {
-	GetLogger().Info(format, args...)
+	// GetLogger().Info(format, args...)
 }
 
 func LogWarn(format string, args ...interface{}) {
-	GetLogger().Warn(format, args...)
+	// GetLogger().Warn(format, args...)
 }
 
 func LogError(format string, args ...interface{}) {
-	GetLogger().Error(format, args...)
+	// GetLogger().Error(format, args...)
 }
 
 // LogComment 记录评论采集操作
@@ -281,119 +281,66 @@ func LogComment(videoID, title string, commentCount int, success bool) {
 
 // LogAPI 记录API调用
 func LogAPI(method, path string, statusCode int, duration time.Duration) {
-	GetLogger().zLogger.Info().
-		Str("type", "API").
-		Str("method", method).
-		Str("path", path).
-		Int("status", statusCode).
-		Dur("duration", duration).
-		Msgf("%s %s %d", method, path, statusCode)
+
 }
 
 // LogSystemStart 记录系统启动
 func LogSystemStart(port int, proxyMode string) {
-	GetLogger().zLogger.Info().
-		Str("type", "系统启动").
-		Int("port", port).
-		Str("proxy_mode", proxyMode).
-		Msg("服务已启动")
+
 }
 
 // LogSystemShutdown 记录系统关闭
 func LogSystemShutdown(reason string) {
-	GetLogger().zLogger.Info().
-		Str("type", "系统关闭").
-		Str("reason", reason).
-		Msg("服务正在关闭")
+
 }
 
 // LogConfigLoad 记录配置加载
 func LogConfigLoad(configPath string, success bool) {
-	status := "成功"
-	if !success {
-		status = "失败"
-	}
-	GetLogger().zLogger.Info().
-		Str("type", "配置加载").
-		Str("path", configPath).
-		Str("status", status).
-		Msgf("加载配置 %s", status)
+	// status := "成功"
+	// if !success {
+	// 	status = "失败"
+	// }
+	// GetLogger().zLogger.Info().
+	// 	Str("type", "配置加载").
+	// 	Str("path", configPath).
+	// 	Str("status", status).
+	// 	Msgf("加载配置 %s", status)
 }
 
 // LogAuthFailed 记录认证失败
 func LogAuthFailed(endpoint, clientIP string) {
-	GetLogger().zLogger.Warn().
-		Str("type", "认证失败").
-		Str("endpoint", endpoint).
-		Str("ip", clientIP).
-		Msg("访问被拒绝")
+
 }
 
 // LogCORSBlocked 记录CORS拦截
 func LogCORSBlocked(origin, endpoint string) {
-	GetLogger().zLogger.Warn().
-		Str("type", "CORS拦截").
-		Str("origin", origin).
-		Str("endpoint", endpoint).
-		Msg("跨域请求被拦截")
+
 }
 
 // LogDiskSpace 记录磁盘空间检查
 func LogDiskSpace(path string, availableGB, totalGB float64) {
-	usagePercent := (totalGB - availableGB) / totalGB * 100
-	event := GetLogger().zLogger.Debug()
-	if usagePercent > 90 {
-		event = GetLogger().zLogger.Warn()
-	}
-	event.Str("type", "磁盘检查").
-		Str("path", path).
-		Float64("available_gb", availableGB).
-		Float64("total_gb", totalGB).
-		Float64("usage_percent", usagePercent).
-		Msgf("磁盘使用率 %.1f%%", usagePercent)
+
 }
 
 // LogConcurrency 记录并发状态
 func LogConcurrency(operation string, active, max int) {
-	GetLogger().zLogger.Debug().
-		Str("type", "并发控制").
-		Str("operation", operation).
-		Int("active", active).
-		Int("max", max).
-		Msg("并发状态更新")
+
 }
 
 // LogRetry 记录重试操作
 func LogRetry(operation string, attempt, maxAttempts int, err error) {
-	GetLogger().zLogger.Warn().
-		Str("type", "重试").
-		Str("operation", operation).
-		Int("attempt", attempt).
-		Int("max_attempts", maxAttempts).
-		Err(err).
-		Msg("操作重试")
+
 }
 
 // LogCleanup 记录清理操作
 func LogCleanup(operation string, itemsRemoved int, success bool) {
-	status := "成功"
-	if !success {
-		status = "失败"
-	}
-	GetLogger().zLogger.Info().
-		Str("type", "清理").
-		Str("operation", operation).
-		Int("removed", itemsRemoved).
-		Str("status", status).
-		Msgf("清理完成 %s", status)
+
 }
 
 // FileInfo 仅记录到文件的信息日志
 func (l *Logger) FileInfo(format string, args ...interface{}) {
-	l.fileLogger.Info().Msgf(format, args...)
 }
 
 // LogFileInfo 仅记录到文件的信息日志(全局)
 func LogFileInfo(format string, args ...interface{}) {
-	GetLogger().FileInfo(format, args...)
 }

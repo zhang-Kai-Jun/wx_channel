@@ -54,7 +54,7 @@ test('missing input can exceed 30 seconds and reports attempt and elapsed diagno
 });
 
 test('an exception after the send click cannot send the comment twice', async () => {
-  const f = setup('<button aria-label="评论，1"></button><textarea class="weui-textarea"></textarea><button aria-label="发送" role="button"></button>');
+  const f = setup('<button aria-label="评论，1"></button><div class="input-box"><textarea class="weui-textarea"></textarea><button aria-label="发送" role="button">发送</button></div>');
   let clicks = 0;
   try {
     const send = f.window.document.querySelector('[aria-label="发送"]');
@@ -71,6 +71,66 @@ test('an exception after the send click cannot send the comment twice', async ()
   } finally { f.close(); }
 });
 
+// 保留用户 DOM 中区分评论入口和发送按钮所需的结构。
+const commentForm = '<div class="click-box op-item" role="button" aria-label="评论"><div class="op-text">评论</div></div>' +
+  '<div class="input-box"><div class="input-area"><textarea class="weui-textarea"></textarea></div>' +
+  '<div class="opr-area"><div class="extra"><div class="weui-btn weui-btn_primary weui-btn_mini">评论</div></div></div></div>';
+
+test('评论流程打开操作栏入口后只点击输入框内的发送按钮', async () => {
+  const f = setup(commentForm);
+  const events = [];
+  try {
+    const doc = f.window.document;
+    const input = doc.querySelector('textarea');
+    doc.querySelector('.op-item').addEventListener('click', () => events.push('open'));
+    doc.querySelector('.weui-btn').addEventListener('click', () => {
+      assert.equal(input.value, 'private-text');
+      events.push('send');
+    });
+    await f.run();
+    assert.deepEqual(events, ['open', 'send']);
+  } finally { f.close(); }
+});
+
+for (const [name, change] of [
+  ['按钮缺失', (btn) => btn.remove()],
+  ['原生禁用', (btn) => { btn.disabled = true; }],
+  ['aria-disabled', (btn) => btn.setAttribute('aria-disabled', 'true')],
+  ['禁用样式', (btn) => btn.classList.add('weui-btn_disabled')],
+  ['无布局尺寸', (btn) => { btn.getClientRects = () => []; }],
+  ['display:none', (btn) => { btn.style.display = 'none'; }],
+  ['visibility:hidden', (btn) => { btn.style.visibility = 'hidden'; }],
+  ['父容器隐藏', (btn) => { btn.parentElement.style.visibility = 'hidden'; }],
+  ['父容器hidden属性', (btn) => { btn.parentElement.hidden = true; }],
+  ['输入容器已移除', (btn) => btn.closest('.input-box').remove()],
+]) {
+  test(`发送按钮${name}时不回退点击操作栏`, async () => {
+    const f = setup(commentForm);
+    try {
+      const doc = f.window.document;
+      change(doc.querySelector('.weui-btn'));
+      let opens = 0;
+      doc.querySelector('.op-item').addEventListener('click', () => opens++);
+      const result = await f.run();
+      assert.equal(result.success, false);
+      assert.equal(opens, 3, '每次重试只打开一次评论入口，不把入口当作发送按钮');
+      assert.ok(!f.stages.some(s => s.includes('"stage":"send_click"')));
+    } finally { f.close(); }
+  });
+}
+
+test('发送按钮绑定当前输入框，不选择排在前面的其他输入框', () => {
+  const f = setup(commentForm);
+  try {
+    const doc = f.window.document;
+    const input = doc.querySelector('textarea');
+    const send = doc.querySelector('.weui-btn');
+    doc.body.prepend(input.closest('.input-box').cloneNode(true));
+    assert.equal(f.window.__wx_parsers__.getSendBtn(input), send);
+    assert.equal(f.window.__wx_parsers__.getSendBtn(null), null);
+  } finally { f.close(); }
+});
+
 const disabledPanel = '<div class="comment-panel"><div class="scroll-ctn"><div class="flex h-16 flex-initial flex-shrink-0 items-center justify-center px-4"><div class="text-center text-sm text-fg-3">作者已关闭评论</div></div></div></div>';
 
 for (const stage of ['already-open', 'after-open', 'input-poll', 'before-send']) {
@@ -83,7 +143,7 @@ for (const stage of ['already-open', 'after-open', 'input-poll', 'before-send'])
         opens++;
         if (stage === 'after-open') doc.body.insertAdjacentHTML('beforeend', disabledPanel);
         if (stage === 'before-send') {
-          doc.body.insertAdjacentHTML('beforeend', '<textarea class="weui-textarea"></textarea><button aria-label="发送" role="button"></button>');
+          doc.body.insertAdjacentHTML('beforeend', '<div class="input-box"><textarea class="weui-textarea"></textarea><button aria-label="发送" role="button">发送</button></div>');
           doc.querySelector('textarea').addEventListener('input', () => doc.body.insertAdjacentHTML('beforeend', disabledPanel), { once: true });
           doc.querySelector('[aria-label="发送"]').click = () => { sends++; };
         }

@@ -892,18 +892,30 @@ window.__wx_api_client = {
             ? (window.__wx_author_cached_cards && window.__wx_author_cached_cards[body.index])
             : (window.__wx_cached_cards && window.__wx_cached_cards[body.index]);
           var videoTitle = cachedCard ? _normalizeText(cachedCard.videoTitle || cachedCard.title) : '';
+          var cardIndex = body.index || 0;
+          var isProfilePage = window.location.pathname.includes('/pages/profile');
+          var profileCards = null;
+          if (isProfilePage) {
+            // 与 get_video_cards 共用过滤规则，索引始终对应非直播视频。
+            profileCards = window.__wx_parsers__.getCardElements();
+            var profileCard = profileCards[cardIndex];
+            if (!profileCard) {
+              this.sendResponseViaHTTP(id, { success: false, message: '未找到可点击的非直播视频' });
+              return;
+            }
+            videoTitle = _normalizeText(window.__wx_parsers__.parseTitle(profileCard.outerHTML));
+          }
           this.sendResponseViaHTTP(id, { success: true, message: '已进入视频页面', videoTitle: videoTitle });
 
           // 延迟执行点击
           var self = this;
           setTimeout(function() {
-            var cardIndex = body.index || 0;
             console.log('[API客户端] enter_video 开始, index:', cardIndex, ', target:', body.target);
 
-            var validCards = [];
+            var validCards = profileCards || [];
 
             // ========== 作者页目标（target=author）：从 .card-grid 中获取卡片 ==========
-            if (isAuthorTarget) {
+            if (!isProfilePage && isAuthorTarget) {
               var cardWrps = document.querySelectorAll('.card-grid .card-wrp');
               console.log('[API客户端] 作者页找到 ' + cardWrps.length + ' 个卡片');
 
@@ -918,7 +930,7 @@ window.__wx_api_client = {
             }
 
             // ========== 搜索页目标：使用现有逻辑 ==========
-            if (!isAuthorTarget || validCards.length === 0) {
+            if (!isProfilePage && (!isAuthorTarget || validCards.length === 0)) {
               // 策略：在"动态"区块内获取卡片
               var dongtaiBlock = null;
               var resBlocks = document.querySelectorAll('.res-block');
@@ -2469,7 +2481,7 @@ window.__wx_api_client = {
           for (var pollJ = 0; pollJ < pollMax; pollJ++) {
             disabledResult = getCommentDisabledResult();
             if (disabledResult) return disabledResult;
-            sendBtn = window.__wx_parsers__.getSendBtn();
+            sendBtn = window.__wx_parsers__.getSendBtn(commentInput);
             if (sendBtn) {
               console.log('[API客户端] 第' + (pollJ + 1) + '次轮询找到发送按钮');
               break;
@@ -3420,36 +3432,28 @@ window.__wx_parsers__ = {
     return document.querySelector('textarea.weui-textarea');
   },
 
-  getSendBtn: function() {
-    // 优先用 aria-label 定位（最可靠）
-    var labeled = document.querySelector('[aria-label="评论"][role="button"], [aria-label="发送"][role="button"], [aria-label="发布"]');
-    if (labeled) return labeled;
+  getSendBtn: function(commentInput) {
+    // 只在本次填写的输入框内查找，避免误点视频操作栏的评论入口。
+    var container = commentInput && commentInput.closest('.input-box');
+    if (!container || !commentInput.isConnected) return null;
 
-    // 方案1：.input-box 容器内查找
-    var container = document.querySelector('.input-box');
-    if (container) {
-      var btns = container.querySelectorAll('.weui-btn, [role="button"]');
-      for (var i = 0; i < btns.length; i++) {
-        var text = btns[i].textContent.trim();
-        if (text === '评论' || text === '发送' || text === '发布') return btns[i];
+    var btns = container.querySelectorAll('.weui-btn, button, [role="button"]');
+    for (var i = 0; i < btns.length; i++) {
+      var btn = btns[i];
+      var text = btn.textContent.trim();
+      if (text !== '评论' && text !== '发送' && text !== '发布') continue;
+      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true' ||
+          btn.classList.contains('weui-btn_disabled') || !btn.getClientRects().length) continue;
+
+      var visible = true;
+      for (var node = btn; node; node = node.parentElement) {
+        var style = window.getComputedStyle(node);
+        if (node.hidden || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+          visible = false;
+          break;
+        }
       }
-    }
-
-    // 方案2：全局查找评论发送按钮
-    var allBtns = document.querySelectorAll('[role="button"], button, a');
-    for (var j = 0; j < allBtns.length; j++) {
-      var t = allBtns[j].textContent.trim();
-      if (t === '评论' || t === '发送' || t === '发布') {
-        var parent = allBtns[j].closest('.input-box, .comment-box, [class*="input"], [class*="send"]');
-        if (parent) return allBtns[j];
-      }
-    }
-
-    // 方案3：直接查找主色调按钮
-    var primaryBtns = document.querySelectorAll('.weui-btn_primary, [class*="primary"][class*="btn"]');
-    for (var k = 0; k < primaryBtns.length; k++) {
-      var pt = primaryBtns[k].textContent.trim();
-      if (pt === '评论' || pt === '发送') return primaryBtns[k];
+      if (visible) return btn;
     }
 
     return null;
@@ -3495,9 +3499,10 @@ window.__wx_parsers__ = {
     }
 
     // 作者页使用 finder-profile-card
-    var els = document.querySelectorAll('div[ml-key="finder-profile-card"]');
+    var selectors = window.__wx_selectors__.card;
+    var els = document.querySelectorAll(selectors.container);
     for (var i = 0; i < els.length; i++) {
-      if (!els[i].querySelector('.living-tag, .live-card')) {
+      if (!els[i].querySelector(selectors.excludeLive)) {
         cards.push(els[i]);
       }
     }

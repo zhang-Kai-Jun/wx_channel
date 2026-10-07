@@ -2332,6 +2332,40 @@ window.__wx_api_client = {
         var commentStarted = Date.now();
         var commentAttemptNumber = 0;
         var commentSubmitted = false;
+        function getCommentRestrictionResult() {
+          // 每次查询实时 DOM；只接受可见弹窗中的指定风控文案。
+          var warning = '操作太频繁，请稍后再试。检测到你的账号多次发布相似评论，恶意灌水可能被禁言处罚。';
+          var candidates = Array.prototype.slice.call(document.querySelectorAll(
+            '.weui-dialog, .weui-desktop-dialog, .dialog__content, [role="dialog"], [role="alertdialog"]'
+          ));
+          // 兼容没有语义属性的弹窗：从“我知道了”控件向上查找完整提示容器。
+          var controls = document.querySelectorAll('button, a, [role="button"], .weui-dialog__btn, .weui-btn');
+          for (var ci = 0; ci < controls.length; ci++) {
+            if (_normalizeText(controls[ci].textContent) !== '我知道了') continue;
+            var parent = controls[ci].parentElement;
+            for (var depth = 0; parent && parent !== document.body && depth < 5; depth++, parent = parent.parentElement) {
+              if (_normalizeText(parent.textContent) === warning + '我知道了') candidates.push(parent);
+            }
+          }
+          for (var di = 0; di < candidates.length; di++) {
+            var dialog = candidates[di];
+            var text = _normalizeText(dialog.textContent);
+            if (text.indexOf(warning) === -1 || text.indexOf('我知道了') === -1 || !dialog.getClientRects().length) continue;
+            var visible = true;
+            for (var ancestor = dialog; ancestor; ancestor = ancestor.parentElement) {
+              var style = window.getComputedStyle(ancestor);
+              if (ancestor.hidden || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+                visible = false;
+                break;
+              }
+            }
+            if (visible) {
+              logCommentStage('comment_restricted');
+              return { success: false, isCommented: false, retryable: false, reason: 'comment_restricted', message: warning };
+            }
+          }
+          return null;
+        }
         function getCommentDisabledResult() {
           // 只匹配评论面板的可见状态提示，避免把评论正文或隐藏旧面板误判为关闭评论。
           var notices = document.querySelectorAll('.comment-panel .text-center.text-fg-3');
@@ -2495,7 +2529,11 @@ window.__wx_api_client = {
             commentSubmitted = true;
             logCommentStage('send_click');
             sendBtn.click();
-            await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+            for (var restrictionCheck = 0; restrictionCheck < 5; restrictionCheck++) {
+              await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+              var restrictionResult = getCommentRestrictionResult();
+              if (restrictionResult) return restrictionResult;
+            }
             window.__wx_parsers__.refreshAllDom();
             var closedCommentBtns = document.querySelectorAll('[aria-label^="评论"]');
             if (closedCommentBtns.length === 0) {
@@ -2526,7 +2564,7 @@ window.__wx_api_client = {
           if (!commentSubmitted) throw commentError;
           commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
         }
-        if (commentSubmitted && !commentResult.success) {
+        if (commentSubmitted && !commentResult.success && commentResult.reason !== 'comment_restricted') {
           commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
         }
         logCommentStage('finished', { success: commentResult.success, result_unknown: !!commentResult.resultUnknown });

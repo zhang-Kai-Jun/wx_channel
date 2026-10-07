@@ -8,7 +8,7 @@ const { JSDOM } = require('jsdom');
 const source = fs.readFileSync(path.join(__dirname, '../internal/assets/inject/api_client.js'), 'utf8');
 const clientSource = source.slice(0, source.indexOf('// 自动初始化')) + source.slice(source.indexOf('window.__wx_selectors__ ='));
 
-function setup(html) {
+function setup(html, onWait = () => {}) {
   const dom = new JSDOM(html, { url: 'https://channels.weixin.qq.com/web/pages/feed' });
   const { window } = dom;
   window.HTMLElement.prototype.getClientRects = function() { return [{ width: 100, height: 20 }]; };
@@ -20,7 +20,7 @@ function setup(html) {
     Event: window.Event, InputEvent: window.InputEvent, HTMLTextAreaElement: window.HTMLTextAreaElement,
     console: { log() {}, warn() {}, error() {} },
     Date: class extends Date { static now() { return elapsed; } },
-    setTimeout: (fn, ms) => { elapsed += ms; fn(); return 0; },
+    setTimeout: (fn, ms) => { elapsed += ms; onWait(window, ms); fn(); return 0; },
     clearTimeout() {},
     fetch: async (_url, init) => { stages.push(JSON.parse(init.body).msg); return {}; },
   });
@@ -75,6 +75,61 @@ test('an exception after the send click cannot send the comment twice', async ()
 const commentForm = '<div class="click-box op-item" role="button" aria-label="评论"><div class="op-text">评论</div></div>' +
   '<div class="input-box"><div class="input-area"><textarea class="weui-textarea"></textarea></div>' +
   '<div class="opr-area"><div class="extra"><div class="weui-btn weui-btn_primary weui-btn_mini">评论</div></div></div></div>';
+
+const restrictionText = '操作太频繁，请稍后再试。检测到你\n的账号多次发布相似评论，恶意灌水\n可能被禁言处罚。';
+const restrictionDialog = `<div role="alertdialog"><div>${restrictionText}</div><button>我知道了</button></div>`;
+
+for (const delay of [0, 1, 3, 5]) {
+  test(`发送后第${delay}秒出现风控弹窗，返回明确失败且只发送一次`, async () => {
+    let sent = false, polls = 0, sends = 0, closes = 0;
+    const f = setup(commentForm, (window, ms) => {
+      if (sent && ms === 1000 && ++polls === delay) window.document.body.insertAdjacentHTML('beforeend', restrictionDialog);
+    });
+    try {
+      f.window.close = () => closes++;
+      f.window.document.querySelector('.weui-btn').onclick = () => {
+        sent = true;
+        sends++;
+        if (delay === 0) f.window.document.body.insertAdjacentHTML('beforeend', restrictionDialog);
+      };
+      const result = await f.run();
+      assert.equal(result.success, false);
+      assert.equal(result.isCommented, false);
+      assert.equal(result.reason, 'comment_restricted');
+      assert.equal(result.retryable, false);
+      assert.notEqual(result.resultUnknown, true);
+      assert.equal(sends, 1);
+      assert.equal(closes, 0);
+      assert.equal(polls, Math.max(1, delay));
+    } finally { f.close(); }
+  });
+}
+
+for (const [name, markup, restricted] of [
+  ['无弹窗', '', false],
+  ['普通评论正文', `<div class="comment-item">${restrictionText}我知道了</div>`, false],
+  ['隐藏弹窗', `<div style="display:none">${restrictionDialog}</div>`, false],
+  ['不可见弹窗', `<div style="visibility:hidden">${restrictionDialog}</div>`, false],
+  ['无布局尺寸弹窗', restrictionDialog, false],
+  ['其他弹窗', '<div role="dialog">操作成功<button>我知道了</button></div>', false],
+  ['无语义属性的弹窗', `<div><div>${restrictionText}</div><button>我知道了</button></div>`, true],
+  ['微信弹窗样式', `<div class="weui-dialog"><div>${restrictionText}</div><a class="weui-dialog__btn">我知道了</a></div>`, true],
+]) {
+  test(`风控检测：${name}`, async () => {
+    let sent = false, polls = 0;
+    const f = setup(commentForm, (_window, ms) => { if (sent && ms === 1000) polls++; });
+    try {
+      f.window.document.querySelector('.weui-btn').onclick = () => {
+        sent = true;
+        f.window.document.body.insertAdjacentHTML('beforeend', markup);
+        if (name === '无布局尺寸弹窗') f.window.document.querySelector('[role="alertdialog"]').getClientRects = () => [];
+      };
+      const result = await f.run();
+      assert.equal(result.reason === 'comment_restricted', restricted);
+      assert.equal(polls, restricted ? 1 : 5);
+    } finally { f.close(); }
+  });
+}
 
 test('评论流程打开操作栏入口后只点击输入框内的发送按钮', async () => {
   const f = setup(commentForm);

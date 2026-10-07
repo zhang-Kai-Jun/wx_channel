@@ -2333,8 +2333,10 @@ window.__wx_api_client = {
         var commentAttemptNumber = 0;
         var commentSubmitted = false;
         function getCommentRestrictionResult() {
-          // 每次查询实时 DOM；只接受可见弹窗中的指定风控文案。
-          var warning = '操作太频繁，请稍后再试。检测到你的账号多次发布相似评论，恶意灌水可能被禁言处罚。';
+          // 每次查询实时 DOM；支持账号级风控、作者级门槛限制及通用弹窗拦截。
+          var riskWarning = '操作太频繁，请稍后再试。检测到你的账号多次发布相似评论，恶意灌水可能被禁言处罚。';
+          var authorWarning = '作者已设置关注7天以上才可评论';
+
           var candidates = Array.prototype.slice.call(document.querySelectorAll(
             '.weui-dialog, .weui-desktop-dialog, .dialog__content, [role="dialog"], [role="alertdialog"]'
           ));
@@ -2344,13 +2346,17 @@ window.__wx_api_client = {
             if (_normalizeText(controls[ci].textContent) !== '我知道了') continue;
             var parent = controls[ci].parentElement;
             for (var depth = 0; parent && parent !== document.body && depth < 5; depth++, parent = parent.parentElement) {
-              if (_normalizeText(parent.textContent) === warning + '我知道了') candidates.push(parent);
+              if (candidates.indexOf(parent) === -1) candidates.push(parent);
             }
           }
           for (var di = 0; di < candidates.length; di++) {
             var dialog = candidates[di];
+            var btn = dialog.querySelector('.weui-dialog__btn, [role="button"], a, button');
+            var btnText = btn ? _normalizeText(btn.textContent) : '';
             var text = _normalizeText(dialog.textContent);
-            if (text.indexOf(warning) === -1 || text.indexOf('我知道了') === -1 || !dialog.getClientRects().length) continue;
+            if (btnText !== '我知道了' && text.indexOf('我知道了') === -1) continue;
+            if (!dialog.getClientRects().length) continue;
+
             var visible = true;
             for (var ancestor = dialog; ancestor; ancestor = ancestor.parentElement) {
               var style = window.getComputedStyle(ancestor);
@@ -2360,8 +2366,25 @@ window.__wx_api_client = {
               }
             }
             if (visible) {
-              logCommentStage('comment_restricted');
-              return { success: false, isCommented: false, retryable: false, reason: 'comment_restricted', message: warning };
+              // 提取弹窗正文（优先取 .weui-dialog__bd，兜底从完整文本中剔除按钮字样）
+              var bdEl = dialog.querySelector('.weui-dialog__bd');
+              var dialogText = bdEl ? _normalizeText(bdEl.textContent) : _normalizeText(dialog.textContent).replace(/我知道了/g, '').trim();
+
+              // 【情况 1：严重账号风控】
+              if (dialogText.indexOf('操作太频繁') !== -1 || dialogText.indexOf('恶意灌水') !== -1 || dialogText.indexOf('禁言处罚') !== -1) {
+                logCommentStage('comment_restricted');
+                return { success: false, isCommented: false, retryable: false, reason: 'comment_restricted', message: dialogText || riskWarning };
+              }
+
+              // 【情况 2：作者设置关注7天限制】
+              if (dialogText.indexOf(authorWarning) !== -1) {
+                logCommentStage('author_restricted');
+                return { success: false, isCommented: false, retryable: false, reason: 'author_restricted', message: authorWarning };
+              }
+
+              // 【情况 3：兜底异常拦截】出现弹窗且包含“我知道了”，统一定性为发评被拦截
+              logCommentStage('dialog_intercepted');
+              return { success: false, isCommented: false, retryable: false, reason: 'dialog_intercepted', message: dialogText || '评论被系统弹窗拦截' };
             }
           }
           return null;
@@ -2538,11 +2561,9 @@ window.__wx_api_client = {
             var closedCommentBtns = document.querySelectorAll('[aria-label^="评论"]');
             if (closedCommentBtns.length === 0) {
               console.log('[API客户端] 评论浮层已关闭，评论发送成功');
-              setTimeout(function() { try { window.close(); } catch(e) {} }, 500);
               return { success: true, isCommented: true, message: '评论已发送' };
             }
             console.log('[API客户端] 评论浮层仍显示，视为发送成功');
-            setTimeout(function() { try { window.close(); } catch(e) {} }, 500);
             return { success: true, isCommented: true, message: '评论已发送' };
           }
 
@@ -2553,7 +2574,6 @@ window.__wx_api_client = {
             return { success: false, message: '未找到发送按钮，页面状态已变化，未发送评论' };
           }
           console.log('[API客户端] 评论浮层未关闭，评论未发出');
-          setTimeout(function() { try { window.close(); } catch(e) {} }, 500);
           return { success: false, message: '未找到发送按钮，评论未发出' };
         };
 
@@ -2564,7 +2584,8 @@ window.__wx_api_client = {
           if (!commentSubmitted) throw commentError;
           commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
         }
-        if (commentSubmitted && !commentResult.success && commentResult.reason !== 'comment_restricted') {
+        var knownInterceptions = ['comment_restricted', 'author_restricted', 'dialog_intercepted'];
+        if (commentSubmitted && !commentResult.success && knownInterceptions.indexOf(commentResult.reason) === -1) {
           commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
         }
         logCommentStage('finished', { success: commentResult.success, result_unknown: !!commentResult.resultUnknown });

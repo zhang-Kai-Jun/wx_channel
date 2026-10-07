@@ -105,13 +105,15 @@ for (const delay of [0, 1, 3, 5]) {
   });
 }
 
-for (const [name, markup, restricted] of [
+for (const [name, markup, restricted, expectedReason] of [
   ['无弹窗', '', false],
   ['普通评论正文', `<div class="comment-item">${restrictionText}我知道了</div>`, false],
   ['隐藏弹窗', `<div style="display:none">${restrictionDialog}</div>`, false],
   ['不可见弹窗', `<div style="visibility:hidden">${restrictionDialog}</div>`, false],
   ['无布局尺寸弹窗', restrictionDialog, false],
-  ['其他弹窗', '<div role="dialog">操作成功<button>我知道了</button></div>', false],
+  ['其他无我知弹窗', '<div role="dialog">操作成功<button>确定</button></div>', false],
+  ['通用我知道了弹窗', '<div role="dialog">操作成功<button>我知道了</button></div>', false, 'dialog_intercepted'],
+  ['作者关注7天弹窗', '<div class="weui-dialog"><div class="weui-dialog__bd">作者已设置关注7天以上才可评论</div><a class="weui-dialog__btn">我知道了</a></div>', false, 'author_restricted'],
   ['无语义属性的弹窗', `<div><div>${restrictionText}</div><button>我知道了</button></div>`, true],
   ['微信弹窗样式', `<div class="weui-dialog"><div>${restrictionText}</div><a class="weui-dialog__btn">我知道了</a></div>`, true],
 ]) {
@@ -126,7 +128,11 @@ for (const [name, markup, restricted] of [
       };
       const result = await f.run();
       assert.equal(result.reason === 'comment_restricted', restricted);
-      assert.equal(polls, restricted ? 1 : 5);
+      const isIntercepted = restricted || !!expectedReason;
+      if (expectedReason) {
+        assert.equal(result.reason, expectedReason);
+      }
+      assert.equal(polls, isIntercepted ? 1 : 5);
     } finally { f.close(); }
   });
 }

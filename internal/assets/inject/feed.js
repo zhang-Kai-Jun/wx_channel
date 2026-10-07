@@ -569,36 +569,38 @@ async function __insert_tools_to_feed_toolbar() {
     );
 
     domIconWrapper.onclick = function () {
-      try {
-        // 获取完整HTML
-        var pageHTML = document.documentElement.outerHTML;
+      setTimeout(function () {
+        try {
+          // 获取完整HTML
+          var pageHTML = document.documentElement.outerHTML;
 
-        // 创建Blob对象
-        var blob = new Blob([pageHTML], { type: 'text/plain;charset=utf-8' });
+          // 创建Blob对象
+          var blob = new Blob([pageHTML], { type: 'text/plain;charset=utf-8' });
 
-        // 创建下载链接
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
+          // 创建下载链接
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
 
-        // 生成文件名
-        var pageTitle = document.title || 'page';
-        pageTitle = pageTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
-        var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-        a.download = pageTitle + '_dom_' + timestamp + '.txt';
+          // 生成文件名
+          var pageTitle = document.title || 'page';
+          pageTitle = pageTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+          var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+          a.download = pageTitle + '_dom_' + timestamp + '.txt';
 
-        // 触发下载
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+          // 触发下载
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
 
-        __wx_log({ msg: 'DOM已下载: ' + a.download });
-        console.log('[feed.js] DOM已下载:', a.download);
-      } catch (e) {
-        console.error('[feed.js] 获取DOM失败:', e);
-        __wx_log({ msg: '获取DOM失败: ' + e.message });
-      }
+          __wx_log({ msg: 'DOM已下载: ' + a.download });
+          console.log('[feed.js] DOM已下载:', a.download);
+        } catch (e) {
+          console.error('[feed.js] 获取DOM失败:', e);
+          __wx_log({ msg: '获取DOM失败: ' + e.message });
+        }
+      }, 8000);
     };
 
     // 创建 Store 快照按钮

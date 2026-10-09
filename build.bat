@@ -11,7 +11,7 @@ REM
 REM  Usage:
 REM    build.bat                          Obfuscated build (uses version.go Current)
 REM    build.bat --plain                  Plain build for troubleshooting
-REM    build.bat --upload                 Build and upload zip to remote bucket
+REM    build.bat --upload                 Build and upload zip, exe and latest manifest
 REM ============================================================
 
 setlocal EnableDelayedExpansion
@@ -292,6 +292,12 @@ if "%DO_UPLOAD%"=="1" (
         echo       Uploaded: !UPLOAD_BUCKET!
     ) else (
         echo [ERROR] video_channel.zip not found, skipping upload.
+    )
+    REM Publish the content-addressed EXE first and the latest hash manifest last.
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\publish-release.ps1" -Version "%VERSION%"
+    if errorlevel 1 (
+        echo [ERROR] Online executable release failed.
+        goto fail
     )
     echo       OK
     echo.

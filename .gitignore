@@ -121,7 +121,8 @@ download_records.csv
 *.db-journal
 
 
-scripts/
+scripts/*
+!scripts/publish-release.ps1
 
 
 help_output.txt

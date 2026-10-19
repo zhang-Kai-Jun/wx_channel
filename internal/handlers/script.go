@@ -1466,13 +1466,18 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 	}
 
 	// 尝试展开二级评论
+	var secondaryCommentExpansionState = new WeakMap();
 	function expandSecondaryComments() {
 		var count = 0;
+		var retryDelay = 5000;
 
 		// 辅助点击函数
 		var clickNode = function(node, actionName) {
 			try {
-				if (actionName) console.log('[评论采集] ' + actionName + ':', node.innerText.trim().substring(0, 30));
+				if (actionName) {
+					console.log('[评论采集] ' + actionName + ':', (node.innerText || node.textContent || '').trim(),
+						'展开图标:', !!node.querySelector('.weui-icon-outlined-arrow'));
+				}
 				node.scrollIntoView({block: 'center', inline: 'nearest'});
 				var eventTypes = ['mouseover', 'mousedown', 'mouseup', 'click'];
 				for (var k = 0; k < eventTypes.length; k++) {
@@ -1486,64 +1491,37 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			}
 		};
 
-		// 策略1: 精确查找 .load-more__btn (最准确)
-		// 结构: .comment-item__extra -> .comment-reply-list + .load-more -> .click-box.load-more__btn
-		var preciseCandidates = document.querySelectorAll('.load-more__btn, .click-box, .comment-item__extra .load-more');
-		for (var i = 0; i < preciseCandidates.length; i++) {
-			var node = preciseCandidates[i];
-			if (node.offsetParent === null) continue; // 不可见
-			var text = node.innerText || '';
-			
-			// 检查是否已处理过且文字未变 (防止DOM复用导致的漏点)
-			if (node.classList.contains('expanded-handled') && node.getAttribute('data-handled-text') === text) {
-				continue;
-			}
+		// 只识别评论区内真正的展开按钮，不按昵称、正文或普通“回复”按钮兜底。
+		var panelSelector = '.comment-list, .comment-panel, .comment-drawer, ' +
+			'[class*="comment-panel"], [class*="comment-drawer"]';
+		var candidates = document.querySelectorAll('.comment-item__extra .load-more__btn');
+		for (var i = 0; i < candidates.length; i++) {
+			var node = candidates[i];
+			var extra = node.closest('.comment-item__extra');
+			if (!node.isConnected || !node.closest(panelSelector) || node.offsetParent === null) continue;
+			if (node.closest('#__wx_channels_log_panel, [hidden], [inert], [aria-hidden="true"]')) continue;
+			if (node.closest('[disabled], [aria-disabled="true"], [aria-busy="true"]')) continue;
+			var style = window.getComputedStyle(node);
+			if (style.visibility === 'hidden' || style.visibility === 'collapse') continue;
 
-			if (text.includes('回复') || text.includes('展开') || text.includes('更多')) {
-				clickNode(node, '🎯 精确点击');
-				node.classList.add('expanded-handled');
-				node.setAttribute('data-handled-text', text); // 记录处理时的文字
+			// 读取实时文字；图标仅辅助诊断，不依赖固定包装层或旧的处理标记。
+			var textNode = node.querySelector('.text') || node;
+			var text = (textNode.innerText || textNode.textContent || '').replace(/\s+/g, '');
+			if (!/^[1-9]\d*条回复$/.test(text)) continue;
+
+			var replyList = extra.querySelector('.comment-reply-list');
+			var replyCount = replyList ? replyList.children.length : 0;
+			var previous = secondaryCommentExpansionState.get(extra);
+			var now = Date.now();
+			if (previous && previous.text === text && previous.replyCount === replyCount &&
+				now - previous.clickedAt < retryDelay) continue;
+
+			// 按评论区域去重，按钮被 Vue 重建时仍有效；分页更新或超时后允许再次加载。
+			secondaryCommentExpansionState.set(extra, { text: text, replyCount: replyCount, clickedAt: now });
+			if (clickNode(node, '展开回复')) {
 				count++;
-			}
-		}
-
-		// 策略2: 文本模糊查找 (防止DOM结构变化)
-		if (count === 0) {
-			var candidates = document.querySelectorAll('div, span, p, a'); 
-			for (var i = 0; i < candidates.length; i++) {
-				var node = candidates[i];
-				var text = node.innerText || '';
-				
-				// 避免匹配过多无关元素
-				if (text.length > 50 || text.length < 2) continue;
-
-				// 宽松匹配：包含 "展开"、"回复"、"更多"
-				if (text.includes('展开') || text.includes('回复') || text.includes('更多')) {
-					// 排除无效元素
-					if (node.offsetParent === null) continue;
-					
-					// 检查是否已处理过且文字未变
-					if (node.classList.contains('expanded-handled') && node.getAttribute('data-handled-text') === text) {
-						continue;
-					}
-					
-					if (node.closest('#__wx_channels_log_panel')) continue; // 排除日志面板
-					// if (node.closest('.load-more__btn')) continue; // REMOVED: 让策略2覆盖漏网之鱼
-
-					// 尝试定位到最佳点击容器
-					var clickTarget = node.closest('.click-box') || node.closest('.load-more') || node;
-					
-					clickNode(clickTarget, '🔍 模糊点击');
-					
-					node.classList.add('expanded-handled');
-					node.setAttribute('data-handled-text', text);
-					
-					if (clickTarget !== node) {
-						clickTarget.classList.add('expanded-handled');
-						clickTarget.setAttribute('data-handled-text', text);
-					}
-					count++;
-				}
+			} else {
+				secondaryCommentExpansionState.delete(extra);
 			}
 		}
 

@@ -30,6 +30,8 @@ type Client struct {
 	lastSeen       time.Time
 	pagePath       string
 	href           string
+	pageInstanceID string
+	workID         string
 	apiReady       bool
 	methods        map[string]bool
 	activeRequests int32 // 活跃请求数（原子操作）
@@ -350,6 +352,8 @@ func (c *Client) UpdateState(state ClientStateBody) {
 
 	c.pagePath = state.PagePath
 	c.href = state.Href
+	c.pageInstanceID = state.PageInstanceID
+	c.workID = state.WorkID
 	c.apiReady = state.APIReady
 	c.lastSeen = time.Now()
 	if state.Timestamp > 0 {
@@ -405,6 +409,8 @@ func (c *Client) Status() ClientStatus {
 	}
 
 	return ClientStatus{
+		PageInstanceID:  c.pageInstanceID,
+		WorkID:          c.workID,
 		RemoteAddr:      c.RemoteAddr,
 		PagePath:        c.pagePath,
 		Href:            c.href,

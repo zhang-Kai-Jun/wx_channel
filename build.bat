@@ -9,7 +9,7 @@ REM     2. Go ldflags           (runtime: video_channel.exe version)
 REM  You only need to change the `var Current` line in version.go.
 REM
 REM  Usage:
-REM    build.bat                          Obfuscated build (uses version.go Current)
+REM    build.bat                          Plain build (uses version.go Current)
 REM    build.bat --plain                  Plain build for troubleshooting
 REM    build.bat --upload                 Build and upload zip, exe and latest manifest
 REM ============================================================
@@ -20,7 +20,7 @@ chcp 65001 >nul
 REM ---------- Default arguments ----------
 set "VERSION="
 set "DO_UPLOAD=0"
-set "OBFUSCATE=1"
+set "OBFUSCATE=0"
 set "GARBLE_VERSION=v0.14.2"
 set "GARBLE_EXE="
 set "RESOURCE_JSON=%~dp0winres\winres.build.json"

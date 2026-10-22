@@ -348,6 +348,11 @@ window.__wx_api_client = {
     }
   },
 
+  commentPageInstance: function () {
+    if (!window.__sph_page_instance) window.__sph_page_instance = 'page_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    return window.__sph_page_instance;
+  },
+
   collectClientState: function () {
     var methods = {};
     if (window.WXU) {
@@ -358,6 +363,8 @@ window.__wx_api_client = {
     }
     this.apiMethods = methods;
     return {
+      page_instance_id: this.commentPageInstance(),
+      work_id: String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || ''),
       pagePath: window.location.pathname,
       href: window.location.href,
       apiReady: !!(methods.finderGetCommentDetail || methods.finderUserPage || methods.finderSearch || methods.finderGetInteractionedFeedList),
@@ -383,56 +390,14 @@ window.__wx_api_client = {
   },
 
   // 处理指令
-  handleCommand: function (data) {
+  handleCommand: async function (data) {
     console.log('[API客户端] ========== 处理指令 ==========');
     console.log('[API客户端] 收到指令:', JSON.stringify(data));
     console.log('[API客户端] window.__wx_channels_search_task_collector:', !!window.__wx_channels_search_task_collector);
 
     try {
       if (data.action === 'start_comment_collection') {
-        var taskData = data.payload || data;
-        var snapshotTaskId = taskData.task_id || '';
-        console.log('[API客户端] 执行评论采集指令, task_id=' + snapshotTaskId + '...');
-
-        // 设置全局任务ID，dumpAllPiniaStores 会读取并上报
-        window.__snapshotTaskId = snapshotTaskId;
-
-        // 监听评论采集完成信号，采集完成后自动保存快照（参考 feed.js 按钮逻辑）
-        var originalWxLog = typeof __wx_log === 'function' ? __wx_log : null;
-        var snapshotSaved = false;
-
-        function onCollectionDone() {
-          if (snapshotSaved) return;
-          snapshotSaved = true;
-          var savedWxLog = originalWxLog;
-          if (savedWxLog) __wx_log = savedWxLog;
-          if (typeof window.dumpAllPiniaStores === 'function') {
-            window.dumpAllPiniaStores().then(function(path) {
-              console.log('[API客户端] 评论快照已保存: ' + (path || '(空)'));
-              if (savedWxLog) savedWxLog({ msg: '📸 评论快照已保存: ' + (path || '(空)') });
-            });
-          }
-        }
-
-        __wx_log = function (data) {
-          if (originalWxLog) originalWxLog(data);
-          if (snapshotSaved) return;
-          var msg = data && data.msg;
-          if (!msg) return;
-          if (msg.indexOf('✅ 评论采集完成') !== -1 || msg.indexOf('⚠️ 采集停止') !== -1 || msg.indexOf('✅ 评论已保存') !== -1) {
-            console.log('[API客户端] 检测到采集完成信号: ' + msg);
-            onCollectionDone();
-          }
-        };
-
-        if (typeof window.__start_feed_comment_collection_with_open_panel === 'function') {
-          window.__start_feed_comment_collection_with_open_panel();
-        } else {
-          console.warn('[API客户端] 评论采集函数未就绪，尝试直接调用...');
-          if (typeof window.__wx_channels_start_comment_collection === 'function') {
-            window.__wx_channels_start_comment_collection();
-          }
-        }
+        this.startCommentSnapshot(data.payload || data);
       }
 
       // 【open_comment_panel】打开评论区面板
@@ -546,12 +511,12 @@ window.__wx_api_client = {
         }
 
         try {
-          var result = window.__sph_fetch_video_comments({});
+          var result = await window.__sph_fetch_video_comments({ task_id: data.task_id || '' });
 
           // 通过 HTTP 回调把结果写入 Go 缓存（Node.js 轮询获取）
           window.__wx_api_client.sendFetchCommentsCallback(data.task_id || '', {
-            success: true,
-            message: 'ok',
+            success: !result._error,
+            message: result._error || 'ok',
             result: result
           });
         } catch (err) {
@@ -631,25 +596,10 @@ window.__wx_api_client = {
 
       // 【cancel_comment_collection】取消评论采集任务
       if (data.action === 'cancel_comment_collection') {
-        var taskData = data.payload || data;
-        var taskId = taskData.task_id || '';
-        console.log('[API客户端] 收到取消采集指令, task_id=' + taskId);
-
-        // 停止评论采集函数
-        if (typeof window.__stop_feed_comment_collection === 'function') {
-          window.__stop_feed_comment_collection();
-          console.log('[API客户端] 已调用 __stop_feed_comment_collection');
-        }
-
-        // 如果当前的 snapshotTaskId 匹配（精确匹配或前缀匹配），清除它
-        // taskId 可能是完整 ID 或前缀（如 "sph_13095_"）
-        if (window.__snapshotTaskId && (window.__snapshotTaskId === taskId || window.__snapshotTaskId.startsWith(taskId))) {
-          window.__snapshotTaskId = null;
-          console.log('[API客户端] 已清除 __snapshotTaskId');
-        }
+        var cancelData = data.payload || data;
+        var active = window.__sph_snapshot;
+        if (active && (active.taskId === cancelData.task_id || active.taskId.indexOf(cancelData.task_id) === 0)) this.stopCommentSnapshot(active.taskId);
       }
-
-
 
       // DOM 操作指令
       if (data.action === 'dom_action') {
@@ -722,6 +672,72 @@ window.__wx_api_client = {
     }, 100);
   },
 
+  // Snapshot state is captured by task, never inferred from mutable global IDs or log text.
+  startCommentSnapshot: function (body) {
+    var taskId = body.task_id || '';
+    var history = window.__sph_snapshot_tasks || (window.__sph_snapshot_tasks = new Map());
+    var current = history.get(taskId) || window.__sph_snapshot;
+    if (current && current.taskId === taskId) {
+      if (current.collectionId !== (body.collection_id || '') || current.pageInstanceId !== this.commentPageInstance()) return { success:false, message:'快照归属不一致' };
+      if (current.result) this.sendSnapshotStatus(current, current.result);
+      return { success:true, stopped:current.stopped };
+    }
+    if (current && !current.stopped) return { success:false, message:'上一快照尚未停止' };
+    var task = { taskId:taskId, collectionId:body.collection_id || '', pageInstanceId:this.commentPageInstance(), url:window.location.href, workId:String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || ''), stopped:false, finished:false, timers:[] };
+    window.__sph_snapshot = task;
+    history.set(taskId, task);
+    if (history.size > 16) history.delete(history.keys().next().value);
+    window.__snapshotTaskId = taskId;
+    var self = this;
+    task.finish = function (reason, complete) {
+      if (task.finished) return;
+      task.finished = true; task.stopped = true;
+      if (typeof window.__stop_feed_comment_collection === 'function') window.__stop_feed_comment_collection();
+      task.timers.forEach(function(timer) { clearInterval(timer); clearTimeout(timer); }); task.timers = [];
+      if (reason === 'cancelled' || reason === 'initialization_failed' || reason === 'page_changed') {
+        task.result = { done:true, success:false, stopped:true, complete:false, stop_reason:reason, message:reason };
+        self.sendSnapshotStatus(task, task.result); return;
+      }
+      if (typeof window.dumpAllPiniaStores !== 'function') {
+        task.result = { done:true, success:false, stopped:true, complete:false, stop_reason:'save_failed', message:'快照函数未就绪' };
+        self.sendSnapshotStatus(task, task.result); return;
+      }
+      try {
+        Promise.resolve(window.dumpAllPiniaStores({ task:task, reason:reason, complete:!!complete })).catch(function(error) {
+          self.sendSnapshotStatus(task, { done:true, success:false, stopped:true, complete:false, stop_reason:'save_failed', message:error.message });
+        });
+      } catch (error) {
+        self.sendSnapshotStatus(task, { done:true, success:false, stopped:true, complete:false, stop_reason:'save_failed', message:error.message });
+      }
+    };
+    try {
+    if (typeof window.__start_feed_comment_collection_with_open_panel === 'function') {
+      window.__start_feed_comment_collection_with_open_panel(task);
+    } else if (typeof window.__wx_channels_start_comment_collection === 'function') {
+      window.__wx_channels_start_comment_collection(task);
+    } else { task.finish('initialization_failed', false); }
+    } catch (error) { task.finish('initialization_failed', false); }
+    return { success:true };
+  },
+
+  stopCommentSnapshot: function (taskId) {
+    var task = (window.__sph_snapshot_tasks && window.__sph_snapshot_tasks.get(taskId)) || window.__sph_snapshot;
+    if (!task || task.taskId !== taskId) return { success:false, stopped:false, message:'快照编号不匹配' };
+    if (!task.finished) task.finish('cancelled', false);
+    else if (!task.result) this.sendSnapshotStatus(task, { done:true, success:false, stopped:true, complete:false, stop_reason:'cancelled', message:'采集已停止' });
+    // Saving may still be in flight, but its callback retains this task's immutable identity.
+    return { success:true, stopped:task.stopped };
+  },
+
+  sendSnapshotStatus: function (task, result) {
+    if (task.result && task.result.done) result = task.result;
+    task.result = result;
+    return fetch('/__wx_channels_api/comment_snapshot_callback', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body:JSON.stringify(Object.assign({}, result, { task_id:task.taskId, collection_id:task.collectionId, page_instance_id:task.pageInstanceId, url:task.url }))
+    }).catch(function() {});
+  },
+
   // 处理 API 调用请求
   handleAPICall: async function (data) {
     var id = data.id;
@@ -736,11 +752,49 @@ window.__wx_api_client = {
 
     // 响应函数
     var self = this;
+    var receivedAt = Date.now();
+    var perfAction = key === 'key:channels:dom_action' && body ? body.action : '';
+    function perfLog(kind, extra) {
+      try {
+        if (perfAction && window.__sph_perf_log) window.__sph_perf_log(kind, Object.assign({ request_id: id, action: perfAction, task_id: body.task_id || '', collection_id: body.collection_id || '' }, extra));
+      } catch (_) {}
+    }
+    perfLog('api_received', {});
     function resp(responseData) {
+      perfLog('api_response', { elapsed_ms: Date.now() - receivedAt });
       self.sendResponse(id, responseData);
     }
 
     try {
+      if (key === 'key:channels:dom_action' && body.collection_id) {
+        if (body.page_instance_id && body.page_instance_id !== this.commentPageInstance()) {
+          resp({ success:false, message:'页面实例已变化' }); return;
+        }
+        if (body.action.indexOf('stop_comment_') !== 0 && body.url && body.url !== window.location.href) {
+          resp({ success:false, message:'作品页面已变化' }); return;
+        }
+        if (body.action.indexOf('stop_comment_') !== 0) {
+          var runtimeWork = String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || '');
+          var collections = window.__sph_comment_collections || (window.__sph_comment_collections = new Map());
+          var knownWork = collections.get(body.collection_id) || '';
+          if ((body.work_id && body.work_id !== runtimeWork) || (knownWork && runtimeWork !== knownWork)) {
+            resp({ success:false, message:'作品身份已变化' }); return;
+          }
+          if (runtimeWork) collections.set(body.collection_id, runtimeWork);
+        }
+        if (body.action === 'start_comment_snapshot') {
+          resp(this.startCommentSnapshot(body)); return;
+        }
+        if (body.action === 'stop_comment_snapshot') {
+          resp(this.stopCommentSnapshot(body.task_id)); return;
+        }
+        if (body.action === 'stop_comment_fetch') {
+          if (!window.__sph_cancelled_collections) window.__sph_cancelled_collections = new Set();
+          window.__sph_cancelled_collections.add(body.collection_id);
+          if (typeof window.__stop_feed_comment_collection === 'function') window.__stop_feed_comment_collection();
+          resp({ success:true, stopped:true }); return;
+        }
+      }
       if (key === 'key:channels:dom_action' && body.action === 'open_link') {
         this.openManualLink(id, body);
         return;
@@ -755,6 +809,7 @@ window.__wx_api_client = {
         await new Promise(function (resolve) { setTimeout(resolve, 500); });
       }
 
+      if (Date.now() - startTime >= 500) perfLog('api_init_wait', { elapsed_ms: Date.now() - startTime, ready: !!(window.WXU && window.WXU.API && window.WXU.API2) });
       if (!window.WXU || !window.WXU.API || !window.WXU.API2) {
         console.error('[API客户端] ★★★ [诊断] WXU.API 初始化超时，未就绪');
         resp({
@@ -1007,6 +1062,21 @@ window.__wx_api_client = {
         if (body.action === 'fetch_video_comments') {
           var fvcTaskId = body.task_id || '';
           var fvcResult = null;
+          // Scoped retries replay the same incremental batch, including an in-flight read.
+          var fvcResolve = null;
+          if (body.collection_id && fvcTaskId) {
+            var fvcRequests = window.__sph_fetch_requests;
+            if (!fvcRequests) fvcRequests = window.__sph_fetch_requests = new Map();
+            if (fvcRequests.has(fvcTaskId)) {
+              var replayResult = await fvcRequests.get(fvcTaskId);
+              resp(replayResult);
+              self.sendFetchCommentsCallback(fvcTaskId, replayResult);
+              return;
+            }
+            fvcRequests.set(fvcTaskId, new Promise(function(resolve) { fvcResolve = resolve; }));
+            // Requests are sequential; keep recent batches for delayed delivery retries.
+            if (fvcRequests.size > 16) fvcRequests.delete(fvcRequests.keys().next().value);
+          }
 
           try {
             var closedNotices = document.querySelectorAll('.comment-panel .text-center.text-fg-3');
@@ -1029,8 +1099,11 @@ window.__wx_api_client = {
             var maxRetries = 3;
             var retryDelay = 500;
             for (var attempt = 1; fvcResult === null && attempt <= maxRetries; attempt++) {
+              if (window.__sph_cancelled_collections && window.__sph_cancelled_collections.has(body.collection_id)) {
+                fvcResult = { _error:'采集已停止', reason:'cancelled', raw_items:[] }; break;
+              }
               if (typeof window.__sph_fetch_video_comments === 'function') {
-                fvcResult = window.__sph_fetch_video_comments({});
+                fvcResult = await window.__sph_fetch_video_comments({ collection_id:body.collection_id, task_id:fvcTaskId, request_id:id });
                 // 函数执行成功，退出重试循环
                 break;
               }
@@ -1051,12 +1124,14 @@ window.__wx_api_client = {
           } finally {
             // 无论成功/失败/异常，都必须发回调，保证 Hub 缓存有数据
             clearTimeout(fvcTimeout);
-            resp({ success: !fvcResult._error, message: fvcResult._error || 'ok', result: fvcResult });
-            self.sendFetchCommentsCallback(fvcTaskId, {
+            var fvcResponse = {
               success: !fvcResult._error,
               message: fvcResult._error || 'ok',
               result: fvcResult
-            });
+            };
+            if (fvcResolve) fvcResolve(fvcResponse);
+            resp(fvcResponse);
+            self.sendFetchCommentsCallback(fvcTaskId, fvcResponse);
           }
           return;
         }

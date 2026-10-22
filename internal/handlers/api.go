@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -276,14 +277,17 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	// 解析请求
 	var req struct {
-		Action       string `json:"action"`
-		Target       string `json:"target"`
-		Content      string `json:"content"`
-		Index        int    `json:"index"`
-		URL          string `json:"url"`
-		TaskID       string `json:"task_id"`
-		AsyncComment bool   `json:"async_comment"`
-		OperationID  string `json:"operation_id"`
+		CollectionID   string `json:"collection_id"`
+		PageInstanceID string `json:"page_instance_id"`
+		RetryPending   bool   `json:"retry_pending"`
+		Action         string `json:"action"`
+		Target         string `json:"target"`
+		Content        string `json:"content"`
+		Index          int    `json:"index"`
+		URL            string `json:"url"`
+		TaskID         string `json:"task_id"`
+		AsyncComment   bool   `json:"async_comment"`
+		OperationID    string `json:"operation_id"`
 		// 回复专用字段（用于 do_reply_comment_v2）
 		ReplyContent string `json:"replyContent"`
 		// 精准匹配专用字段
@@ -324,6 +328,8 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 
 	// 通过 WebSocket 调用前端 DOM 操作 API
 	domReq := websocket.DOMActionBody{
+		CollectionID:   req.CollectionID,
+		PageInstanceID: req.PageInstanceID,
 		OperationID:    req.OperationID,
 		Action:         req.Action,
 		Target:         req.Target,
@@ -340,6 +346,40 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 		DedupUsernames: req.DedupUsernames,
 	}
 
+	if req.Action == "bind_comment_page" {
+		page, err := h.domActionHub.BindCommentPage(domReq)
+		headers := http.Header{"Content-Type": {"application/json"}}
+		h.setCORSHeadersFromConn(Conn, headers)
+		if err != nil {
+			Conn.StopRequest(409, string(response.ErrorJSON(409, err.Error())), headers)
+			return
+		}
+		data, _ := json.Marshal(map[string]interface{}{"success": true, "url": page.Href, "page_instance_id": page.PageInstanceID, "work_id": page.WorkID})
+		Conn.StopRequest(200, string(data), headers)
+		return
+	}
+	if req.CollectionID != "" && req.Action == "stop_comment_snapshot" {
+		err := h.domActionHub.StopCommentSnapshot(req.TaskID)
+		headers := http.Header{"Content-Type": {"application/json"}}
+		h.setCORSHeadersFromConn(Conn, headers)
+		if err != nil {
+			Conn.StopRequest(409, string(response.ErrorJSON(409, err.Error())), headers)
+			return
+		}
+		Conn.StopRequest(200, `{"success":true,"stopped":true}`, headers)
+		return
+	}
+	if req.CollectionID != "" && req.Action != "fetch_video_comments" && req.Action != "trigger_comment_snapshot" {
+		data, err := h.domActionHub.CallCommentFetch(domReq, 10*time.Second)
+		headers := http.Header{"Content-Type": {"application/json"}}
+		h.setCORSHeadersFromConn(Conn, headers)
+		if err != nil {
+			Conn.StopRequest(409, string(response.ErrorJSON(409, err.Error())), headers)
+			return
+		}
+		Conn.StopRequest(200, string(data), headers)
+		return
+	}
 	if req.Action == "do_comment" && req.AsyncComment {
 		headers := http.Header{"Content-Type": {"application/json"}}
 		h.setCORSHeadersFromConn(Conn, headers)
@@ -385,14 +425,38 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 	// inject 通过 HTTP POST /fetch_comments_callback 异步回调，不走 WebSocket 响应路径。
 	// 因此 Go 发送指令后立即返回，Node.js 通过轮询 /fetch_comments_result 获取结果。
 	if req.Action == "fetch_video_comments" {
+		if err := h.domActionHub.ValidateCommentFetchOwner(domReq); err != nil {
+			headers := http.Header{"Content-Type": {"application/json"}}
+			h.setCORSHeadersFromConn(Conn, headers)
+			Conn.StopRequest(409, string(response.ErrorJSON(409, err.Error())), headers)
+			return
+		}
 		go func() {
+			if req.CollectionID != "" {
+				if cached := h.domActionHub.GetFetchCommentsResult(req.TaskID); cached != nil && !cached.RequiresReset {
+					return
+				}
+			}
 			utils.LogInfo("[DOMAction] fetch_video_comments 启动后台 CallAPI, task_id=%s", req.TaskID)
-			wsRespData, err := h.domActionHub.CallAPI("key:channels:dom_action", domReq, 30*time.Second)
+			wsRespData, err := h.domActionHub.CallCommentFetch(domReq, 30*time.Second)
 			if err != nil {
 				utils.LogError("[DOMAction] fetch_video_comments 后台 CallAPI 异常: %v", err)
+				if req.CollectionID != "" && errors.Is(err, websocket.ErrCommentPageUnavailable) {
+					// Failure to replay does not prove the earlier dispatch has ended.
+					previous := h.domActionHub.GetFetchCommentsResult(req.TaskID)
+					h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
+						Success: false, RequiresReset: req.RetryPending || (previous != nil && previous.RequiresReset),
+						Reason: "page_not_ready", Message: "当前作品页未就绪，等待原作品页重连", ReceivedAt: time.Now().Unix(),
+					})
+					return
+				}
+				failureMessage := "评论采集请求失败或超时，需关闭旧页面后继续"
+				if req.CollectionID != "" {
+					failureMessage = "评论采集请求结果未确认"
+				}
 				h.domActionHub.SetFetchCommentsResult(req.TaskID, &websocket.FetchCommentsData{
 					Success: false, RequiresReset: true, Reason: "request_failed",
-					Message: "评论采集请求失败或超时，需关闭旧页面后继续", ReceivedAt: time.Now().Unix(),
+					Message: failureMessage, ReceivedAt: time.Now().Unix(),
 				})
 				return
 			}
@@ -470,6 +534,20 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 	// 完整流程（通过浏览器-facing Hub 广播，Node.js 端轮询等待）：
 	//   Step1: 广播 start_comment_collection → 浏览器打开评论区 + 展开评论 + 采集完成后自动保存快照
 	// goroutine 避免阻塞 HTTP 连接；Node.js 通过轮询 comment_snapshot_status 等待采集完成
+
+	if req.Action == "trigger_comment_snapshot" && req.CollectionID != "" {
+		err := h.domActionHub.StartCommentSnapshot(domReq)
+		headers := http.Header{"Content-Type": {"application/json"}}
+		h.setCORSHeadersFromConn(Conn, headers)
+		if err != nil {
+			accepted := h.domActionHub.GetCommentSnapshotStatus(req.TaskID) != nil
+			data, _ := json.Marshal(map[string]interface{}{"success": false, "accepted": accepted, "message": err.Error()})
+			Conn.StopRequest(409, string(data), headers)
+			return
+		}
+		Conn.StopRequest(200, `{"success":true}`, headers)
+		return
+	}
 	if req.Action == "trigger_comment_snapshot" {
 		// 捕获关键值，避免 goroutine 引用 Conn
 		taskID := req.TaskID
@@ -1206,14 +1284,20 @@ func (h *APIHandler) HandleCommentSnapshotCallback(Conn *SunnyNet.HttpConn) {
 	_ = Conn.Request.Body.Close()
 
 	var payload struct {
-		TaskID       string `json:"task_id"`
-		Done         bool   `json:"done"`
-		Success      bool   `json:"success"`
-		TotalCount   int    `json:"total_count"`
-		LoadedCount  int    `json:"loaded_count"`
-		SnapshotPath string `json:"snapshot_path"`
-		Message      string `json:"message"`
-		Error        string `json:"error"`
+		CollectionID   string `json:"collection_id"`
+		PageInstanceID string `json:"page_instance_id"`
+		URL            string `json:"url"`
+		StopReason     string `json:"stop_reason"`
+		Complete       bool   `json:"complete"`
+		Stopped        bool   `json:"stopped"`
+		TaskID         string `json:"task_id"`
+		Done           bool   `json:"done"`
+		Success        bool   `json:"success"`
+		TotalCount     int    `json:"total_count"`
+		LoadedCount    int    `json:"loaded_count"`
+		SnapshotPath   string `json:"snapshot_path"`
+		Message        string `json:"message"`
+		Error          string `json:"error"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		h.sendErrorResponse(Conn, err)
@@ -1230,6 +1314,8 @@ func (h *APIHandler) HandleCommentSnapshotCallback(Conn *SunnyNet.HttpConn) {
 
 	// 写入 Hub 缓存
 	h.domActionHub.SetCommentSnapshotStatus(payload.TaskID, &websocket.CommentSnapshotStatus{
+		CollectionID: payload.CollectionID, PageInstanceID: payload.PageInstanceID, URL: payload.URL,
+		StopReason: payload.StopReason, Complete: payload.Complete, Stopped: payload.Stopped,
 		Done:         payload.Done,
 		Success:      payload.Success,
 		TotalCount:   payload.TotalCount,
@@ -1345,20 +1431,17 @@ func (h *APIHandler) HandleCancelSnapshot(Conn *SunnyNet.HttpConn) {
 		return
 	}
 
-	// 取消采集并广播
+	var stopErr error
 	if payload.TaskID != "" {
-		// 只取消单个任务
-		h.domActionHub.CancelCommentSnapshot(payload.TaskID)
-		h.domActionHub.BroadcastCancelSnapshot(payload.TaskID)
-		utils.LogInfo("[HandleCancelSnapshot] 取消单个采集任务: taskId=%s", payload.TaskID)
+		stopErr = h.domActionHub.StopCommentSnapshot(payload.TaskID)
 	} else {
-		// 取消该 mission 的所有采集任务
-		// 1. 先标记 Hub 端的状态
-		h.domActionHub.CancelCommentSnapshot(payload.MissionID)
-		// 2. 广播取消命令给所有浏览器（按 missionId 前缀匹配 taskId）
-		prefix := fmt.Sprintf("sph_%s_", payload.MissionID)
-		h.domActionHub.BroadcastCancelSnapshot(prefix)
-		utils.LogInfo("[HandleCancelSnapshot] 取消 mission 所有采集: missionId=%s, prefix=%s", payload.MissionID, prefix)
+		stopErr = h.domActionHub.StopMissionCommentSnapshots(payload.MissionID)
+	}
+	if stopErr != nil {
+		headers := http.Header{"Content-Type": {"application/json"}}
+		h.setCORSHeadersFromConn(Conn, headers)
+		Conn.StopRequest(409, string(response.ErrorJSON(409, stopErr.Error())), headers)
+		return
 	}
 
 	headers := http.Header{}

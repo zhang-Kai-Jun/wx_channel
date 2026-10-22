@@ -3,7 +3,6 @@ package websocket
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +50,8 @@ type Hub struct {
 	// fetch_video_comments 结果缓存（taskID → result）
 	fetchCommentsResult   map[string]*FetchCommentsData
 	fetchCommentsResultMu sync.RWMutex
+	commentFetchBindings  map[string]commentFetchBinding // protected by mu
+	commentFetchOwners    map[string]string              // task ID -> collection, protected by mu
 
 	// 评论快照采集状态缓存（taskID → CommentSnapshotStatus）
 	commentSnapshotStatus   map[string]*CommentSnapshotStatus
@@ -345,6 +346,15 @@ func (h *Hub) callAPIOnClient(client *Client, key string, body interface{}, time
 	startTime := time.Now()
 	utils.LogInfo("发送 API 请求: ID=%s, Key=%s, Timeout=%v", reqID, key, timeout)
 	domAction, isDOMAction := body.(DOMActionBody)
+	status := client.Status()
+	utils.LogInfo("[Perf][api_dispatch] request_id=%s key=%s action=%s task_id=%s collection_id=%s client=%s page=%s page_instance_id=%s expected_page_instance_id=%s work_id=%s expected_work_id=%s api_ready=%t active_requests=%d last_seen=%s last_ping=%s timeout_ms=%d",
+		reqID, key, domAction.Action, domAction.TaskID, domAction.CollectionID, client.RemoteAddr, status.PagePath, status.PageInstanceID, domAction.PageInstanceID, status.WorkID, domAction.WorkID, status.APIReady, status.ActiveRequests, status.LastSeenAt, status.LastPingAt, timeout.Milliseconds())
+	outcome := "send_failed"
+	defer func() {
+		latest := client.Status()
+		utils.LogInfo("[Perf][api_complete] request_id=%s action=%s outcome=%s elapsed_ms=%d client=%s page=%s page_instance_id=%s api_ready=%t active_requests=%d last_seen=%s last_ping=%s",
+			reqID, domAction.Action, outcome, time.Since(startTime).Milliseconds(), client.RemoteAddr, latest.PagePath, latest.PageInstanceID, latest.APIReady, latest.ActiveRequests, latest.LastSeenAt, latest.LastPingAt)
+	}()
 	isPauseVideo := key == "key:channels:dom_action" && isDOMAction && domAction.Action == "pause_video"
 	if key == "key:channels:dom_action" && isDOMAction && domAction.Action == "do_comment" {
 		utils.LogInfo("[CommentOperation] dispatch operation_id=%s request_id=%s client=%s page=%s", domAction.OperationID, reqID, client.RemoteAddr, client.Status().PagePath)
@@ -360,20 +370,27 @@ func (h *Hub) callAPIOnClient(client *Client, key string, body interface{}, time
 	}
 
 	// 等待响应
+	outcome = "waiting"
 	select {
+	case <-client.ctx.Done():
+		outcome = "disconnected"
+		return nil, fmt.Errorf("client disconnected: %w", client.ctx.Err())
 	case resp, ok := <-respChan:
 		if !ok {
+			outcome = "channel_closed"
 			utils.LogError("响应通道已关闭: ID=%s", reqID)
 			return nil, errors.New("response channel closed")
 		}
 
 		duration := time.Since(startTime)
 		if resp.ErrCode != 0 {
+			outcome = "api_error"
 			utils.LogError("API 调用失败: ID=%s, Duration=%v, ErrCode=%d, ErrMsg=%s",
 				reqID, duration, resp.ErrCode, resp.ErrMsg)
 			return nil, fmt.Errorf("API error (code=%d): %s", resp.ErrCode, resp.ErrMsg)
 		}
 
+		outcome = "success"
 		utils.LogInfo("API 调用成功: ID=%s, Duration=%v, DataSize=%d",
 			reqID, duration, len(resp.Data))
 		if isPauseVideo {
@@ -382,6 +399,7 @@ func (h *Hub) callAPIOnClient(client *Client, key string, body interface{}, time
 		return resp.Data, nil
 
 	case <-time.After(timeout):
+		outcome = "timeout"
 		utils.LogError("API 调用超时: ID=%s, Timeout=%v", reqID, timeout)
 		return nil, fmt.Errorf("request timeout after %v", timeout)
 	}
@@ -653,6 +671,8 @@ func (h *Hub) ResetSession() {
 	// 4. 清除 lastClient 引用（确保下次选到最新的）
 	h.mu.Lock()
 	h.lastClient = nil
+	h.commentFetchBindings = nil
+	h.commentFetchOwners = nil
 	h.mu.Unlock()
 
 	utils.LogInfo("[Hub] ResetSession: 完成")
@@ -1006,20 +1026,32 @@ type FetchCommentsData struct {
 // CommentSnapshotStatus 评论快照采集状态
 // 用于 Node.js 轮询等待浏览器完成采集
 type CommentSnapshotStatus struct {
-	Done         bool   `json:"done"`          // 采集是否完成
-	Success      bool   `json:"success"`       // 是否成功
-	TotalCount   int    `json:"total_count"`   // 评论总数
-	LoadedCount  int    `json:"loaded_count"`  // 已加载数
-	SnapshotPath string `json:"snapshot_path"` // 快照文件路径（完成时才有）
-	Message      string `json:"message"`       // 状态消息
-	Error        string `json:"error"`         // 错误信息
-	UpdatedAt    int64  `json:"updated_at"`    // 更新时间戳
+	CollectionID   string `json:"collection_id,omitempty"`
+	PageInstanceID string `json:"page_instance_id,omitempty"`
+	URL            string `json:"url,omitempty"`
+	StopReason     string `json:"stop_reason,omitempty"`
+	Complete       bool   `json:"complete"`
+	Stopped        bool   `json:"stopped"`
+	Done           bool   `json:"done"`          // 采集是否完成
+	Success        bool   `json:"success"`       // 是否成功
+	TotalCount     int    `json:"total_count"`   // 评论总数
+	LoadedCount    int    `json:"loaded_count"`  // 已加载数
+	SnapshotPath   string `json:"snapshot_path"` // 快照文件路径（完成时才有）
+	Message        string `json:"message"`       // 状态消息
+	Error          string `json:"error"`         // 错误信息
+	UpdatedAt      int64  `json:"updated_at"`    // 更新时间戳
 }
 
 // SetFetchCommentsResult 设置 fetch_video_comments 结果
 func (h *Hub) SetFetchCommentsResult(taskID string, data *FetchCommentsData) {
 	h.fetchCommentsResultMu.Lock()
 	defer h.fetchCommentsResultMu.Unlock()
+	if previous := h.fetchCommentsResult[taskID]; previous != nil {
+		// The HTTP callback can arrive before the WebSocket waiter times out.
+		if previous.Success || (!previous.RequiresReset && data.RequiresReset) {
+			return
+		}
+	}
 	h.fetchCommentsResult[taskID] = data
 }
 
@@ -1034,6 +1066,14 @@ func (h *Hub) GetFetchCommentsResult(taskID string) *FetchCommentsData {
 func (h *Hub) SetCommentSnapshotStatus(taskID string, status *CommentSnapshotStatus) {
 	h.commentSnapshotStatusMu.Lock()
 	defer h.commentSnapshotStatusMu.Unlock()
+	if previous := h.commentSnapshotStatus[taskID]; previous != nil {
+		if previous.Done {
+			return
+		}
+		if previous.CollectionID != "" && (previous.CollectionID != status.CollectionID || previous.PageInstanceID != status.PageInstanceID || previous.URL != status.URL) {
+			return
+		}
+	}
 	h.commentSnapshotStatus[taskID] = status
 }
 
@@ -1041,29 +1081,18 @@ func (h *Hub) SetCommentSnapshotStatus(taskID string, status *CommentSnapshotSta
 func (h *Hub) GetCommentSnapshotStatus(taskID string) *CommentSnapshotStatus {
 	h.commentSnapshotStatusMu.RLock()
 	defer h.commentSnapshotStatusMu.RUnlock()
-	return h.commentSnapshotStatus[taskID]
+	if status := h.commentSnapshotStatus[taskID]; status != nil {
+		copy := *status
+		return &copy
+	}
+	return nil
 }
 
 // CancelCommentSnapshot 取消指定 missionId 的所有评论快照采集任务
 // 用于任务停止时清理 Hub 端的采集状态
 func (h *Hub) CancelCommentSnapshot(missionId string) {
-	h.commentSnapshotStatusMu.Lock()
-	defer h.commentSnapshotStatusMu.Unlock()
-
-	// 匹配格式: sph_{missionId}_{timestamp}_{random}
-	prefix := fmt.Sprintf("sph_%s_", missionId)
-	cancelled := 0
-	for taskId, status := range h.commentSnapshotStatus {
-		if strings.HasPrefix(taskId, prefix) {
-			status.Done = true
-			status.Success = false
-			status.Error = "mission_cancelled"
-			status.UpdatedAt = time.Now().Unix()
-			cancelled++
-		}
-	}
-	if cancelled > 0 {
-		utils.LogInfo("[Hub] 取消评论快照采集: missionId=%s, 取消 %d 个任务", missionId, cancelled)
+	if err := h.StopMissionCommentSnapshots(missionId); err != nil {
+		utils.LogWarn("[Hub] 评论快照停止未确认: %v", err)
 	}
 }
 

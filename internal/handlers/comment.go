@@ -95,10 +95,14 @@ func (h *CommentHandler) HandleDumpPiniaStore(Conn *SunnyNet.HttpConn) bool {
 	defer Conn.Request.Body.Close()
 
 	var requestData struct {
-		Stores    map[string]interface{} `json:"stores"`
-		Page      string                 `json:"page"`
-		URL       string                 `json:"url"`
-		Timestamp int64                  `json:"timestamp"`
+		CollectionID   string                 `json:"collection_id"`
+		PageInstanceID string                 `json:"page_instance_id"`
+		StopReason     string                 `json:"stop_reason"`
+		Complete       bool                   `json:"complete"`
+		Stores         map[string]interface{} `json:"stores"`
+		Page           string                 `json:"page"`
+		URL            string                 `json:"url"`
+		Timestamp      int64                  `json:"timestamp"`
 	}
 	if err := json.Unmarshal(body, &requestData); err != nil {
 		utils.HandleError(err, "解析 Pinia Store 快照数据")
@@ -113,11 +117,15 @@ func (h *CommentHandler) HandleDumpPiniaStore(Conn *SunnyNet.HttpConn) bool {
 	}
 
 	snapshot := map[string]interface{}{
-		"page":      requestData.Page,
-		"url":       requestData.URL,
-		"timestamp": requestData.Timestamp,
-		"saved_at":  time.Now().Format(time.RFC3339),
-		"stores":    requestData.Stores,
+		"collection_id":    requestData.CollectionID,
+		"page_instance_id": requestData.PageInstanceID,
+		"stop_reason":      requestData.StopReason,
+		"complete":         requestData.Complete,
+		"page":             requestData.Page,
+		"url":              requestData.URL,
+		"timestamp":        requestData.Timestamp,
+		"saved_at":         time.Now().Format(time.RFC3339),
+		"stores":           requestData.Stores,
 	}
 
 	savedPath, err := h.savePiniaStoreSnapshot(snapshot)
@@ -151,7 +159,7 @@ func (h *CommentHandler) savePiniaStoreSnapshot(snapshot map[string]interface{})
 		return "", fmt.Errorf("创建快照目录失败: %v", err)
 	}
 
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	timestamp := time.Now().Format("2006-01-02_15-04-05.000000000")
 	page := ""
 	if p, ok := snapshot["page"].(string); ok && p != "" {
 		page = strings.ReplaceAll(strings.ReplaceAll(p, "/", "_"), "webpages", "")

@@ -39,15 +39,9 @@ type Logger struct {
 	asyncStdout *asyncStdoutWriter
 }
 
-// asyncStdoutWriter 异步写 stdout，写入方永远不阻塞。
-//
-// zerolog ConsoleWriter.Write() 接收完整一行（已含 \n），调用 buf.WriteTo(w.Out)。
-// 若 w.Out.Write() 阻塞 goroutine，ConsoleWriter.Write() 卡在 buf.WriteTo() 里，
-// MultiLevelWriter.mu 不释放，导致所有日志 goroutine 全被 mutex 堵死。
-//
-// 解决：Write() 永远不走阻塞 send。只尝试一次 non-blocking send；
-// channel 满则直接写 stdout（临时慢速由 writeLoop 独自承担）。
-// goroutine 毫秒级退出，MultiLevelWriter.mu 迅速释放。
+// asyncStdoutWriter 使用有界队列隔离控制台背压。
+// 队列已满或关闭时丢弃控制台副本，完整日志仍由独立的文件输出保存。
+// 控制台 I/O 只能在后台 writeLoop 中执行。
 type asyncStdoutWriter struct {
 	out  *os.File
 	ch   chan []byte
@@ -64,15 +58,19 @@ func newAsyncStdoutWriter(bufSize int) *asyncStdoutWriter {
 	return w
 }
 
-// Write 接收 ConsoleWriter 传来的一整行，非阻塞写出，永远不卡住调用方。
+// Write 复制 ConsoleWriter 的可复用缓冲区后入队，不等待控制台输出。
 func (w *asyncStdoutWriter) Write(p []byte) (n int, err error) {
 	select {
-	case w.ch <- p:
 	case <-w.done:
-		os.Stdout.Write(p)
+		return len(p), nil
 	default:
-		// channel 满了直接写 stdout，不等待
-		os.Stdout.Write(p)
+	}
+	queued := append([]byte(nil), p...)
+	select {
+	case <-w.done:
+	case w.ch <- queued:
+	default:
+		// 文件日志已由 MultiLevelWriter 写出，不在此回退到同步控制台 I/O。
 	}
 	return len(p), nil
 }
@@ -82,13 +80,13 @@ func (w *asyncStdoutWriter) writeLoop() {
 		select {
 		case p := <-w.ch:
 			if len(p) > 0 {
-				os.Stdout.Write(p)
+				w.out.Write(p)
 			}
 		case <-w.done:
 			for len(w.ch) > 0 {
 				p := <-w.ch
 				if len(p) > 0 {
-					os.Stdout.Write(p)
+					w.out.Write(p)
 				}
 			}
 			return

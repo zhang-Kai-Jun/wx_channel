@@ -90,7 +90,8 @@ function __try_open_feed_comment_panel() {
   return false;
 }
 
-function __start_feed_comment_collection_with_open_panel() {
+function __start_feed_comment_collection_with_open_panel(task) {
+  if (task && task.stopped) return;
   var opened = __try_open_feed_comment_panel();
   if (opened) {
     __wx_log({ msg: '💬 正在打开评论区...' });
@@ -101,10 +102,11 @@ function __start_feed_comment_collection_with_open_panel() {
   var attempts = 0;
   var maxAttempts = 16;
   var timer = setInterval(function () {
+    if (task && task.stopped) { clearInterval(timer); return; }
     attempts++;
     if (typeof window.__wx_channels_start_comment_collection === 'function') {
       try {
-        window.__wx_channels_start_comment_collection();
+        window.__wx_channels_start_comment_collection(task);
       } finally {
         clearInterval(timer);
       }
@@ -113,8 +115,10 @@ function __start_feed_comment_collection_with_open_panel() {
     if (attempts >= maxAttempts) {
       clearInterval(timer);
       __wx_log({ msg: '❌ 评论采集功能尚未就绪，请稍后重试' });
+      if (task) task.finish('initialization_failed', false);
     }
   }, opened ? 350 : 120);
+  if (task) task.timers.push(timer);
 }
 
 var __wx_feed_runtime_state = {
@@ -890,7 +894,12 @@ if (typeof WXE !== 'undefined') {
 /**
  * 遍历所有 Pinia Store 并发送到后端保存
  */
-function dumpAllPiniaStores() {
+function dumpAllPiniaStores(options) {
+  options = options || {};
+  var task = options.task;
+  function notify(result) {
+    if (task && window.__wx_api_client) return window.__wx_api_client.sendSnapshotStatus(task, result);
+  }
   return new Promise(function (resolve) {
     var app = document.querySelector('[data-v-app]') || document.getElementById('app');
     var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
@@ -901,6 +910,7 @@ function dumpAllPiniaStores() {
     if (!pinia || !pinia._s) {
       console.warn('[Pinia Store] 未找到 Pinia Store');
       __wx_log({ msg: '❌ 未找到 Pinia Store' });
+      notify({ done:true, success:false, stopped:true, complete:false, stop_reason:'save_failed', message:'未找到 Pinia Store' });
       resolve('');
       return;
     }
@@ -920,7 +930,8 @@ function dumpAllPiniaStores() {
         if (name === 'home' && state.flowCommentList) {
           var flowCommentList = state.flowCommentList;
           commentCount = flowCommentList.commentCount || 0;
-          loadedCount = (flowCommentList.items && flowCommentList.items.length) || 0;
+          var list = (flowCommentList.dataList && flowCommentList.dataList.items) || flowCommentList.items || [];
+          loadedCount = list.reduce(function(n, item) { return n + 1 + ((item.levelTwoComment && item.levelTwoComment.length) || 0); }, 0);
         }
       } catch (e) {
         stores[name] = { '__error__': e.message };
@@ -931,13 +942,17 @@ function dumpAllPiniaStores() {
     __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个, 评论数=' + commentCount + ')' });
 
     var page = window.__wx_current_page__ || location.pathname || '';
-    var snapshotTaskId = window.__snapshotTaskId || '';
+    var snapshotTaskId = task ? task.taskId : (window.__sph_snapshot ? '' : (window.__snapshotTaskId || ''));
 
     fetch('/__wx_channels_api/dump_pinia_store', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         stores: stores,
+        collection_id: task ? task.collectionId : '',
+        page_instance_id: task ? task.pageInstanceId : '',
+        stop_reason: options.reason || '',
+        complete: !!options.complete,
         page: page,
         url: location.href,
         timestamp: Date.now()
@@ -949,7 +964,11 @@ function dumpAllPiniaStores() {
         __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: 评论数=' + commentCount + ')' });
 
         // 通知 Go 后端采集完成
-        if (snapshotTaskId) {
+        if (task) {
+          notify({ done:true, success:!!jsonPath && !!options.complete, stopped:true, complete:!!jsonPath && !!options.complete,
+            stop_reason:jsonPath ? options.reason : 'save_failed', total_count:commentCount, loaded_count:loadedCount,
+            snapshot_path:jsonPath || '', message:options.complete ? '快照采集完成' : '快照不完整' });
+        } else if (snapshotTaskId) {
           fetch('/__wx_channels_api/comment_snapshot_callback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -974,7 +993,9 @@ function dumpAllPiniaStores() {
         __wx_log({ msg: '❌ Store快照保存失败: ' + err.message });
 
         // 通知 Go 后端采集失败
-        if (snapshotTaskId) {
+        if (task) {
+          notify({ done:true, success:false, stopped:true, complete:false, stop_reason:'save_failed', message:err.message });
+        } else if (snapshotTaskId) {
           fetch('/__wx_channels_api/comment_snapshot_callback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

@@ -63,16 +63,20 @@ type FeedProfileBody struct {
 
 // ClientStateBody 前端客户端状态
 type ClientStateBody struct {
-	PagePath  string          `json:"pagePath"`
-	Href      string          `json:"href"`
-	APIReady  bool            `json:"apiReady"`
-	Methods   map[string]bool `json:"methods"`
-	Timestamp int64           `json:"timestamp"`
-	UserAgent string          `json:"userAgent,omitempty"`
-	Visible   bool            `json:"visible,omitempty"`
+	PageInstanceID string          `json:"page_instance_id"`
+	WorkID         string          `json:"work_id"`
+	PagePath       string          `json:"pagePath"`
+	Href           string          `json:"href"`
+	APIReady       bool            `json:"apiReady"`
+	Methods        map[string]bool `json:"methods"`
+	Timestamp      int64           `json:"timestamp"`
+	UserAgent      string          `json:"userAgent,omitempty"`
+	Visible        bool            `json:"visible,omitempty"`
 }
 
 type ClientStatus struct {
+	PageInstanceID  string          `json:"page_instance_id"`
+	WorkID          string          `json:"work_id"`
 	RemoteAddr      string          `json:"remote_addr"`
 	PagePath        string          `json:"page_path"`
 	Href            string          `json:"href"`
@@ -130,19 +134,22 @@ type TaskErrorData struct {
 
 // DOMActionBody DOM 操作请求体
 type DOMActionBody struct {
-	OperationID string   `json:"operation_id,omitempty"`
-	Action      string   `json:"action"`
-	Target      string   `json:"target"`
-	Content     string   `json:"content"`
-	Index       int      `json:"index"`
-	URL         string   `json:"url"`
-	TaskID      string   `json:"task_id,omitempty"`
-	ReplyContent string  `json:"replyContent,omitempty"`
+	WorkID         string `json:"work_id,omitempty"`
+	PageInstanceID string `json:"page_instance_id,omitempty"`
+	CollectionID   string `json:"collection_id,omitempty"`
+	OperationID    string `json:"operation_id,omitempty"`
+	Action         string `json:"action"`
+	Target         string `json:"target"`
+	Content        string `json:"content"`
+	Index          int    `json:"index"`
+	URL            string `json:"url"`
+	TaskID         string `json:"task_id,omitempty"`
+	ReplyContent   string `json:"replyContent,omitempty"`
 	// 精准匹配专用字段
-	TargetNum      int      `json:"target_num,omitempty"`
-	TriggerWords   []string `json:"trigger_words,omitempty"`
-	IpFilter       string   `json:"ip_filter,omitempty"`
-	TimeFilter     *struct {
+	TargetNum    int      `json:"target_num,omitempty"`
+	TriggerWords []string `json:"trigger_words,omitempty"`
+	IpFilter     string   `json:"ip_filter,omitempty"`
+	TimeFilter   *struct {
 		Enabled bool   `json:"enabled"`
 		Value   int    `json:"value"`
 		Unit    string `json:"unit"`
@@ -153,7 +160,7 @@ type DOMActionBody struct {
 
 // DOMActionCallbackPayload HTTP 回调的响应负载（来自 inject 的 sendResponseViaHTTP）
 type DOMActionCallbackPayload struct {
-	ID  string `json:"id"`  // 请求 ID（与 APICallRequest.ID 对应）
+	ID  string `json:"id"` // 请求 ID（与 APICallRequest.ID 对应）
 	Req struct {
 		Data struct {
 			ErrCode int             `json:"errCode"`

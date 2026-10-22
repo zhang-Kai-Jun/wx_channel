@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,7 +10,7 @@ import (
 
 func navigationClient(h *Hub, page string, order uint64, load int) *Client {
 	c := NewClient(nil, h)
-	c.UpdateState(ClientStateBody{PagePath: page, APIReady: true, Methods: map[string]bool{"finderUserPage": true}})
+	c.UpdateState(ClientStateBody{PageInstanceID: fmt.Sprintf("page-%d", order), PagePath: page, APIReady: true, Methods: map[string]bool{"finderUserPage": true}})
 	c.registeredSequence = order
 	c.activeRequests = int32(load)
 	return c

@@ -72,7 +72,7 @@ test("发布先上传按哈希定位的 EXE，最后上传包含哈希和长度�
       .trim()
       .split(/\r?\n/)
       .map((s) => s.trim()),
-    [`tos://crmspark/plus/video-channel/${hash}/video_channel.exe`, "tos://crmspark/plus/video-channel/latest.json"]
+    [`tos://crmspark/plus/video-channel/dev/${hash}/video_channel.exe`, "tos://crmspark/plus/video-channel/dev/latest.json"]
   );
   assert.deepEqual(
     readFileSync(f.options, "utf8")
@@ -84,7 +84,7 @@ test("发布先上传按哈希定位的 EXE，最后上传包含哈希和长度�
   assert.deepEqual(JSON.parse(readFileSync(f.capture, "utf8")), {
     version: "1.0.4",
     platform: "win-x64",
-    url: `https://crmspark.tos-cn-shanghai.volces.com/plus/video-channel/${hash}/video_channel.exe`,
+    url: `https://crmspark.tos-cn-shanghai.volces.com/plus/video-channel/dev/${hash}/video_channel.exe`,
     sha256: hash,
     bytes: f.bytes.length,
   });

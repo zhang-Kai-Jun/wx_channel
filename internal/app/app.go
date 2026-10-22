@@ -22,6 +22,7 @@ import (
 	"wx_channel/internal/assets"
 	"wx_channel/internal/config"
 	"wx_channel/internal/database"
+	"wx_channel/internal/diagnostics"
 	"wx_channel/internal/handlers"
 	"wx_channel/internal/router"
 	"wx_channel/internal/services"
@@ -116,6 +117,13 @@ func (app *App) initDataStore() error {
 // Run 启动应用
 func (app *App) Run() {
 	os_env := runtime.GOOS
+	stopSessionDiagnostics := diagnostics.StartSessionMonitor(func(sample diagnostics.SessionSample) {
+		record, err := json.Marshal(sample)
+		if err == nil {
+			utils.LogFileInfo("[Perf][host_session] %s", record)
+		}
+	})
+	defer stopSessionDiagnostics()
 
 	// 确保端口设置正确
 	app.Sunny.SetPort(app.Port)

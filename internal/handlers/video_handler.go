@@ -478,6 +478,19 @@ func (h *APIHandler) HandleTip(Conn *SunnyNet.HttpConn) bool {
 		return true
 	}
 
+	// 性能证据直接落文件，避免同步控制台输出阻塞诊断上传。
+	if strings.HasPrefix(data.Msg, "[Perf] ") {
+		record := strings.TrimPrefix(data.Msg, "[Perf] ")
+		if len(record) <= 16*1024 && json.Valid([]byte(record)) {
+			var compact bytes.Buffer
+			if json.Compact(&compact, []byte(record)) == nil {
+				utils.LogFileInfo("[Perf] %s", compact.String())
+			}
+		}
+		h.sendEmptyResponse(Conn)
+		return true
+	}
+
 	utils.PrintLabelValue("💡", "[提醒]", data.Msg)
 
 	// 记录关键操作到日志文件

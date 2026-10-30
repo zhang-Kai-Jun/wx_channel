@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -19,12 +18,11 @@ func (h *APIHandler) handleManualOpenLink(conn *SunnyNet.HttpConn, req websocket
 		data, _ := json.Marshal(map[string]interface{}{"success": false, "message": message})
 		conn.StopRequest(200, string(data), headers)
 	}
-	link := strings.TrimSpace(req.URL)
-	parsed, err := url.Parse(link)
-	if err != nil || parsed.Scheme != "https" || parsed.Host != "channels.weixin.qq.com" || parsed.User != nil || req.TaskID != "" {
-		reject("手动打开需要有效的视频号链接，不能携带任务编号")
+	if req.TaskID != "" {
+		reject("手动打开链接不能携带任务编号")
 		return
 	}
+	link := strings.TrimSpace(req.URL)
 	result, err := h.domActionHub.CallManualOpenLink(link, 10*time.Second)
 	if err != nil {
 		utils.LogWarn("[ManualOpenLink] 页面未确认收到打开指令: %v", err)

@@ -134,6 +134,7 @@ type TaskErrorData struct {
 
 // DOMActionBody DOM 操作请求体
 type DOMActionBody struct {
+	PreferLatest   bool   `json:"prefer_latest,omitempty"`
 	WorkID         string `json:"work_id,omitempty"`
 	PageInstanceID string `json:"page_instance_id,omitempty"`
 	CollectionID   string `json:"collection_id,omitempty"`

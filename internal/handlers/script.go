@@ -893,7 +893,8 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			nextBuffer: buffers.nextBuffer || '',
 			currentTotalCount: currentTotalCount,
 			store: found.store,
-			home: found.home
+			home: found.home,
+			flowCommentList: found.flowCommentList
 		};
 	}
 
@@ -1544,18 +1545,38 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
         autoScrollTimer = null;
     };
 
+    function snapshotRequestsPending(payload) {
+        if (!payload) return false;
+        var flow = payload.flowCommentList || (payload.home && payload.home.flowCommentList);
+        var dataList = flow && flow.dataList;
+        return !!((dataList && (dataList.fetching || dataList.loading || dataList.isLoading)) ||
+            (flow && (flow.fetching || flow.loading || flow.isLoading)) ||
+            (payload.items && payload.items.some(function(item) { return item.isReplyLoading; })));
+    }
+
+    function snapshotIsLoading(payload) {
+        if (snapshotRequestsPending(payload)) return true;
+        var indicators = document.querySelectorAll('.comment-panel .loading-icon, .comment-list .loading-icon, .comment-item__extra [aria-busy="true"]');
+        for (var i = 0; i < indicators.length; i++) {
+            var node = indicators[i];
+            if (!node.isConnected || node.offsetParent === null ||
+                node.closest('[hidden], [inert], [aria-hidden="true"]')) continue;
+            var style = window.getComputedStyle(node);
+            if (style.visibility !== 'hidden' && style.visibility !== 'collapse') return true;
+        }
+        return false;
+    }
+
     function snapshotFullyLoaded(payload, stats, task) {
-        if (!payload || stats.missingReplies > 0) { if (task) task.endChecks = 0; return false; }
-        if (document.querySelector('.comment-panel .loading-icon, .comment-list .loading-icon, .comment-item__extra [aria-busy="true"]')) { if (task) task.endChecks = 0; return false; }
-        var dataList = payload.home && payload.home.flowCommentList && payload.home.flowCommentList.dataList;
-        var flow = payload.home && payload.home.flowCommentList;
-        if ((dataList && (dataList.loading || dataList.isLoading)) || (flow && (flow.loading || flow.isLoading))) { if (task) task.endChecks = 0; return false; }
+        if (!payload || stats.missingReplies > 0 || snapshotIsLoading(payload)) { if (task) task.endChecks = 0; return false; }
+        var flow = payload.flowCommentList || (payload.home && payload.home.flowCommentList);
+        var dataList = flow && flow.dataList;
         var buttons = document.querySelectorAll('.comment-item__extra .load-more__btn');
         for (var i = 0; i < buttons.length; i++) {
             if (buttons[i].offsetParent !== null && /^[1-9]\d*条回复$/.test((buttons[i].textContent || '').replace(/\s+/g, ''))) { if (task) task.endChecks = 0; return false; }
         }
         if (task && payload.nextBuffer) task.seenCursor = true;
-        var explicitEnd = dataList && (dataList.hasMore === false || dataList.continueFlag === 0);
+        var explicitEnd = dataList && (dataList.noMore === true || dataList.hasMore === false || dataList.continueFlag === 0);
         var ended = !payload.nextBuffer && (explicitEnd || (task && task.seenCursor) || (payload.total > 0 && stats.total >= payload.total));
         if (!task) return !!ended;
         task.endChecks = ended ? (task.endChecks || 0) + 1 : 0;
@@ -1573,6 +1594,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
             }
         }
 		console.log('[评论采集] 初始化采集...');
+		if (task && Date.now() >= task.deadline) { finishManaged('timeout', false); return; }
 		lastProgressText = '';
 
 		// 直接从所有 Pinia store 查找 flowCommentList（优先走这条路）
@@ -1591,6 +1613,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 				var waitCount = 0;
 				var waitTimer = setInterval(function() {
                     if (task && task.stopped) { clearInterval(waitTimer); return; }
+                    if (task && Date.now() >= task.deadline) { finishManaged('timeout', false); return; }
 					waitCount++;
 					var sd = findFlowCommentListInStores();
 					var p = sd ? extractStoreComments(sd) : null;
@@ -1618,7 +1641,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		}
 
 		// 强制触发一次加载更多
-		if (storeForLoadMore) {
+		if (storeForLoadMore && (!task || !snapshotRequestsPending(payload))) {
 			tryTriggerStoreLoadMore(storeForLoadMore);
 		}
 
@@ -1647,17 +1670,18 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 					__wx_log({ msg: '💬 已发现 ' + stats.total + '/' + total + ' 条评论，开始自动继续采集...' });
 				}
 				var sameCountRetries = 0;
-				// 4分钟超时强制终止采集
+				// 新评任务快照最多10分钟；手动采集沿用4分钟。
 				var collectionStartTime = Date.now();
-				var collectionTimeout = 4 * 60 * 1000; // 4分钟
+				var collectionMinutes = task ? 10 : 4;
+				var collectionTimeout = collectionMinutes * 60 * 1000;
 				var loadLoop = setInterval(function() {
                     if (task && task.stopped) { clearInterval(loadLoop); return; }
                     if (task && (window.location.href !== task.url || (task.workId && String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || '') !== task.workId))) { finishManaged('page_changed', false); return; }
-					// 检查4分钟超时
-					if (Date.now() - collectionStartTime >= collectionTimeout) {
+					// 检查单次采集上限
+					if (task ? Date.now() >= task.deadline : Date.now() - collectionStartTime >= collectionTimeout) {
 						if (task) { finishManaged('timeout', false); return; }
-                        console.log('[评论采集] ⏰ 4分钟超时，强制终止采集并保存当前数据');
-						updateProgressHint(currentStats ? currentStats.total : 0, total, '4分钟超时，保存当前数据');
+                        console.log('[评论采集] ⏰ ' + collectionMinutes + '分钟超时，强制终止采集并保存当前数据');
+						updateProgressHint(currentStats ? currentStats.total : 0, total, collectionMinutes + '分钟超时，保存当前数据');
 						clearInterval(loadLoop);
 						// 获取当前已有数据并保存
 						var currentSD = findFlowCommentListInStores();
@@ -1671,7 +1695,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 						if (currentPayload && currentPayload.items && currentPayload.items.length) {
 							var timeoutFormatted = formatComments(currentPayload.items);
 							saveComments(timeoutFormatted, total);
-							var timeoutMsg = '⚠️ 4分钟超时强制终止：已采集 ' + currentPayload.items.length + ' 条评论';
+							var timeoutMsg = '⚠️ ' + collectionMinutes + '分钟超时强制终止：已采集 ' + currentPayload.items.length + ' 条评论';
 							if (typeof __wx_log === 'function') {
 								__wx_log({ msg: timeoutMsg });
 							}
@@ -1728,8 +1752,12 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 						return;
 					}
 
-					// 检查是否卡死
-					if (currentStats.total === stats.total) {
+                    // 请求中仅重置无增长计数，继续滚动和展开其他可操作回复。
+                    if (task && snapshotRequestsPending(currentPayload)) {
+                        stats = currentStats;
+                        sameCountRetries = 0;
+                        expandSecondaryComments();
+					} else if (currentStats.total === stats.total) {
 						sameCountRetries++;
 						expandSecondaryComments();
 						if (sameCountRetries > 10) {
@@ -1763,7 +1791,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 
 					console.log('[评论采集] 采集中... ' + currentStats.total + '/' + total);
 
-					if (currentStore) tryTriggerStoreLoadMore(currentStore);
+					if (currentStore && (!task || !snapshotRequestsPending(currentPayload))) tryTriggerStoreLoadMore(currentStore);
 					if (!scrollCommentList()) {
 						updateProgressHint(currentStats.total, total, '等待评论侧栏继续加载');
 					}

@@ -77,6 +77,8 @@ func (h *Hub) commentFetchClient(req DOMActionBody) (*Client, error) {
 			return binding.client, nil
 		}
 	}
+	// Only an unscoped first bind may opt into latest-connection selection.
+	preferLatest := !bound && req.Action == "bind_comment_page" && req.PreferLatest && req.URL == "" && req.PageInstanceID == ""
 	var selected *Client
 	for client := range h.clients {
 		status := client.Status()
@@ -91,7 +93,12 @@ func (h *Hub) commentFetchClient(req DOMActionBody) (*Client, error) {
 			continue
 		}
 		if selected != nil {
-			return nil, fmt.Errorf("%w: multiple matching work pages", ErrCommentPageUnavailable)
+			if !preferLatest {
+				return nil, fmt.Errorf("%w: multiple matching work pages", ErrCommentPageUnavailable)
+			}
+			if client.registeredSequence <= selected.registeredSequence {
+				continue
+			}
 		}
 		selected = client
 	}

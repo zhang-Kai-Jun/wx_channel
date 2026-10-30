@@ -361,7 +361,7 @@ function __remember_current_feed(feed, reason) {
 }
 
 function __sync_feed_profile_with_runtime(forceLog) {
-  showFeedDebugInfo('🔍 同步视频信息中... (runtime)');
+  // showFeedDebugInfo('🔍 同步视频信息中... (runtime)');
 
   console.log('[feed.js] __sync_feed_profile_with_runtime 开始执行, forceLog:', forceLog);
 
@@ -369,7 +369,7 @@ function __sync_feed_profile_with_runtime(forceLog) {
   console.log('[feed.js] runtimeFeed:', runtimeFeed ? '找到' : '未找到');
   if (runtimeFeed) {
     console.log('[feed.js] runtimeFeed 内容:', runtimeFeed.objectDesc ? runtimeFeed.objectDesc.media : '无 media');
-    showFeedDebugInfo('✅ 从页面获取到视频信息');
+    // showFeedDebugInfo('✅ 从页面获取到视频信息');
     return __remember_current_feed(runtimeFeed, forceLog ? 'runtime' : '');
   }
 
@@ -897,120 +897,100 @@ if (typeof WXE !== 'undefined') {
 function dumpAllPiniaStores(options) {
   options = options || {};
   var task = options.task;
+  var commentCount = 0;
+  var loadedCount = 0;
   function notify(result) {
     if (task && window.__wx_api_client) return window.__wx_api_client.sendSnapshotStatus(task, result);
   }
-  return new Promise(function (resolve) {
-    var app = document.querySelector('[data-v-app]') || document.getElementById('app');
-    var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
-    var appContext = vue && (vue.appContext || (vue.ctx && vue.ctx.appContext));
-    var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
-    var pinia = globalProperties && globalProperties.$pinia;
-
-    if (!pinia || !pinia._s) {
-      console.warn('[Pinia Store] 未找到 Pinia Store');
-      __wx_log({ msg: '❌ 未找到 Pinia Store' });
-      notify({ done:true, success:false, stopped:true, complete:false, stop_reason:'save_failed', message:'未找到 Pinia Store' });
-      resolve('');
-      return;
-    }
-
-    var stores = {};
-    var storeNames = [];
-    var commentCount = 0;
-    var loadedCount = 0;
-
-    pinia._s.forEach(function (store, name) {
-      try {
-        var state = (store.$state && JSON.parse(JSON.stringify(store.$state))) || {};
-        stores[name] = state;
-        storeNames.push(name);
-
-        // 从 home store 中提取评论数量
-        if (name === 'home' && state.flowCommentList) {
-          var flowCommentList = state.flowCommentList;
-          commentCount = flowCommentList.commentCount || 0;
-          var list = (flowCommentList.dataList && flowCommentList.dataList.items) || flowCommentList.items || [];
-          loadedCount = list.reduce(function(n, item) { return n + 1 + ((item.levelTwoComment && item.levelTwoComment.length) || 0); }, 0);
-        }
-      } catch (e) {
-        stores[name] = { '__error__': e.message };
-      }
-    });
-
-    console.log('[Pinia Store] 快照数据:', stores);
-    __wx_log({ msg: '💾 Store快照采集中... (' + storeNames.length + '个, 评论数=' + commentCount + ')' });
-
-    var page = window.__wx_current_page__ || location.pathname || '';
+  function saveFailed(error) {
+    __wx_log({ msg: '❌ Store快照保存失败: ' + error });
+    notify({ done:true, success:false, stopped:true, complete:false,
+      stop_reason:options.reason || 'save_failed', error:error,
+      total_count:commentCount, loaded_count:loadedCount, snapshot_path:'',
+      message:'快照保存失败：' + error });
+  }
+  function stillOwned() {
+    return !task || (!task.result && window.__sph_snapshot === task && window.location.href === task.url &&
+      window.__wx_api_client.commentPageInstance() === task.pageInstanceId &&
+      (!task.workId || String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || '') === task.workId));
+  }
+  return (async function() {
     var snapshotTaskId = task ? task.taskId : (window.__sph_snapshot ? '' : (window.__snapshotTaskId || ''));
-
-    fetch('/__wx_channels_api/dump_pinia_store', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        stores: stores,
-        collection_id: task ? task.collectionId : '',
-        page_instance_id: task ? task.pageInstanceId : '',
-        stop_reason: options.reason || '',
-        complete: !!options.complete,
-        page: page,
-        url: location.href,
-        timestamp: Date.now()
-      })
-    }).then(function (res) { return res.json(); })
-      .then(function (data) {
-        var jsonPath = (data && data.path) ? data.path : '';
-        console.log('[Pinia Store] 快照已保存:', data);
-        __wx_log({ msg: '✅ Store快照已保存 (' + storeNames.length + '个: 评论数=' + commentCount + ')' });
-
-        // 通知 Go 后端采集完成
-        if (task) {
-          notify({ done:true, success:!!jsonPath && !!options.complete, stopped:true, complete:!!jsonPath && !!options.complete,
-            stop_reason:jsonPath ? options.reason : 'save_failed', total_count:commentCount, loaded_count:loadedCount,
-            snapshot_path:jsonPath || '', message:options.complete ? '快照采集完成' : '快照不完整' });
-        } else if (snapshotTaskId) {
-          fetch('/__wx_channels_api/comment_snapshot_callback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              task_id: snapshotTaskId,
-              done: true,
-              success: !!jsonPath,
-              total_count: commentCount,
-              loaded_count: loadedCount,
-              snapshot_path: jsonPath || '',
-              message: jsonPath ? '快照采集完成' : '快照路径为空'
-            })
-          }).catch(function (e) {
-            console.error('[Pinia Store] 回调失败:', e);
-          });
-        }
-
-        resolve(jsonPath);
-      })
-      .catch(function (err) {
-        console.error('[Pinia Store] 保存失败:', err);
-        __wx_log({ msg: '❌ Store快照保存失败: ' + err.message });
-
-        // 通知 Go 后端采集失败
-        if (task) {
-          notify({ done:true, success:false, stopped:true, complete:false, stop_reason:'save_failed', message:err.message });
-        } else if (snapshotTaskId) {
-          fetch('/__wx_channels_api/comment_snapshot_callback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              task_id: snapshotTaskId,
-              done: true,
-              success: false,
-              error: err.message || '保存失败'
-            })
-          }).catch(function () {});
-        }
-
-        resolve('');
+    try {
+      var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+      var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
+      var appContext = (vue && (vue.appContext || (vue.ctx && vue.ctx.appContext))) ||
+        (app && app.__vue_app__ && app.__vue_app__._context);
+      var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+      var pinia = globalProperties && globalProperties.$pinia;
+      if (!pinia || !pinia._s) throw new Error('未找到 Pinia Store');
+      var stores = {};
+      var storeNames = [];
+      pinia._s.forEach(function(store, name) {
+        try {
+          var state = (store.$state && JSON.parse(JSON.stringify(store.$state))) || {};
+          stores[name] = state;
+          storeNames.push(name);
+          if (name === 'home' && state.flowCommentList) {
+            var flow = state.flowCommentList;
+            commentCount = flow.commentCount || 0;
+            var list = (flow.dataList && flow.dataList.items) || flow.items || [];
+            loadedCount = list.reduce(function(n, item) { return n + 1 + ((item.levelTwoComment && item.levelTwoComment.length) || 0); }, 0);
+          }
+        } catch (error) { stores[name] = { '__error__':error.message }; }
       });
-  });
+      // 冻结停止时数据，保存重试不再扫描 Store、不滚动或重新采集。
+      var payload = JSON.stringify({ stores:stores, collection_id:task ? task.collectionId : '',
+        page_instance_id:task ? task.pageInstanceId : '', stop_reason:options.reason || '', complete:!!options.complete,
+        page:window.__wx_current_page__ || location.pathname || '', url:task ? task.url : location.href, timestamp:Date.now() });
+      __wx_log({ msg:'💾 Store快照保存中... (' + storeNames.length + '个, 已加载=' + loadedCount + '/' + commentCount + ')' });
+      var jsonPath = '';
+      var lastError = '';
+      for (var attempt = 0; attempt < (task ? 3 : 1); attempt++) {
+        if (!stillOwned()) { lastError = '保存期间任务已结束或作品页面已变化'; break; }
+        try {
+          var res = await fetch('/__wx_channels_api/dump_pinia_store', {
+            method:'POST', headers:{ 'Content-Type':'application/json' }, body:payload,
+            signal:AbortSignal.timeout(10000)
+          });
+          if (!res.ok) throw new Error('保存请求 HTTP ' + res.status);
+          var data = await res.json();
+          if (!data || !data.path) throw new Error(String((data && (data.error || data.message)) || '保存接口未返回文件路径'));
+          if (!stillOwned()) { lastError = '保存期间任务已结束或作品页面已变化'; break; }
+          jsonPath = data.path;
+          break;
+        } catch (error) { lastError = error.message || String(error); }
+        if (attempt < (task ? 2 : 0) && stillOwned()) {
+          __wx_log({ msg:'⚠️ Store快照保存失败，2秒后仅重试保存（' + (attempt + 1) + '/2）：' + lastError });
+          await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+        } else break;
+      }
+      if (!jsonPath) throw new Error(lastError || '快照路径为空');
+      __wx_log({ msg:'✅ Store快照已保存 (' + storeNames.length + '个, 已加载=' + loadedCount + '/' + commentCount + ')' });
+      if (task) {
+        notify({ done:true, success:!!options.complete, stopped:true, complete:!!options.complete,
+          stop_reason:options.reason, total_count:commentCount, loaded_count:loadedCount,
+          snapshot_path:jsonPath, message:options.complete ? '快照采集完成' : '快照不完整' });
+      } else if (snapshotTaskId) {
+        await fetch('/__wx_channels_api/comment_snapshot_callback', {
+          method:'POST', headers:{ 'Content-Type':'application/json' },
+          body:JSON.stringify({ task_id:snapshotTaskId, done:true, success:true, total_count:commentCount,
+            loaded_count:loadedCount, snapshot_path:jsonPath, message:'快照采集完成' })
+        }).catch(function() {});
+      }
+      return jsonPath;
+    } catch (error) {
+      var message = error.message || String(error);
+      saveFailed(message);
+      if (!task && snapshotTaskId) {
+        await fetch('/__wx_channels_api/comment_snapshot_callback', {
+          method:'POST', headers:{ 'Content-Type':'application/json' },
+          body:JSON.stringify({ task_id:snapshotTaskId, done:true, success:false, error:message })
+        }).catch(function() {});
+      }
+      return '';
+    }
+  })();
 }
 
 // ============================================================

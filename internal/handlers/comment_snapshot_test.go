@@ -13,7 +13,45 @@ import (
 	"github.com/qtgolang/SunnyNet/public"
 	"wx_channel/internal/config"
 	"wx_channel/internal/utils"
+	"wx_channel/internal/websocket"
 )
+
+func TestSnapshotStatusRetainsTerminalOwnership(t *testing.T) {
+	for _, reason := range []string{"completed", "no_growth", "timeout"} {
+		t.Run(reason, func(t *testing.T) {
+			h := NewAPIHandler(&config.Config{}, websocket.NewHub(nil))
+			complete := reason == "completed"
+			payload, err := json.Marshal(map[string]interface{}{
+				"task_id": "snapshot", "collection_id": "collection", "page_instance_id": "page",
+				"url":  "https://channels.weixin.qq.com/web/pages/feed?oid=a",
+				"done": true, "success": complete, "complete": complete, "stopped": true, "stop_reason": reason,
+				"error": "disk unavailable", "loaded_count": 7280, "total_count": 15702,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			post := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "/__wx_channels_api/comment_snapshot_callback", strings.NewReader(string(payload)))}
+			h.Handle(post)
+			post.Response.Body.Close()
+			get := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("GET", "/__wx_channels_api/comment_snapshot_status?task_id=snapshot", nil)}
+			h.Handle(get)
+			defer get.Response.Body.Close()
+			var result map[string]interface{}
+			if err := json.NewDecoder(get.Response.Body).Decode(&result); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"collection_id", "page_instance_id", "url", "done", "success", "complete", "stopped", "stop_reason", "error", "loaded_count", "total_count"} {
+				var expected map[string]interface{}
+				if err := json.Unmarshal(payload, &expected); err != nil {
+					t.Fatal(err)
+				}
+				if result[key] != expected[key] {
+					t.Fatalf("status lost %s: got %v, want %v", key, result[key], expected[key])
+				}
+			}
+		})
+	}
+}
 
 func TestSnapshotFileRetainsCollectionAndCompleteness(t *testing.T) {
 	base, err := utils.GetBaseDir()

@@ -279,6 +279,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 	var req struct {
 		CollectionID   string `json:"collection_id"`
 		PageInstanceID string `json:"page_instance_id"`
+		PreferLatest   bool   `json:"prefer_latest"`
 		RetryPending   bool   `json:"retry_pending"`
 		Action         string `json:"action"`
 		Target         string `json:"target"`
@@ -330,6 +331,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 	domReq := websocket.DOMActionBody{
 		CollectionID:   req.CollectionID,
 		PageInstanceID: req.PageInstanceID,
+		PreferLatest:   req.PreferLatest,
 		OperationID:    req.OperationID,
 		Action:         req.Action,
 		Target:         req.Target,
@@ -1326,8 +1328,8 @@ func (h *APIHandler) HandleCommentSnapshotCallback(Conn *SunnyNet.HttpConn) {
 		UpdatedAt:    time.Now().Unix(),
 	})
 
-	utils.LogInfo("[CommentSnapshotCallback] 收到快照状态: task_id=%s, done=%v, success=%v, total=%d, loaded=%d, path=%s",
-		payload.TaskID, payload.Done, payload.Success, payload.TotalCount, payload.LoadedCount, payload.SnapshotPath)
+	utils.LogInfo("[CommentSnapshotCallback] 收到快照状态: task_id=%s, done=%v, success=%v, total=%d, loaded=%d, path=%s, stop_reason=%s, error=%s",
+		payload.TaskID, payload.Done, payload.Success, payload.TotalCount, payload.LoadedCount, payload.SnapshotPath, payload.StopReason, payload.Error)
 
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json")
@@ -1369,13 +1371,19 @@ func (h *APIHandler) HandleGetCommentSnapshotStatus(Conn *SunnyNet.HttpConn) {
 	var responseData map[string]interface{}
 	if result != nil {
 		responseData = map[string]interface{}{
-			"done":          result.Done,
-			"success":       result.Success,
-			"total_count":   result.TotalCount,
-			"loaded_count":  result.LoadedCount,
-			"snapshot_path": result.SnapshotPath,
-			"message":       result.Message,
-			"error":         result.Error,
+			"collection_id":    result.CollectionID,
+			"page_instance_id": result.PageInstanceID,
+			"url":              result.URL,
+			"stop_reason":      result.StopReason,
+			"complete":         result.Complete,
+			"stopped":          result.Stopped,
+			"done":             result.Done,
+			"success":          result.Success,
+			"total_count":      result.TotalCount,
+			"loaded_count":     result.LoadedCount,
+			"snapshot_path":    result.SnapshotPath,
+			"message":          result.Message,
+			"error":            result.Error,
 		}
 	} else {
 		// 尚未收到状态，视为进行中

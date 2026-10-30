@@ -684,6 +684,10 @@ window.__wx_api_client = {
     }
     if (current && !current.stopped) return { success:false, message:'上一快照尚未停止' };
     var task = { taskId:taskId, collectionId:body.collection_id || '', pageInstanceId:this.commentPageInstance(), url:window.location.href, workId:String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || ''), stopped:false, finished:false, timers:[] };
+    // 同一作品的初始化重试共用十分钟预算，不因更换快照编号重新计时。
+    task.deadline = current && current.collectionId === task.collectionId &&
+      current.pageInstanceId === task.pageInstanceId && current.url === task.url &&
+      typeof current.deadline === 'number' ? current.deadline : Date.now() + 600000;
     window.__sph_snapshot = task;
     history.set(taskId, task);
     if (history.size > 16) history.delete(history.keys().next().value);
@@ -718,6 +722,72 @@ window.__wx_api_client = {
     } else { task.finish('initialization_failed', false); }
     } catch (error) { task.finish('initialization_failed', false); }
     return { success:true };
+  },
+
+  // 只读取现有采集循环已加载的 Store，不触发滚动、加载更多或切换页面。
+  readCommentSnapshot: function (body) {
+    var task = window.__sph_snapshot;
+    if (!task || !body.task_id || !body.collection_id || task.collectionId !== body.collection_id) {
+      return { success:false, message:'评论增量读取的任务归属不匹配或请求编号缺失' };
+    }
+    if (task.pageInstanceId !== this.commentPageInstance() || task.url !== window.location.href ||
+        (body.page_instance_id && body.page_instance_id !== task.pageInstanceId) ||
+        (body.url && body.url !== task.url)) {
+      return { success:false, message:'评论增量读取的页面实例已变化' };
+    }
+    var profile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+    if (task.workId && String((profile && profile.id) || '') !== task.workId) {
+      return { success:false, message:'评论增量读取的作品身份已变化' };
+    }
+    try {
+      if (typeof window.__sph_findFlowCommentListInStores !== 'function') {
+        return { success:false, message:'评论 Store 读取函数尚未就绪' };
+      }
+      var found = window.__sph_findFlowCommentListInStores();
+      var flow = found && found.flowCommentList;
+      var feed = (flow && flow.feed) || {};
+      if (task.workId && flow && String(feed.id || '') !== task.workId) {
+        return { success:false, message:'评论 Store 不属于当前作品' };
+      }
+      // 校验归属后才能重放；缓存与去重状态均随快照任务隔离。
+      if (task.readRequests && task.readRequests.has(body.task_id)) return task.readRequests.get(body.task_id);
+      var items = flow && ((flow.dataList && flow.dataList.items) || flow.items);
+      if (flow && !Array.isArray(items)) return { success:false, message:'评论 Store 数据格式不兼容' };
+      var seen = task.readSeen || new Set();
+      var batchKeys = new Set();
+      var rawItems = [];
+      function append(raw, level, parentId) {
+        if (!raw) return;
+        var author = raw.authorContact || {};
+        var identity = raw.commentId || [raw.username || author.username || '', raw.createtime || '', raw.content || ''];
+        var key = JSON.stringify([level, parentId, identity]);
+        if (seen.has(key) || batchKeys.has(key)) return;
+        var copy = Object.assign({}, raw, { level:level, parentCommentId:parentId });
+        delete copy.levelTwoComment;
+        rawItems.push(copy);
+        batchKeys.add(key);
+      }
+      (items || []).forEach(function(item) {
+        if (!item) return;
+        append(item, 'level1', '');
+        if (Array.isArray(item.levelTwoComment)) item.levelTwoComment.forEach(function(reply) {
+          append(reply, 'level2', String(item.commentId || ''));
+        });
+      });
+      var desc = feed.objectDesc || {};
+      // 深拷贝冻结本批数据；丢失响应后重放同一编号，不被后续 Store 更新污染。
+      var result = JSON.parse(JSON.stringify({ success:true, raw_items:rawItems, video_info:{
+        title:desc.description || '', author_name:(feed.contact && feed.contact.nickname) || '',
+        topics:Array.isArray(desc.topicList) ? desc.topicList.map(function(topic) { return topic.topicName; }).join(' ') : ''
+      } }));
+      if (!task.readRequests) task.readRequests = new Map();
+      task.readRequests.set(body.task_id, result);
+      batchKeys.forEach(function(key) { seen.add(key); });
+      task.readSeen = seen;
+      return result;
+    } catch (error) {
+      return { success:false, message:'评论增量读取失败：' + (error.message || String(error)) };
+    }
   },
 
   stopCommentSnapshot: function (taskId) {
@@ -784,6 +854,9 @@ window.__wx_api_client = {
         }
         if (body.action === 'start_comment_snapshot') {
           resp(this.startCommentSnapshot(body)); return;
+        }
+        if (body.action === 'read_comment_snapshot') {
+          resp(this.readCommentSnapshot(body)); return;
         }
         if (body.action === 'stop_comment_snapshot') {
           resp(this.stopCommentSnapshot(body.task_id)); return;
@@ -2669,9 +2742,35 @@ window.__wx_api_client = {
 
       // get_comment_count 操作 - 从 Pinia Store 获取当前视频的评论总数
       if (action === 'get_comment_count') {
-        var commentCountAttempt = async function() {
-          console.log('[API客户端] get_comment_count 开始执行');
-          var commentCount = 0;
+        var countPage = body.page_instance_id || this.commentPageInstance();
+        var countUrl = body.url || window.location.href;
+        var currentWork = function() {
+          var profile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+          return String((profile && profile.id) || '');
+        };
+        var countWork = body.work_id || currentWork();
+        var countFailure = function(reason, message) {
+          return {
+            success: false, ready: false, reason: reason, message: message,
+            work_id: currentWork(), page_instance_id: self.commentPageInstance(),
+            source: 'comment_panel'
+          };
+        };
+        var countIdentityError = function() {
+          if (self.commentPageInstance() !== countPage || window.location.href !== countUrl) {
+            return countFailure('page_changed', '评论总数所属页面已变化');
+          }
+          var work = currentWork();
+          if (countWork && work !== countWork) {
+            return countFailure('work_mismatch', '评论总数所属作品已变化');
+          }
+          if (!work) return countFailure('work_not_ready', '当前作品身份尚未就绪');
+          countWork = work;
+          return null;
+        };
+        var readCommentCount = function() {
+          var identityError = countIdentityError();
+          if (identityError) return identityError;
           try {
             var app = document.querySelector('[data-v-app]') || document.getElementById('app');
             var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
@@ -2679,50 +2778,73 @@ window.__wx_api_client = {
             var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
             var pinia = globalProperties && globalProperties.$pinia;
             if (!pinia || !pinia._s) {
-              console.log('[API客户端] get_comment_count: pinia 未就绪');
-              return { success: false, message: 'pinia 未就绪', count: 0 };
+              return countFailure('pinia_not_ready', '评论 Store 尚未就绪');
             }
 
-            var stores = pinia._s;
-            var iterator = stores.keys();
-            var result = iterator.next();
-
-            while (!result.done) {
-              var id = result.value;
-              var s = stores.get(id);
-              if (!s) { result = iterator.next(); continue; }
-
-              var home = s.home || (s.$state && s.$state.home);
-              var flowCommentList = null;
-              if (home && home.flowCommentList) {
-                flowCommentList = home.flowCommentList;
-              } else if (s.flowCommentList) {
-                flowCommentList = s.flowCommentList;
-              }
-
-              if (flowCommentList && flowCommentList.commentCount !== undefined) {
-                commentCount = flowCommentList.commentCount;
-                break;
-              }
-
-              var state = s.$state || s;
-              if (state.home && state.home.flowCommentList && state.home.flowCommentList.commentCount !== undefined) {
-                commentCount = state.home.flowCommentList.commentCount;
-                break;
-              }
-
-              result = iterator.next();
+            // 只采用评论 Store 自身属于当前作品的候选，重复引用同一 Store 不算歧义。
+            var candidates = [];
+            pinia._s.forEach(function(store) {
+              if (!store) return;
+              var state = store.$state || store;
+              var containers = [store, state, store.home, state.home];
+              containers.forEach(function(container) {
+                var flow = container && container.flowCommentList;
+                if (!flow || !flow.feed || String(flow.feed.id || '') !== countWork) return;
+                if (container.feed && String(container.feed.id || '') !== countWork) return;
+                if (candidates.indexOf(flow) === -1) candidates.push(flow);
+              });
+            });
+            if (candidates.length !== 1) {
+              return countFailure(candidates.length ? 'ambiguous_store' : 'count_not_ready',
+                candidates.length ? '当前作品存在多个评论 Store，无法确认总数' : '当前作品的评论 Store 尚未就绪');
             }
+            var flow = candidates[0];
+            var rawCount = flow.commentCount;
+            var commentCount = typeof rawCount === 'number' ||
+              (typeof rawCount === 'string' && rawCount.trim()) ? Number(rawCount) : NaN;
+            var dataList = flow.dataList;
+            var items = dataList && dataList.items;
+            var loaded = dataList && dataList.fetching === false && Array.isArray(items) &&
+              (items.length > 0 || dataList.noMore === true);
+            var profile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+            var validZero = loaded && items.length === 0 && dataList.noMore === true &&
+              !(Number(flow.feed.commentCount) > 0) && !(Number(profile.commentCount) > 0);
+            if (!Number.isSafeInteger(commentCount) || commentCount < 0 || !loaded ||
+              (commentCount === 0 && !validZero)) {
+              return countFailure('count_not_ready', '评论总数缺失、无效或首批评论尚未加载完成');
+            }
+            identityError = countIdentityError();
+            if (identityError) return identityError;
+            return {
+              success: true, ready: true, count: commentCount,
+              work_id: countWork, page_instance_id: self.commentPageInstance(),
+              source: 'comment_panel'
+            };
           } catch (e) {
             console.error('[API客户端] get_comment_count 异常:', e);
-            return { success: false, message: e.message, count: 0 };
+            return countFailure('count_not_ready', '读取评论总数失败：' + e.message);
           }
-
-          console.log('[API客户端] get_comment_count: 评论总数=' + commentCount);
-          return { success: true, count: commentCount };
         };
 
-        return await _executeWithRetry(commentCountAttempt, 'get_comment_count');
+        // 总数探查只读 Store，不走全页 DOM 解析或启动滚动采集。
+        var panelAttempted = false;
+        var countResult;
+        for (var countAttempt = 1; countAttempt <= 3; countAttempt++) {
+          console.log('[API客户端] get_comment_count 第' + countAttempt + '次尝试');
+          countResult = readCommentCount();
+          if (countResult.success || countResult.reason === 'page_changed' ||
+            countResult.reason === 'work_mismatch') return countResult;
+          if (countAttempt < 3) {
+            if (!panelAttempted && countResult.reason === 'count_not_ready' &&
+              typeof window.__try_open_feed_comment_panel === 'function') {
+              panelAttempted = true;
+              try { window.__try_open_feed_comment_panel(); }
+              catch (e) { console.warn('[API客户端] 打开原生评论面板失败:', e); }
+            }
+            await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+          }
+        }
+        return countResult;
       }
 
       // do_like_comment 操作 - 在评论区定位指定评论并点赞

@@ -1,9 +1,71 @@
 package websocket
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
+
+func TestAuthorFirstBindUsesLatestConnectionAndKeepsBinding(t *testing.T) {
+	h := NewHub(nil)
+	old := navigationClient(h, "/web/pages/feed", 1, 0)
+	latest := navigationClient(h, "/web/pages/feed", 2, 5)
+	old.href = "https://channels.weixin.qq.com/web/pages/feed?oid=old"
+	latest.href = "https://channels.weixin.qq.com/web/pages/feed?oid=latest"
+	h.clients[old], h.clients[latest] = true, true
+	// Updating an old page's heartbeat does not make its connection newer.
+	old.TouchPing()
+	req := DOMActionBody{Action: "bind_comment_page", CollectionID: "author-video", PreferLatest: true}
+	page, err := h.BindCommentPage(req)
+	if err != nil || page.Href != latest.href || page.PageInstanceID != latest.pageInstanceID {
+		t.Fatalf("latest connection not selected: %+v, %v", page, err)
+	}
+	newer := navigationClient(h, "/web/pages/feed", 3, 0)
+	newer.href = latest.href
+	h.clients[newer] = true
+	page, err = h.BindCommentPage(req)
+	if err != nil || page.PageInstanceID != latest.pageInstanceID {
+		t.Fatalf("existing binding changed: %+v, %v", page, err)
+	}
+	for _, action := range []string{"get_url", "fetch_video_comments", "stop_comment_fetch"} {
+		scoped := DOMActionBody{Action: action, CollectionID: req.CollectionID, URL: latest.href, PageInstanceID: latest.pageInstanceID}
+		checkNavigationDispatch(t, h, latest, action, func() error {
+			_, err := h.CallCommentFetch(scoped, time.Second)
+			return err
+		})
+	}
+	if len(h.clients) != 3 || old.ctx.Err() != nil || latest.ctx.Err() != nil || newer.ctx.Err() != nil {
+		t.Fatal("extra pages must be ignored without closing or rebuilding")
+	}
+	delete(h.clients, latest)
+	latest.cancel()
+	if _, err := h.BindCommentPage(req); !errors.Is(err, ErrCommentPageUnavailable) {
+		t.Fatalf("lost binding must not switch to another document: %v", err)
+	}
+}
+
+func TestLatestCommentBindDoesNotRelaxScopedOrOtherRequests(t *testing.T) {
+	h := NewHub(nil)
+	href := "https://channels.weixin.qq.com/web/pages/feed?oid=work"
+	for i := uint64(1); i <= 2; i++ {
+		client := navigationClient(h, "/web/pages/feed", i, 0)
+		client.href = href
+		h.clients[client] = true
+	}
+	for _, req := range []DOMActionBody{
+		{Action: "bind_comment_page", CollectionID: "default"},
+		{Action: "bind_comment_page", CollectionID: "url", URL: href, PreferLatest: true},
+		{Action: "fetch_video_comments", CollectionID: "fetch", PreferLatest: true},
+	} {
+		if _, err := h.commentFetchClient(req); !errors.Is(err, ErrCommentPageUnavailable) {
+			t.Fatalf("ambiguous request must remain strict: %+v, %v", req, err)
+		}
+	}
+	page, err := h.BindCommentPage(DOMActionBody{Action: "bind_comment_page", CollectionID: "explicit", PageInstanceID: "page-1", PreferLatest: true})
+	if err != nil || page.PageInstanceID != "page-1" {
+		t.Fatalf("explicit page instance ignored: %+v, %v", page, err)
+	}
+}
 
 func TestCommentFetchBindsFeedAndReconnectsOnlySameWork(t *testing.T) {
 	h := NewHub(nil)

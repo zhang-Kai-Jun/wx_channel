@@ -102,10 +102,26 @@ func (h *ScriptHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 	return false
 }
 
+// cleanModifiedResponseHeaders 清理明文改写后的正文元数据，并统一禁用浏览器缓存。
+func cleanModifiedResponseHeaders(Conn *SunnyNet.HttpConn) {
+	Conn.Response.Header.Del("Content-Encoding")
+	Conn.Response.Header.Del("Content-Length")
+	Conn.Response.ContentLength = -1
+	Conn.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	Conn.Response.Header.Set("Pragma", "no-cache")
+	Conn.Response.Header.Set("Expires", "0")
+}
+
+// hasEncodedResponse 压缩正文保持原样透传，避免按明文改写后错误清除编码头。
+func hasEncodedResponse(Conn *SunnyNet.HttpConn) bool {
+	encoding := strings.TrimSpace(Conn.Response.Header.Get("Content-Encoding"))
+	return encoding != "" && !strings.EqualFold(encoding, "identity")
+}
+
 // HandleHTMLResponse 处理HTML响应，注入JavaScript代码
 func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path string, body []byte) bool {
 	contentType := strings.ToLower(Conn.Response.Header.Get("content-type"))
-	if contentType != "text/html; charset=utf-8" {
+	if contentType != "text/html; charset=utf-8" || hasEncodedResponse(Conn) {
 		return false
 	}
 
@@ -125,10 +141,12 @@ func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path s
 		utils.LogFileInfo("页面已成功加载！")
 		utils.LogFileInfo("已添加视频缓存监控和提醒功能")
 		utils.LogFileInfo("[页面加载] 视频号页面已加载 | Host=%s | Path=%s", host, path)
+		cleanModifiedResponseHeaders(Conn)
 		Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(html)))
 		return true
 	}
 
+	cleanModifiedResponseHeaders(Conn)
 	Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(html)))
 	return true
 }
@@ -136,7 +154,7 @@ func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path s
 // HandleJavaScriptResponse 处理JavaScript响应，修改JavaScript代码
 func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, path string, body []byte) bool {
 	contentType := strings.ToLower(Conn.Response.Header.Get("content-type"))
-	if contentType != "application/javascript" {
+	if contentType != "application/javascript" || hasEncodedResponse(Conn) {
 		return false
 	}
 
@@ -150,18 +168,19 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 
 	// 添加版本号到JS引用
 	depReg := regexp.MustCompile(`"js/([^"]{1,})\.js"`)
-	fromReg := regexp.MustCompile(`from {0,1}"([^"]{1,})\.js"`)
+	fromReg := regexp.MustCompile(`from\s*"([^"]{1,})\.js"`)
 	lazyImportReg := regexp.MustCompile(`import\("([^"]{1,})\.js"\)`)
-	importReg := regexp.MustCompile(`import {0,1}"([^"]{1,})\.js"`)
-	content = fromReg.ReplaceAllString(content, `from"$1.js`+h.version+`"`)
+	importReg := regexp.MustCompile(`import\s*"([^"]{1,})\.js"`)
+	content = fromReg.ReplaceAllString(content, `from "$1.js`+h.version+`"`)
 	content = depReg.ReplaceAllString(content, `"js/$1.js`+h.version+`"`)
 	content = lazyImportReg.ReplaceAllString(content, `import("$1.js`+h.version+`")`)
-	content = importReg.ReplaceAllString(content, `import"$1.js`+h.version+`"`)
+	content = importReg.ReplaceAllString(content, `import "$1.js`+h.version+`"`)
 	Conn.Response.Header.Set("__debug", "replace_script")
 
 	// 处理不同的JS文件
 	content, handled := h.handleVirtualSvgIcons(path, content)
 	if handled {
+		cleanModifiedResponseHeaders(Conn)
 		Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
 		return true
 	}
@@ -171,6 +190,7 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 		return true
 	}
 
+	cleanModifiedResponseHeaders(Conn)
 	Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
 	return true
 }
@@ -518,11 +538,7 @@ func (h *ScriptHandler) handleConnectPublish(Conn *SunnyNet.HttpConn, path strin
 	utils.LogFileInfo("[Home数据采集] ✅ 正在处理 connect.publish 文件")
 	utils.LogFileInfo("[Home数据采集] ⏭️ 跳过 goToNextFlowFeed/goToPrevFlowFeed 重写，避免干扰新版 Home 状态机")
 
-	// 禁用浏览器缓存，确保每次都能拦截到最新的代码
-	Conn.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	Conn.Response.Header.Set("Pragma", "no-cache")
-	Conn.Response.Header.Set("Expires", "0")
-
+	cleanModifiedResponseHeaders(Conn)
 	Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
 	return content, true
 }

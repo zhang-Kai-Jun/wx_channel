@@ -3,7 +3,6 @@ package router
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"wx_channel/internal/response"
 	"wx_channel/internal/utils"
@@ -24,22 +23,22 @@ type PagedData = response.PagedData
 // LoggerMiddleware 日志中间件
 func LoggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+		// start := time.Now()
 
 		// 包装 ResponseWriter 以捕获状态码
 		wrapped := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
 		next.ServeHTTP(wrapped, r)
 
-		duration := time.Since(start)
-		utils.GetLogger().Info(
-			"API 请求: %s %s [%d] %s from %s",
-			r.Method,
-			r.URL.Path,
-			wrapped.statusCode,
-			duration.String(),
-			r.RemoteAddr,
-		)
+		// duration := time.Since(start)
+		// utils.GetLogger().Info(
+		// 	"API 请求: %s %s [%d] %s from %s",
+		// 	r.Method,
+		// 	r.URL.Path,
+		// 	wrapped.statusCode,
+		// 	duration.String(),
+		// 	r.RemoteAddr,
+		// )
 	})
 }
 

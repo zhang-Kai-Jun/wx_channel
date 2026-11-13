@@ -53,6 +53,9 @@ type Config struct {
 
 	// 功能开关
 	RadarEnabled bool `mapstructure:"radar_enabled"`
+
+	// 代理模式: system (系统代理, 默认推荐), process (进程驱动代理)
+	ProxyMode string `mapstructure:"proxy_mode"`
 }
 
 var globalConfig *Config
@@ -186,6 +189,7 @@ func setDefaults() {
 
 	// 功能默认值
 	viper.SetDefault("radar_enabled", false)
+	viper.SetDefault("proxy_mode", "system")
 }
 
 // loadFromDatabase 从数据库加载配置（优先级最高）
@@ -228,6 +232,9 @@ func loadFromDatabase(config *Config) {
 
 	if val, err := dbLoader.GetBool("radar_enabled", config.RadarEnabled); err == nil {
 		config.RadarEnabled = val
+	}
+	if val, err := dbLoader.Get("proxy_mode"); err == nil && val != "" {
+		config.ProxyMode = val
 	}
 }
 

@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -67,6 +71,20 @@ func (h *ScriptHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		return false
 	}
 
+	// 针对 301/302 重定向到 channels.weixin.qq.com 的请求，确保 Location 追加 skipLiteApp=1
+	if Conn.Response != nil && Conn.Response.StatusCode >= 300 && Conn.Response.StatusCode < 400 {
+		loc := getResponseHeaderCaseInsensitive(Conn.Response.Header, "Location")
+		if loc != "" && strings.Contains(loc, "channels.weixin.qq.com") && !strings.Contains(loc, "skipLiteApp=1") {
+			if strings.Contains(loc, "?") {
+				loc += "&skipLiteApp=1"
+			} else {
+				loc += "?skipLiteApp=1"
+			}
+			Conn.Response.Header.Set("Location", loc)
+			utils.Info("[重定向改写] Location 自动追加 skipLiteApp=1 -> %s", loc)
+		}
+	}
+
 	// 只有响应成功且有内容才处理
 	if Conn.Response == nil || Conn.Response.Body == nil {
 		return false
@@ -102,26 +120,85 @@ func (h *ScriptHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 	return false
 }
 
+// getResponseHeaderCaseInsensitive 不区分大小写获取响应头
+func getResponseHeaderCaseInsensitive(h http.Header, target string) string {
+	if h == nil {
+		return ""
+	}
+	for k, v := range h {
+		if strings.EqualFold(k, target) && len(v) > 0 {
+			return v[0]
+		}
+	}
+	return ""
+}
+
 // cleanModifiedResponseHeaders 清理明文改写后的正文元数据，并统一禁用浏览器缓存。
 func cleanModifiedResponseHeaders(Conn *SunnyNet.HttpConn) {
-	Conn.Response.Header.Del("Content-Encoding")
-	Conn.Response.Header.Del("Content-Length")
+	if Conn == nil || Conn.Response == nil || Conn.Response.Header == nil {
+		return
+	}
+	for k := range Conn.Response.Header {
+		if strings.EqualFold(k, "Content-Encoding") ||
+			strings.EqualFold(k, "Content-Length") ||
+			strings.EqualFold(k, "Transfer-Encoding") {
+			delete(Conn.Response.Header, k)
+		}
+	}
 	Conn.Response.ContentLength = -1
 	Conn.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	Conn.Response.Header.Set("Pragma", "no-cache")
 	Conn.Response.Header.Set("Expires", "0")
 }
 
-// hasEncodedResponse 压缩正文保持原样透传，避免按明文改写后错误清除编码头。
-func hasEncodedResponse(Conn *SunnyNet.HttpConn) bool {
-	encoding := strings.TrimSpace(Conn.Response.Header.Get("Content-Encoding"))
-	return encoding != "" && !strings.EqualFold(encoding, "identity")
+// decodeResponseBody 如果响应有压缩编码，则尝试解压为明文字节；若未压缩则直接返回原字节
+func decodeResponseBody(encoding string, body []byte) ([]byte, bool, error) {
+	enc := strings.ToLower(strings.TrimSpace(encoding))
+	if enc == "" || enc == "identity" {
+		return body, false, nil
+	}
+	if strings.Contains(enc, "gzip") {
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return body, false, err
+		}
+		defer reader.Close()
+		unzipped, err := io.ReadAll(reader)
+		if err != nil {
+			return body, false, err
+		}
+		return unzipped, true, nil
+	}
+	if strings.Contains(enc, "deflate") {
+		reader := flate.NewReader(bytes.NewReader(body))
+		defer reader.Close()
+		uncompressed, err := io.ReadAll(reader)
+		if err != nil {
+			zreader, zerr := zlib.NewReader(bytes.NewReader(body))
+			if zerr == nil {
+				defer zreader.Close()
+				if uz, err2 := io.ReadAll(zreader); err2 == nil {
+					return uz, true, nil
+				}
+			}
+			return body, false, err
+		}
+		return uncompressed, true, nil
+	}
+	return body, false, fmt.Errorf("unsupported encoding: %s", enc)
 }
 
 // HandleHTMLResponse 处理HTML响应，注入JavaScript代码
-func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path string, body []byte) bool {
-	contentType := strings.ToLower(Conn.Response.Header.Get("content-type"))
-	if contentType != "text/html; charset=utf-8" || hasEncodedResponse(Conn) {
+func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path string, rawBody []byte) bool {
+	contentType := strings.ToLower(getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Type"))
+	if !strings.Contains(contentType, "text/html") {
+		return false
+	}
+
+	encoding := getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Encoding")
+	body, wasCompressed, err := decodeResponseBody(encoding, rawBody)
+	if err != nil {
+		utils.LogWarn("[HandleHTMLResponse] 响应解压缩失败 (Encoding=%s): %v，原样透传以保证页面可用", encoding, err)
 		return false
 	}
 
@@ -134,13 +211,27 @@ func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path s
 	html = scriptReg2.ReplaceAllString(html, `href="$1.js`+h.version+`"`)
 	Conn.Response.Header.Set("__debug", "append_script")
 
-	if host == "channels.weixin.qq.com" && (path == "/web/pages/feed" || path == "/web/pages/home" || path == "/web/pages/profile" || path == "/web/pages/s" || path == "/web/pages/account/like") {
+	cleanPath := strings.TrimSuffix(path, "/")
+	isChannelPage := (host == "channels.weixin.qq.com" || host == "weixin.qq.com") && (strings.HasPrefix(cleanPath, "/web/pages") ||
+		strings.HasPrefix(cleanPath, "/finder-preview") ||
+		strings.HasPrefix(cleanPath, "/sph") ||
+		cleanPath == "" || cleanPath == "/")
+
+	if isChannelPage {
 		// 根据页面路径注入不同的脚本
-		injectedScripts := h.buildInjectedScripts(path)
-		html = strings.Replace(html, "<head>", "<head>\n"+injectedScripts, 1)
-		utils.LogFileInfo("页面已成功加载！")
-		utils.LogFileInfo("已添加视频缓存监控和提醒功能")
-		utils.LogFileInfo("[页面加载] 视频号页面已加载 | Host=%s | Path=%s", host, path)
+		injectedScripts := h.buildInjectedScripts(cleanPath)
+
+		// 宽容匹配 <head>
+		headIdx := strings.Index(strings.ToLower(html), "<head>")
+		if headIdx != -1 {
+			html = html[:headIdx+6] + "\n" + injectedScripts + html[headIdx+6:]
+		} else {
+			html = injectedScripts + "\n" + html
+		}
+
+		utils.Info("页面已成功加载！")
+		utils.Info("已添加视频缓存监控和提醒功能")
+		utils.Info("[页面加载] 视频号页面已加载 | Host=%s | Path=%s | Compressed=%v", host, path, wasCompressed)
 		cleanModifiedResponseHeaders(Conn)
 		Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(html)))
 		return true
@@ -152,14 +243,21 @@ func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path s
 }
 
 // HandleJavaScriptResponse 处理JavaScript响应，修改JavaScript代码
-func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, path string, body []byte) bool {
-	contentType := strings.ToLower(Conn.Response.Header.Get("content-type"))
-	if contentType != "application/javascript" || hasEncodedResponse(Conn) {
+func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, path string, rawBody []byte) bool {
+	contentType := strings.ToLower(getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Type"))
+	if !strings.Contains(contentType, "javascript") && !strings.Contains(contentType, "ecmascript") {
+		return false
+	}
+
+	encoding := getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Encoding")
+	body, _, err := decodeResponseBody(encoding, rawBody)
+	if err != nil {
+		utils.LogWarn("[HandleJavaScriptResponse] JS解压缩失败 (Encoding=%s): %v，原样透传", encoding, err)
 		return false
 	}
 
 	// 记录所有JS文件的加载（用于调试）
-	utils.LogFileInfo("[JS文件] %s", path)
+	utils.Info("[JS文件] %s", path)
 
 	// 保存关键的 JS 文件到本地以便分析
 	h.saveJavaScriptFile(path, body)
@@ -176,6 +274,12 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 	content = lazyImportReg.ReplaceAllString(content, `import("$1.js`+h.version+`")`)
 	content = importReg.ReplaceAllString(content, `import "$1.js`+h.version+`"`)
 	Conn.Response.Header.Set("__debug", "replace_script")
+
+	// 针对前端页面中的视频详情跳转链接，自动注入 skipLiteApp=1，避免微信打开本地 LiteApp 离线包导致无网络请求
+	if strings.Contains(content, "channels.weixin.qq.com/web/pages/feed?") && !strings.Contains(content, "skipLiteApp=1") {
+		content = strings.ReplaceAll(content, "channels.weixin.qq.com/web/pages/feed?", "channels.weixin.qq.com/web/pages/feed?skipLiteApp=1&")
+		utils.Info("[JS改写] 已为 %s 中的 feed 跳转链接注入 skipLiteApp=1", path)
+	}
 
 	// 处理不同的JS文件
 	content, handled := h.handleVirtualSvgIcons(path, content)
@@ -197,6 +301,9 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 
 // buildInjectedScripts 构建所有需要注入的脚本（根据页面路径注入不同脚本）
 func (h *ScriptHandler) buildInjectedScripts(path string) string {
+	// 微信 JSBridge 拦截脚本（必须在最前面，拦截 openUrlWithExtraWebview 强制追加 skipLiteApp=1）
+	bridgeHookScript := h.getBridgeHookScript()
+
 	// 日志面板脚本（必须在最前面，以便拦截所有console输出）- 所有页面都需要
 	logPanelScript := h.getLogPanelScript()
 
@@ -225,40 +332,45 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 	savePageContentScript := h.getSavePageContentScript()
 
 	// 基础脚本（所有页面都需要）
-	baseScripts := h.getPerformanceDiagnosticsScript() + logPanelScript + mittScript + eventbusScript + utilsScript + apiClientScript + keepAliveScript + coreScript + feedScript + profileScript + searchScript + homeScript + captureUrlScript + savePageContentScript
+	baseScripts := bridgeHookScript + h.getPerformanceDiagnosticsScript() + logPanelScript + mittScript + eventbusScript + utilsScript + apiClientScript + keepAliveScript + coreScript + feedScript + profileScript + searchScript + homeScript + captureUrlScript + savePageContentScript
 
 	// 根据页面路径决定是否注入特定脚本
 	var pageSpecificScripts string
 
-	switch path {
-	case "/web/pages/home":
-		// Home页面：新版部分链接会渲染成详情页模式，因此同时注入评论采集脚本
-		pageSpecificScripts = h.getCommentCaptureScript()
-		utils.LogFileInfo("[脚本] Home页面 - 注入评论采集脚本")
+	switch {
+	case path == "/web/pages/home":
+		// Home页面：注入完整评论采集、精准匹配和获取评论脚本
+		pageSpecificScripts = h.getCommentCaptureScript() + h.getVideoCommentsMatchingScript() + h.getFetchVideoCommentsScript()
+		utils.Info("[脚本] Home页面 - 注入评论采集、精准匹配和获取评论脚本")
 
-	case "/web/pages/profile":
+	case path == "/web/pages/profile":
 		// Profile页面（视频列表）：不需要特定脚本
 		pageSpecificScripts = ""
-		utils.LogFileInfo("[脚本] Profile页面 - 仅注入基础脚本")
+		utils.Info("[脚本] Profile页面 - 仅注入基础脚本")
 
-	case "/web/pages/account/like":
+	case path == "/web/pages/account/like":
 		// 赞过页面会加载被全局改写的公共 bundle，需要基础脚本环境避免 WXU/WXE 未定义
 		pageSpecificScripts = ""
-		utils.LogFileInfo("[脚本] Account Like页面 - 注入基础脚本以兼容公共 JS 事件")
+		utils.Info("[脚本] Account Like页面 - 注入基础脚本以兼容公共 JS 事件")
 
-	case "/web/pages/feed":
-		// Feed页面（视频详情）：注入评论采集、精准匹配脚本、获取评论脚本
+	case path == "/web/pages/feed" || strings.HasPrefix(path, "/finder-preview") || strings.HasPrefix(path, "/sph"):
+		// Feed页面 / 作品预览页面（视频详情）：注入评论采集、精准匹配脚本、获取评论脚本
 		pageSpecificScripts = h.getCommentCaptureScript() + h.getVideoCommentsMatchingScript() + h.getFetchVideoCommentsScript()
-		utils.LogFileInfo("[脚本] Feed页面 - 注入评论采集、精准匹配和获取评论脚本")
+		utils.Info("[脚本] Feed/作品预览页面 (%s) - 注入评论采集、精准匹配和获取评论脚本", path)
 
-	case "/web/pages/s":
+	case path == "/web/pages/s":
 		pageSpecificScripts = ""
-		utils.LogInfo("[脚本] 搜索页面 - 仅注入基础脚本（已包含搜索模块）")
+		utils.Info("[脚本] 搜索页面 - 仅注入基础脚本（已包含搜索模块）")
 
 	default:
-		// 其他页面：不注入页面特定脚本
-		pageSpecificScripts = ""
-		utils.LogInfo("[脚本] 其他页面 - 仅注入基础脚本")
+		// 其他页面：如果包含 preview 或 sph 也注入特定脚本，否则仅注入基础脚本
+		if strings.Contains(path, "preview") || strings.Contains(path, "sph") {
+			pageSpecificScripts = h.getCommentCaptureScript() + h.getVideoCommentsMatchingScript() + h.getFetchVideoCommentsScript()
+			utils.Info("[脚本] 作品详情页面 (%s) - 注入评论采集、精准匹配和获取评论脚本", path)
+		} else {
+			pageSpecificScripts = ""
+			utils.Info("[脚本] 其他页面 (%s) - 仅注入基础脚本", path)
+		}
 	}
 
 	// 初始化脚本（延迟执行）
@@ -275,6 +387,46 @@ setTimeout(function() {
 </script>`
 
 	return baseScripts + pageSpecificScripts + initScript
+}
+
+// getBridgeHookScript 拦截微信 JSBridge，确保所有跳转自动携带 skipLiteApp=1，避免跳转到本地无网络请求的 LiteApp 容器
+func (h *ScriptHandler) getBridgeHookScript() string {
+	return `<script>
+(function() {
+	function hookBridge(b) {
+		if (!b || b.__skip_liteapp_hooked) return;
+		b.__skip_liteapp_hooked = true;
+		var orig = b.invoke;
+		if (typeof orig === 'function') {
+			b.invoke = function(action, params, callback) {
+				if (action === 'openUrlWithExtraWebview' && params && params.url) {
+					if (params.url.indexOf('channels.weixin.qq.com') !== -1 && params.url.indexOf('skipLiteApp=1') === -1) {
+						params.url += (params.url.indexOf('?') !== -1 ? '&' : '?') + 'skipLiteApp=1';
+						console.log('[WeixinJSBridge Hook] 已为 openUrlWithExtraWebview 追加 skipLiteApp=1:', params.url);
+					}
+				}
+				return orig.apply(this, arguments);
+			};
+		}
+	}
+	if (window.WeixinJSBridge) {
+		hookBridge(window.WeixinJSBridge);
+	} else {
+		var _b = undefined;
+		try {
+			Object.defineProperty(window, 'WeixinJSBridge', {
+				configurable: true,
+				enumerable: true,
+				get: function() { return _b; },
+				set: function(v) { _b = v; hookBridge(v); }
+			});
+		} catch(e) {}
+		document.addEventListener('WeixinJSBridgeReady', function() {
+			hookBridge(window.WeixinJSBridge);
+		});
+	}
+})();
+</script>`
 }
 
 // getCaptureUrlScript 获取捕获完整URL的脚本
@@ -1108,27 +1260,26 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 
 		console.log('[评论采集] 发送数据: ' + comments.length + ' 条评论 (期望总数: ' + totalExpected + ') | ID: ' + videoInfo.id + ' | 作者: ' + authorNickname);
 
-		// TODO: 暂时禁用保存到文件，仅保留日志输出
-		// fetch('/__wx_channels_api/save_comment_data', {
-		// 	method: 'POST',
-		// 	headers: {'Content-Type': 'application/json'},
-		// 	body: JSON.stringify({
-		// 		comments: comments,
-		// 		videoId: videoInfo.id,
-		// 		videoTitle: videoInfo.title,
-		// 		originalCommentCount: totalExpected || 0,
-		// 		timestamp: Date.now(),
-		// 		isFullUpdate: true,
-		// 		authorId: authorId,
-		// 		authorNickname: authorNickname,
-		// 		authorUsername: authorUsername,
-		// 		authorHeadUrl: authorHeadUrl,
-		// 		authorSignature: authorSignature,
-		// 		profileUrl: authorUsername ? 'https://channels.weixin.qq.com/profile/' + authorUsername.replace(/@finder$/, '').replace(/@stranger$/, '') : ''
-		// 	})
-		// }).catch(function(err) {
-		// 	console.error('[评论采集] 保存失败:', err);
-		// });
+		fetch('/__wx_channels_api/save_comment_data', {
+			method: 'POST',
+			headers: {'Content-Type': 'application/json'},
+			body: JSON.stringify({
+				comments: comments,
+				videoId: videoInfo.id,
+				videoTitle: videoInfo.title,
+				originalCommentCount: totalExpected || 0,
+				timestamp: Date.now(),
+				isFullUpdate: true,
+				authorId: authorId,
+				authorNickname: authorNickname,
+				authorUsername: authorUsername,
+				authorHeadUrl: authorHeadUrl,
+				authorSignature: authorSignature,
+				profileUrl: authorUsername ? 'https://channels.weixin.qq.com/profile/' + authorUsername.replace(/@finder$/, '').replace(/@stranger$/, '') : ''
+			})
+		}).catch(function(err) {
+			console.error('[评论采集] 保存失败:', err);
+		});
 	}
 
 	// 触发保存（带防抖）

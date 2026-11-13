@@ -128,7 +128,9 @@ var __wx_feed_runtime_state = {
 
 function __get_active_feed_element() {
   var feedNodes = document.querySelectorAll('[id^="flow-feed-"]');
-  if (!feedNodes || feedNodes.length === 0) return null;
+  if (!feedNodes || feedNodes.length === 0) {
+    return document.querySelector('.feed-card, .video-container, .feed-video, video, #app');
+  }
 
   var viewportTop = 0;
   var viewportBottom = window.innerHeight || document.documentElement.clientHeight || 0;
@@ -301,11 +303,12 @@ function __extract_profile_from_feed_dom_fallback(activeFeedId) {
   var feedNode = __get_active_feed_element();
   if (!feedNode) return null;
 
-  var descriptionNode = feedNode.querySelector('.content .ctn, .collapsed-text .ctn, .compute-node');
-  var authorNode = document.querySelector('.avatar-nickname .nickname, .author-name, .account-info .nickname');
-  var avatarNode = document.querySelector('.account-info img, .avatar-wrapper img, .author-info img');
-  var posterNode = feedNode.querySelector('.vjs-poster');
-  var mediaNode = feedNode.querySelector('.feed-video video, video');
+  var descriptionNode = (feedNode.querySelector && feedNode.querySelector('.content .ctn, .collapsed-text .ctn, .compute-node')) ||
+    document.querySelector('.content .ctn, .collapsed-text .ctn, .desc, .video-desc, .title');
+  var authorNode = document.querySelector('.avatar-nickname .nickname, .author-name, .account-info .nickname, .nickname');
+  var avatarNode = document.querySelector('.account-info img, .avatar-wrapper img, .author-info img, .avatar img');
+  var posterNode = (feedNode.querySelector && feedNode.querySelector('.vjs-poster')) || document.querySelector('.vjs-poster');
+  var mediaNode = (feedNode.querySelector && feedNode.querySelector('.feed-video video, video')) || document.querySelector('video');
   var counts = document.querySelectorAll('.op-item .op-text, .op-item .count');
 
   var thumbUrl = '';
@@ -379,7 +382,6 @@ function __sync_feed_profile_with_runtime(forceLog) {
     window.__wx_channels_store__.profile = fallback;
     __wx_feed_runtime_state.activeFeedId = fallback.id || __get_active_feed_id();
     console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
-    showFeedDebugInfo('✅ 从DOM元素获取到视频信息');
     if (forceLog) {
       console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
     }
@@ -387,7 +389,6 @@ function __sync_feed_profile_with_runtime(forceLog) {
   }
 
   console.log('[feed.js] 最终 profile:', window.__wx_channels_store__ && window.__wx_channels_store__.profile);
-  showFeedDebugInfo('⚠️ 未能获取到视频信息，请尝试重新播放视频');
   return window.__wx_channels_store__ && window.__wx_channels_store__.profile;
 }
 
@@ -444,31 +445,31 @@ function __start_feed_slide_monitor() {
   // 持续监控工具栏按钮是否存在，如果不存在则重新注入
   // 这样可以应对Vue随时重新渲染工具栏的情况
   setInterval(function() {
-    var container = document.querySelector('header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center') ||
-      document.querySelector('header.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center') ||
-      document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center');
-
+    var container = findFeedToolbarContainer();
     if (!container) return;
 
     var btns = container.querySelectorAll('#wx-feed-comment-icon');
-    if (btns.length < 2) {
-      console.log('[feed.js] 检测到按钮消失，尝试重新注入...');
+    if (btns.length === 0) {
+      console.log('[feed.js] 检测到按钮不存在，尝试重新注入...');
       __insert_tools_to_feed_toolbar();
     }
   }, 2000);
 }
 
+// 统一的查找工具栏容器函数
+function findFeedToolbarContainer() {
+  return document.querySelector('header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center') ||
+    document.querySelector('header.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center') ||
+    document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center') ||
+    document.querySelector('header.home-header [class*="items-center"]') ||
+    document.querySelector('.home-header [class*="items-center"]') ||
+    document.querySelector('header [class*="items-center"]');
+}
+
 /** 注入Feed页面顶部工具栏按钮 */
 async function __insert_tools_to_feed_toolbar() {
-  // 查找顶部工具栏容器
-  var findToolbarContainer = function () {
-    return document.querySelector('header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center') ||
-      document.querySelector('header.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center') ||
-      document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center');
-  };
-
   var tryInject = function () {
-    var container = findToolbarContainer();
+    var container = findFeedToolbarContainer();
     if (!container) {
       console.log('[feed.js] 工具栏容器不存在');
       return false;
@@ -521,14 +522,24 @@ async function __insert_tools_to_feed_toolbar() {
     };
 
     copyLinkIconWrapper.onclick = function () {
-      var paramsToKeep = ["oid", "nid", "fromSubPage", "context_id", "eid"];
       var u = new URL(window.location.href);
+      // 如果当前是纯 Home 页面且有正在播放的视频 profile，生成指向该视频详情的纯净链接
+      var currentProfile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+      if (u.pathname.includes('/pages/home') && !u.searchParams.get('oid') && currentProfile && currentProfile.id) {
+        var videoUrl = u.origin + '/web/pages/feed?oid=' + encodeURIComponent(currentProfile.id) + '&skipLiteApp=1';
+        __copy_to_clipboard(videoUrl);
+        return;
+      }
+      var paramsToKeep = ["oid", "nid", "fromSubPage", "context_id", "eid", "skipLiteApp"];
       var base = u.origin + u.pathname;
       var filteredParams = new URLSearchParams();
       paramsToKeep.forEach(function (key) {
         var val = u.searchParams.get(key);
         if (val) filteredParams.set(key, val);
       });
+      if (!filteredParams.has('skipLiteApp')) {
+        filteredParams.set('skipLiteApp', '1');
+      }
       var trimmedUrl = base + "?" + filteredParams.toString();
       __copy_to_clipboard(trimmedUrl);
     };
@@ -742,12 +753,14 @@ async function __insert_tools_to_feed_toolbar() {
       retryCount++;
     });
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['class', 'style']
-    });
+    if (document.body) {
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'style']
+      });
+    }
 
     // 使用定时器定期重试（更可靠）
     var retryTimer = setInterval(function() {

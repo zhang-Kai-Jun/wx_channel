@@ -30,7 +30,11 @@ func setupIsolatedTestEnv(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
-	t.Chdir(tmpDir)
+	origWd, _ := os.Getwd()
+	_ = os.Chdir(tmpDir)
+	t.Cleanup(func() {
+		_ = os.Chdir(origWd)
+	})
 }
 
 func TestLoad_Defaults(t *testing.T) {

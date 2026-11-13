@@ -154,6 +154,12 @@ function __start_home_slide_monitor() {
     if (__current_tab_type__ === 'video-player') {
       __sync_home_profile_with_runtime(false);
     }
+
+    // 持续监控确保 Home 页面工具按钮存在（若被 Vue 渲染销毁则自动重新注入）
+    var btn = document.getElementById('wx-feed-comment-icon');
+    if (!btn && typeof __insert_tools_to_feed_toolbar === 'function') {
+      __insert_tools_to_feed_toolbar();
+    }
   }, 1500);
 }
 
@@ -491,12 +497,15 @@ async function insert_channel_tools() {
   // 搜索页面由 search.js 处理
   if (pathname.includes('/pages/s')) {
     console.log('[home.js] 搜索页面由 search.js 处理');
+    if (window.__wx_channels_search_collector && typeof window.__wx_channels_search_collector.injectToolbarIcon === 'function') {
+      window.__wx_channels_search_collector.injectToolbarIcon();
+    }
     return;
   }
 
-  // Feed页面（视频详情页）
-  if (pathname.includes('/pages/feed')) {
-    console.log('[home.js] 检测到Feed页面');
+  // Feed页面（视频详情页）或作品独立预览页（/finder-preview/pages/sph 或 /sph）
+  if (pathname.includes('/pages/feed') || pathname.includes('/finder-preview') || pathname.includes('/sph')) {
+    console.log('[home.js] 检测到Feed/作品预览页面');
     if (typeof __insert_tools_to_feed_page === 'function') {
       var success = await __insert_tools_to_feed_page();
       if (success) return;
@@ -507,19 +516,23 @@ async function insert_channel_tools() {
 
   // Home页面
   if (pathname.includes('/pages/home')) {
-    if (__should_use_feed_mode_for_home_page()) {
-      console.log('[home.js] 检测到Home路径下的详情页模式，切换为Feed逻辑处理');
-      if (typeof __insert_tools_to_feed_page === 'function') {
-        var feedModeSuccess = await __insert_tools_to_feed_page();
-        if (feedModeSuccess) return;
-      }
-    }
-
-    console.log('[home.js] 检测到Home页面');
+    console.log('[home.js] 检测到Home页面，启动监控并注入操作栏工具按钮');
     __start_tab_monitor();
     __start_home_slide_monitor();
     __update_tab_display();
     __sync_home_profile_with_runtime(false);
+
+    // 无论是否带详情参数，统一注入工具栏按钮（原生顶栏 + 悬浮胶囊兜底）
+    if (typeof __insert_tools_to_feed_page === 'function') {
+      await __insert_tools_to_feed_page();
+    }
+    return;
+  }
+
+  // 其他所有页面尝试通用注入（借助悬浮胶囊工具条兜底）
+  if (typeof __insert_tools_to_feed_page === 'function') {
+    console.log('[home.js] 其他页面尝试通用注入工具按钮');
+    await __insert_tools_to_feed_page();
     return;
   }
 

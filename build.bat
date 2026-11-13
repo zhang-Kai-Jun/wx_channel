@@ -169,6 +169,24 @@ if exist video_channel.zip        del /f /q video_channel.zip
 echo       OK
 echo.
 
+REM ---------- 2.1. Compile embedded C# popout helper ----------
+if exist "internal\winwindow\PopoutTrigger.cs" (
+    echo       Compiling embedded popout_helper.exe from PopoutTrigger.cs ...
+    set "DOTNET_FRAMEWORK_DIR=%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319"
+    if not exist "!DOTNET_FRAMEWORK_DIR!\csc.exe" set "DOTNET_FRAMEWORK_DIR=%SystemRoot%\Microsoft.NET\Framework\v4.0.30319"
+    if not exist "!DOTNET_FRAMEWORK_DIR!\csc.exe" (
+        echo [ERROR] csc.exe not found under !DOTNET_FRAMEWORK_DIR!.
+        goto fail
+    )
+    "!DOTNET_FRAMEWORK_DIR!\csc.exe" /nologo /optimize+ /platform:x64 /target:exe /r:"!DOTNET_FRAMEWORK_DIR!\WPF\UIAutomationClient.dll" /r:"!DOTNET_FRAMEWORK_DIR!\WPF\UIAutomationTypes.dll" /r:"!DOTNET_FRAMEWORK_DIR!\WPF\WindowsBase.dll" /out:"internal\winwindow\popout_helper.exe" "internal\winwindow\PopoutTrigger.cs"
+    if errorlevel 1 (
+        echo [ERROR] Failed to compile popout_helper.exe from PopoutTrigger.cs.
+        goto fail
+    )
+    echo       popout_helper.exe OK
+    echo.
+)
+
 REM ---------- 3. Generate resources for the same architecture as go build ----------
 echo [3/6] Generating Windows resources ^(%RESOURCE_OBJECT%^)...
 "%WINRES_PATH%" make --in "%RESOURCE_JSON%" --arch "%TARGET_ARCH%" --out rsrc

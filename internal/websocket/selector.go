@@ -3,6 +3,7 @@ package websocket
 import (
 	"errors"
 	"math/rand"
+	"sort"
 	"sync/atomic"
 )
 
@@ -27,11 +28,14 @@ func (s *RoundRobinSelector) Select(clients map[*Client]bool) (*Client, error) {
 		return nil, errors.New("no available client")
 	}
 
-	// 将 map 转换为 slice
+	// 将 map 转换为 slice 并按 ID 稳定排序
 	clientList := make([]*Client, 0, len(clients))
 	for c := range clients {
 		clientList = append(clientList, c)
 	}
+	sort.Slice(clientList, func(i, j int) bool {
+		return clientList[i].ID < clientList[j].ID
+	})
 
 	// 原子递增计数器并取模
 	idx := atomic.AddUint64(&s.counter, 1)
@@ -155,11 +159,14 @@ func (s *RandomSelector) Select(clients map[*Client]bool) (*Client, error) {
 		return nil, errors.New("no available client")
 	}
 
-	// 将 map 转换为 slice
+	// 将 map 转换为 slice 并按 ID 稳定排序
 	clientList := make([]*Client, 0, len(clients))
 	for c := range clients {
 		clientList = append(clientList, c)
 	}
+	sort.Slice(clientList, func(i, j int) bool {
+		return clientList[i].ID < clientList[j].ID
+	})
 
 	// 随机选择
 	idx := rand.Intn(len(clientList))

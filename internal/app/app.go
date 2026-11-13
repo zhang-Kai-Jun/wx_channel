@@ -28,6 +28,7 @@ import (
 	"wx_channel/internal/services"
 	"wx_channel/internal/utils"
 	"wx_channel/internal/websocket"
+	"wx_channel/internal/winwindow"
 	"wx_channel/pkg/certificate"
 	"wx_channel/pkg/proxy"
 )
@@ -136,6 +137,9 @@ func (app *App) Run() {
 		color.Red("\n正在关闭服务...%v\n\n", sig)
 		utils.LogSystemShutdown(fmt.Sprintf("收到信号: %v", sig))
 		database.Close()
+		if os_env == "windows" {
+			app.Sunny.SetIeProxy(true)
+		}
 		if os_env == "darwin" {
 			proxy.DisableProxyInMacOS(proxy.ProxySettings{
 				Device:   "",
@@ -245,9 +249,9 @@ func (app *App) Run() {
 	utils.PrintLabelValue("🔌", "代理端口", app.Port)
 	utils.PrintLabelValue("📱", "支持平台", "微信视频号")
 
-	proxyMode := "进程代理"
-	if os_env != "windows" {
-		proxyMode = "系统代理"
+	proxyMode := "系统代理"
+	if app.Cfg.ProxyMode == "process" {
+		proxyMode = "进程代理"
 	}
 	utils.LogSystemStart(app.Port, proxyMode)
 
@@ -258,6 +262,12 @@ func (app *App) Run() {
 	wsPort := app.Port + 1
 	go app.startWebSocketServer(wsPort)
 
+	// 启动 Windows 自动独立窗口监听
+	if os_env == "windows" {
+		winwindow.StartAutoPopout()
+		utils.Info("✓ 自动独立窗口监控已启动")
+	}
+
 	// 启动对标雷达服务（默认关闭，按配置启用）
 	if app.Cfg.RadarEnabled {
 		app.RadarService.Start()
@@ -266,16 +276,41 @@ func (app *App) Run() {
 		utils.Info("雷达服务未启用 (radar_enabled: false)")
 	}
 
-	// 4. 【异步】处理 Windows 进程注入和连通性检查 (不阻塞主线程)
+	// 4. 【异步】处理 Windows 代理和连通性检查 (不阻塞主线程)
 	go func() {
-		// 如果是 Windows，尝试启动注入引擎
+		// 如果是 Windows，根据模式启动代理
 		if os_env == "windows" {
-			app.Sunny.ProcessAddName("WeChatAppEx.exe")
-			if ok := app.Sunny.StartProcess(); ok {
-				utils.Info("✓ 视频号引擎已就绪 (WeChatAppEx.exe)")
+			if app.Cfg.ProxyMode == "process" {
+				app.Sunny.ProcessAddName("WeChatAppEx.exe")
+				app.Sunny.ProcessAddName("Weixin.exe")
+				app.Sunny.ProcessAddName("WeChat.exe")
+				if ok := app.Sunny.StartProcess(); ok {
+					app.Sunny.ProcessAddName("WeChatAppEx.exe")
+					app.Sunny.ProcessAddName("Weixin.exe")
+					app.Sunny.ProcessAddName("WeChat.exe")
+					utils.Info("✓ 视频号进程驱动已就绪 (WeChatAppEx.exe, Weixin.exe, WeChat.exe)")
+				} else {
+					utils.Warn("⚠️ 进程驱动启动失败：建议切换为系统代理模式")
+				}
 			} else {
-				utils.Warn("⚠️ 注入引擎启动失败：可能需要 [管理员权限] 才能在视频号内显示按钮")
+				// 默认系统代理模式：微信 4.x / 3.x 视频号基于 Chromium 架构，严格遵循 WinINet 系统代理
+				// 通过 HTTP CONNECT 隧道代理，可完美兼容现代 TLS 1.3 / IPv6，无需内核驱动或管理员权限
+				if app.Sunny.SetIeProxy(false) {
+					utils.Info("✓ 系统代理已启用 (127.0.0.1:%d)", app.Port)
+				} else {
+					utils.Warn("⚠️ 系统代理设置失败")
+				}
+				utils.Info("💡 微信基于 Chromium 内核，已通过系统代理自动拦截")
 			}
+			utils.Info("─────────────────────────────────────────────────────────────────")
+			utils.Info("💡 【微信 4.x / 4.2+ 版本重要操作说明】")
+			utils.Info("微信 4.x 左侧侧边栏「视频号」默认加载本地 LiteApp 离线包，不发起网页请求。")
+			utils.Info("若要启用注入脚本与功能按钮，请在微信【文件传输助手】或任意聊天中发送并点击：")
+			utils.Info("👉 https://channels.weixin.qq.com/web/pages/home?skipLiteApp=1")
+			utils.Info("   或：https://channels.weixin.qq.com/web/pages/feed?skipLiteApp=1")
+			utils.Info("   或：https://channels.weixin.qq.com/web/pages/s?q=关键词&skipLiteApp=1")
+			utils.Info("微信将以原生 Web 浏览器打开网页版，所有功能按钮将立即生效！")
+			utils.Info("─────────────────────────────────────────────────────────────────")
 		}
 
 		// 执行连通性自检
@@ -302,6 +337,10 @@ func (app *App) Run() {
 
 	<-done
 
+	if os_env == "windows" {
+		app.Sunny.SetIeProxy(true)
+	}
+
 	// 清理服务
 	if app.RadarService != nil {
 		app.RadarService.Stop()
@@ -325,7 +364,20 @@ func (app *App) HandleRequest(Conn *SunnyNet.HttpConn) {
 	}()
 
 	if Conn.Type == public.HttpSendRequest {
-		Conn.Request.Header.Del("Accept-Encoding")
+		if Conn.Request != nil && Conn.Request.Header != nil {
+			// 优先请求 gzip 编码，既避免服务端使用未知压缩（如 br/zstd），又可由 Go 标准库解压
+			Conn.Request.Header.Set("Accept-Encoding", "gzip, deflate")
+
+			// 针对微信视频号关键请求，清理条件请求头，避免 304 Not Modified 响应导致 Body 为空无法改写
+			if Conn.Request.URL != nil && strings.Contains(Conn.Request.URL.Hostname(), "weixin.qq.com") {
+				Conn.Request.Header.Del("If-None-Match")
+				Conn.Request.Header.Del("If-Modified-Since")
+			}
+		}
+
+		if Conn.Request != nil && Conn.Request.URL != nil && strings.Contains(Conn.Request.URL.Hostname(), "weixin.qq.com") {
+			utils.Info("[HTTP请求] %s %s (PID=%d)", Conn.Request.Method, Conn.Request.URL.Path, Conn.PID)
+		}
 
 		for _, interceptor := range app.requestInterceptors {
 			if interceptor != nil && interceptor.Handle(Conn) {
@@ -333,10 +385,22 @@ func (app *App) HandleRequest(Conn *SunnyNet.HttpConn) {
 			}
 		}
 	} else if Conn.Type == public.HttpResponseOK {
+		if Conn.Request != nil && Conn.Request.URL != nil && strings.Contains(Conn.Request.URL.Hostname(), "weixin.qq.com") {
+			utils.Info("[HTTP响应] %s %s 状态=%d", Conn.Request.Method, Conn.Request.URL.Path, Conn.Response.StatusCode)
+		}
+
 		for _, interceptor := range app.responseInterceptors {
 			if interceptor != nil && interceptor.Handle(Conn) {
 				return
 			}
+		}
+	} else if Conn.Type == public.HttpRequestFail {
+		reqURL := ""
+		if Conn.Request != nil && Conn.Request.URL != nil {
+			reqURL = Conn.Request.URL.String()
+		}
+		if strings.Contains(reqURL, "weixin.qq.com") {
+			utils.Warn("[HTTP失败] %s 错误: %s (PID=%d)", reqURL, Conn.GetError(), Conn.PID)
 		}
 	}
 }

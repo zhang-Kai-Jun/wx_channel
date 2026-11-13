@@ -26,27 +26,11 @@ type Certificate struct {
 func fetchCertificatesInWindows() ([]Certificate, error) {
 	var certificates []Certificate
 
-	// 尝试从 LocalMachine 获取证书
+	// 必须从 LocalMachine\Root 获取证书（Chromium 内核要求必须在本地计算机存储）
 	cmd := "Get-ChildItem Cert:\\LocalMachine\\Root | Where-Object {$_.Subject -like '*SunnyNet*' -or $_.Subject -like '*Sunny*'}"
 	ps := exec.Command("powershell.exe", "-Command", cmd)
 	output, err := ps.CombinedOutput()
 	if err == nil && len(output) > 0 {
-		// 如果找到证书，添加一个示例证书
-		certificates = append(certificates, Certificate{
-			Thumbprint: "SunnyNet",
-			Subject: Subject{
-				CN: "SunnyNet",
-				O:  "SunnyNet",
-			},
-		})
-	}
-
-	// 尝试从 CurrentUser 获取证书
-	cmd = "Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object {$_.Subject -like '*SunnyNet*' -or $_.Subject -like '*Sunny*'}"
-	ps = exec.Command("powershell.exe", "-Command", cmd)
-	output, err = ps.CombinedOutput()
-	if err == nil && len(output) > 0 {
-		// 如果找到证书，添加一个示例证书
 		certificates = append(certificates, Certificate{
 			Thumbprint: "SunnyNet",
 			Subject: Subject{
@@ -192,24 +176,30 @@ func installCertificateInWindows(cert_data []byte) error {
 		return errors.New(fmt.Sprintf("生成证书失败，%v\n", err.Error()))
 	}
 
-	// 首先尝试安装到当前用户证书存储（不需要管理员权限）
-	cmd := fmt.Sprintf("Import-Certificate -FilePath '%s' -CertStoreLocation Cert:\\CurrentUser\\Root", cert_file.Name())
+	// 微信视频号 Chromium 内核必须要求证书安装在 LocalMachine\Root (本地计算机根证书)
+	cmd := fmt.Sprintf("Import-Certificate -FilePath '%s' -CertStoreLocation Cert:\\LocalMachine\\Root", cert_file.Name())
 	ps := exec.Command("powershell.exe", "-Command", cmd)
 	output, err2 := ps.CombinedOutput()
 	if err2 == nil {
-		return nil // 成功安装到当前用户存储
+		// 同时存入 CurrentUser 做双重保障
+		_ = exec.Command("powershell.exe", "-Command", fmt.Sprintf("Import-Certificate -FilePath '%s' -CertStoreLocation Cert:\\CurrentUser\\Root", cert_file.Name())).Run()
+		return nil
 	}
 
-	// 如果当前用户存储失败，尝试系统级存储（需要管理员权限）
-	cmd = fmt.Sprintf("Import-Certificate -FilePath '%s' -CertStoreLocation Cert:\\LocalMachine\\Root", cert_file.Name())
-	ps = exec.Command("powershell.exe", "-Command", cmd)
-	output, err2 = ps.CombinedOutput()
-	if err2 != nil {
-		// 提供详细的错误信息和解决方案
-		errorMsg := fmt.Sprintf("证书安装失败！\n\n错误详情：%v\n\n解决方案：\n1. 以管理员身份运行程序\n2. 或者手动安装证书：\n   - 双击证书文件：%s\n   - 选择'安装证书'\n   - 选择'本地计算机'\n   - 选择'将所有的证书都放入下列存储'\n   - 选择'受信任的根证书颁发机构'\n   - 点击'确定'完成安装\n\n3. 或者忽略证书安装，程序仍可正常运行（但HTTPS请求可能失败）", output, cert_file.Name())
-		return errors.New(errorMsg)
+	// 尝试 certutil 工具安装到本地计算机根证书
+	cmdCertutil := fmt.Sprintf("certutil -addstore -f \"ROOT\" \"%s\"", cert_file.Name())
+	outputCertutil, errCertutil := exec.Command("cmd.exe", "/c", cmdCertutil).CombinedOutput()
+	if errCertutil == nil {
+		_ = exec.Command("powershell.exe", "-Command", fmt.Sprintf("Import-Certificate -FilePath '%s' -CertStoreLocation Cert:\\CurrentUser\\Root", cert_file.Name())).Run()
+		return nil
 	}
-	return nil
+
+	// 若系统级安装失败，回退到当前用户
+	cmdUser := fmt.Sprintf("Import-Certificate -FilePath '%s' -CertStoreLocation Cert:\\CurrentUser\\Root", cert_file.Name())
+	_ = exec.Command("powershell.exe", "-Command", cmdUser).Run()
+
+	errorMsg := fmt.Sprintf("证书未能安装到【本地计算机】受信任的根证书颁发机构！\n\n原因：需要管理员权限写入 LocalMachine 根证书存储。\n错误详情：%v / %v\n\n解决方案：\n1. 请右键程序选择【以管理员身份运行】。\n2. 或者手动安装证书：\n   - 打开当前目录的 internal/assets/certs/SunnyRoot.cer\n   - 点击'安装证书' -> 选择'本地计算机' (切勿选当前用户) -> 选择'受信任的根证书颁发机构' -> 确定完成。", string(output), string(outputCertutil))
+	return errors.New(errorMsg)
 }
 func installCertificateInMacOS(cert_data []byte) error {
 	cert_file, err := os.CreateTemp("", "SunnyRoot.cer")

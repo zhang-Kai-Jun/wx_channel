@@ -1,5 +1,7 @@
 port: 2025
 default_port: 2025
+# 代理模式: system (系统代理, 推荐, 微信4.x/3.x无需管理员权限稳定拦截), process (仅驱动进程代理)
+proxy_mode: system
 # 保留原数据目录，供采集数据库、评论及诊断数据使用。
 data_dir: downloads
 cert_file: SunnyRoot.cer

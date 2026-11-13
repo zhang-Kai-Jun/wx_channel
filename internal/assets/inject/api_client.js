@@ -1479,7 +1479,11 @@ window.__wx_api_client = {
         if (!self.samePlaybackTarget(context.target, self.getPlaybackTarget())) { check(); return; }
         context.confirmed = result.success === true;
         if (context.confirmed) context.attempts = 0;
-        __api_log(result.success ? 'INF' : 'WRN', '[AutoPause]', result);
+        // 避免重复上报相同目标的成功暂停日志（仅在首次成功暂停或失败时上报）
+        if (!result.success || !context.reported) {
+          __api_log(result.success ? 'INF' : 'WRN', '[AutoPause]', result);
+          if (result.success) context.reported = true;
+        }
         if (!context.confirmed && context.attempts < 3) {
           retryTimer = setTimeout(function() {
             retryTimer = null;
@@ -2282,6 +2286,13 @@ window.__wx_api_client = {
           }
 
           if (likeBtn) {
+            console.log('[API客户端] 点击爱心(私密赞/喜欢)按钮:', likeBtn.getAttribute('aria-label') || likeBtn.innerText || likeBtn.className);
+            try {
+              likeBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+              likeBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+              likeBtn.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+              likeBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            } catch(e) {}
             likeBtn.click();
             await new Promise(function(resolve) { setTimeout(resolve, 1000); });
             return { success: true, isLiked: true, message: '点赞成功' };
@@ -3504,10 +3515,10 @@ window.__wx_selectors__ = {
     excludeLive: '.living-tag, .live-card',
   },
 
-  // ---------- 点赞按钮 ----------
+  // ---------- 点赞/爱心按钮 ----------
   like: {
-    all: 'div[aria-label*="点赞"]',
-    unliked: 'div[aria-label*="点赞"]',
+    all: '[aria-label*="推荐"], .feed-like-icon, div[aria-label*="点赞"]',
+    unliked: '[aria-label*="推荐"], .feed-like-icon, div[aria-label*="点赞"]',
   },
 
   // ---------- 关注按钮 ----------
@@ -3542,21 +3553,104 @@ window.__wx_regex__ = {
   REG_TITLE: /<div[^>]*class="[^"]*compute-node[^"]*"[^>]*>([^<]+)/,
   REG_COMMENT_COUNT: /aria-label="评论(?:，(\d+))?"/,
   REG_CARD_TITLE: /<div[^>]*class="[^"]*profile-object-title[^"]*"[^>]*title="([^"]+)"/,
-  // 点赞正则：三种情况全覆盖
-  // 1. 点赞（无数字）    - 未点赞
-  // 2. 点赞，数字        - 未点赞（数字可能是 123 或 4.6万）
-  // 3. 点赞，数字，取消点赞 - 已点赞
-  REG_LIKE_UNLIKED: /^点赞$/,
-  REG_LIKE_UNLIKED_WITH_NUM: /^点赞，[\d.万\+]+$/,
-  REG_LIKE_LIKED: /，取消点赞$/,
+  // 点赞/爱心正则（推荐/赞为爱心图标）
+  REG_LIKE_UNLIKED: /^(推荐|点赞)$/,
+  REG_LIKE_UNLIKED_WITH_NUM: /^(推荐|点赞)，[\d.万\+]+$/,
+  REG_LIKE_LIKED: /(取消推荐|取消点赞)$/,
 };
 
 // ---------- 解析函数 ----------
 window.__wx_parsers__ = {
-  // ========== 点赞 ==========
-  // 统一查找：所有 div[aria-label]
+  // 辅助函数：获取可点击容器
+  _getClickTarget: function(el) {
+    if (!el) return null;
+    return el.closest('.click-box, [role="button"]') || el;
+  },
+
+  // ========== 点赞特征函数 ==========
+  // 特征函数1：判断元素是否为爱心按钮（界面中爱心图标为：feed-like-icon / aria-label="推荐" / 文字"赞"）
+  isLikeBtn: function(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var label = (el.getAttribute('aria-label') || '').trim();
+    var desc = (el.getAttribute('aria-description') || '').trim();
+    var text = (el.innerText || el.textContent || '').trim();
+
+    // 1. 严格排除非点赞按钮（分享、评论）
+    if (label.includes('分享') || label.includes('评论')) {
+      return false;
+    }
+
+    // 2. 严格排除大拇指按钮（微信PC版中大拇指的 aria-label="喜欢"，文本为"喜欢"，绝不能点它）
+    if ((label === '喜欢' || label.startsWith('喜欢，') || desc.includes('取消喜欢')) && !el.querySelector('.feed-like-icon') && !el.classList.contains('feed-like-icon')) {
+      return false;
+    }
+
+    // 3. 【核心匹配：爱心图标按钮】
+    // 微信视频号PC端结构：包含 .feed-like-icon 图标类名（该图标为爱心），且文本通常为 "赞" 或 数字
+    if (el.classList.contains('feed-like-icon') || (el.querySelector && el.querySelector('.feed-like-icon'))) {
+      return true;
+    }
+
+    // 4. 【aria-label 匹配：推荐 / 点赞】（爱心按钮的无障碍标签为“推荐”，点亮后为“点按取消推荐”）
+    if (/^(推荐|点赞|取消推荐|取消点赞)(，[\d.万\+]+)?$/.test(label) || 
+        label === '推荐' || label.startsWith('推荐，') || 
+        label.includes('取消推荐') || desc.includes('取消推荐')) {
+      return true;
+    }
+
+    // 5. 【老版兼容：点赞】
+    if (/^点赞(，[\d.万\+]+)?/.test(label) || label === '点赞' || label.startsWith('点赞，') || label.includes('取消点赞')) {
+      return true;
+    }
+    if (text === '点赞') {
+      return true;
+    }
+
+    return false;
+  },
+
+  // 特征函数2：判断爱心按钮是否处于“已点赞/已点亮爱心”状态
+  isLikedState: function(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var label = (el.getAttribute('aria-label') || '').trim();
+    var desc = (el.getAttribute('aria-description') || '').trim();
+
+    // 1. 无障碍描述特征（点击后变为 "点按取消推荐" 或 "点按取消点赞"）
+    if (desc.includes('取消推荐') || desc.includes('取消点赞')) {
+      return true;
+    }
+
+    // 2. aria-label 取消文案特征（如 "取消推荐"、"取消点赞"）
+    if (label.includes('取消推荐') || label.includes('取消点赞')) {
+      return true;
+    }
+    if (window.__wx_regex__ && window.__wx_regex__.REG_LIKE_LIKED && window.__wx_regex__.REG_LIKE_LIKED.test(label)) {
+      return true;
+    }
+
+    // 3. 激活类名/高亮状态特征：.active
+    if (el.classList && (el.classList.contains('active') || el.classList.contains('is-active') || el.classList.contains('liked'))) {
+      return true;
+    }
+    if (el.querySelector && el.querySelector('.active, .is-active, .liked')) {
+      return true;
+    }
+
+    return false;
+  },
+
+  // ========== 点赞操作函数 ==========
+  // 统一查找候选元素（支持跨层级作用域提升到 slides-item 或 bottom-area）
   _getLikeBtns: function(rootEl) {
-    return (rootEl || document).querySelectorAll('div[aria-label]');
+    var searchRoot = rootEl || document;
+    if (rootEl && rootEl.id && rootEl.id.startsWith('flow-feed-')) {
+      searchRoot = rootEl.closest('.slides-item') || rootEl.parentElement || rootEl;
+    }
+    var btns = searchRoot.querySelectorAll('.feed-like-icon, [aria-label*="推荐"], div[aria-label*="点赞"], .feed-interact .op-item, [class*="op-item"]');
+    if ((!btns || btns.length === 0) && searchRoot !== document) {
+      btns = document.querySelectorAll('.feed-like-icon, [aria-label*="推荐"], div[aria-label*="点赞"], .feed-interact .op-item, [class*="op-item"]');
+    }
+    return btns;
   },
 
   // 判断是否已点赞
@@ -3568,8 +3662,9 @@ window.__wx_parsers__ = {
   getLikedBtn: function(rootEl) {
     var btns = this._getLikeBtns(rootEl);
     for (var i = 0; i < btns.length; i++) {
-      var label = btns[i].getAttribute('aria-label') || '';
-      if (window.__wx_regex__.REG_LIKE_LIKED.test(label)) return btns[i];
+      if (this.isLikeBtn(btns[i]) && this.isLikedState(btns[i])) {
+        return this._getClickTarget(btns[i]);
+      }
     }
     return null;
   },
@@ -3578,9 +3673,18 @@ window.__wx_parsers__ = {
   getUnlikeBtn: function(rootEl) {
     var btns = this._getLikeBtns(rootEl);
     for (var i = 0; i < btns.length; i++) {
-      var label = btns[i].getAttribute('aria-label') || '';
-      if (window.__wx_regex__.REG_LIKE_UNLIKED.test(label)) return btns[i];
-      if (window.__wx_regex__.REG_LIKE_UNLIKED_WITH_NUM.test(label)) return btns[i];
+      if (this.isLikeBtn(btns[i]) && !this.isLikedState(btns[i])) {
+        return this._getClickTarget(btns[i]);
+      }
+    }
+    // 全局兜底
+    if (rootEl && rootEl !== document) {
+      var globalBtns = this._getLikeBtns(document);
+      for (var j = 0; j < globalBtns.length; j++) {
+        if (this.isLikeBtn(globalBtns[j]) && !this.isLikedState(globalBtns[j])) {
+          return this._getClickTarget(globalBtns[j]);
+        }
+      }
     }
     return null;
   },

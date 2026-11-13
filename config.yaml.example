@@ -1,6 +1,9 @@
 # 视频号采集助手
 port: 2025
 
+# 代理模式: system (系统代理, 推荐, 微信4.x/3.x无需管理员权限稳定拦截), process (仅驱动进程代理)
+proxy_mode: system
+
 # 沿用原目录以兼容已有的采集数据库和评论结果，不再保存视频或封面。
 data_dir: downloads
 log_file: logs/wx_channel.log

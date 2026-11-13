@@ -40,6 +40,8 @@ func TestScriptHandlerModifiedResponseHeaders(t *testing.T) {
 		{"/web/pages/profile", "text/html; charset=utf-8", `<html><head><script src="entry.js"></script></head></html>`},
 		{"/web/pages/account/like", "text/html; charset=utf-8", `<html><head><script src="entry.js"></script></head></html>`},
 		{"/web/pages/s", "text/html; charset=utf-8", `<html><head><script src="entry.js"></script></head></html>`},
+		{"/finder-preview/pages/sph", "text/html; charset=utf-8", `<html><head><script src="entry.js"></script></head></html>`},
+		{"/sph/A0NYK9yP6Z", "text/html; charset=utf-8", `<html><head><script src="entry.js"></script></head></html>`},
 		{"/web/pages/unknown", "text/html; charset=utf-8", `<html><head><script src="entry.js"></script></head></html>`},
 		{"/t/wx_fed/finder/web/web-finder/res/js/virtual_svg-icons-register.test.js", "application/javascript", `import "./entry.js";const api={};export{api};`},
 		{"/connect.publish.test.js", "application/javascript", `import "./entry.js";`},
@@ -119,49 +121,101 @@ func TestScriptHandlerModuleReferenceWhitespace(t *testing.T) {
 	}
 }
 
-func TestScriptHandlerPreservesEncodedResponses(t *testing.T) {
+func TestScriptHandlerDecodesAndRewritesEncodedResponses(t *testing.T) {
 	var compressed bytes.Buffer
 	writer := gzip.NewWriter(&compressed)
-	if _, err := writer.Write([]byte(`<html><head><script src="entry.js"></script></head></html>`)); err != nil {
+	if _, err := writer.Write([]byte(`<html><head><script src="entry.js"></script></head><body>test</body></html>`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
 	handler := &ScriptHandler{version: "?v=test"}
-	for _, contentType := range []string{"text/html; charset=utf-8", "application/javascript", "application/octet-stream"} {
-		t.Run(contentType, func(t *testing.T) {
-			conn := &SunnyNet.HttpConn{
-				Type:    sunnyPublic.HttpResponseOK,
-				Request: httptest.NewRequest(http.MethodGet, "https://channels.weixin.qq.com/web/pages/s", nil),
-				Response: &http.Response{
-					StatusCode:    http.StatusOK,
-					ContentLength: int64(compressed.Len()),
-					Header: http.Header{
-						"Content-Type":     {contentType},
-						"Content-Encoding": {"gzip"},
-						"Content-Length":   {strconv.Itoa(compressed.Len())},
-						"Cache-Control":    {"public, max-age=600"},
-					},
-					Body: io.NopCloser(bytes.NewReader(compressed.Bytes())),
+
+	// 测试 HTML 能够被解压缩并注入改写
+	t.Run("HTML_Gzip", func(t *testing.T) {
+		conn := &SunnyNet.HttpConn{
+			Type:    sunnyPublic.HttpResponseOK,
+			Request: httptest.NewRequest(http.MethodGet, "https://channels.weixin.qq.com/web/pages/s", nil),
+			Response: &http.Response{
+				StatusCode:    http.StatusOK,
+				ContentLength: int64(compressed.Len()),
+				Header: http.Header{
+					"Content-Type":     {"text/html; charset=utf-8"},
+					"Content-Encoding": {"gzip"},
+					"Content-Length":   {strconv.Itoa(compressed.Len())},
+					"Cache-Control":    {"public, max-age=600"},
 				},
+				Body: io.NopCloser(bytes.NewReader(compressed.Bytes())),
+			},
+		}
+		if !handler.Handle(conn) {
+			t.Fatal("压缩的 HTML 应该被成功解压并注入改写")
+		}
+		defer conn.Response.Body.Close()
+		body, err := io.ReadAll(conn.Response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if conn.Response.Header.Get("Content-Encoding") != "" {
+			t.Fatalf("改写后的响应不应保留 Content-Encoding，实际为: %s", conn.Response.Header.Get("Content-Encoding"))
+		}
+		if !strings.Contains(string(body), "entry.js?v=test") {
+			t.Fatal("改写后的 HTML 未注入正确的版本参数")
+		}
+	})
+
+	// 测试 HTTP/2 小写 header（content-encoding / content-length）也能被彻底清除
+	t.Run("Lowercase_Headers_Cleaned", func(t *testing.T) {
+		conn := &SunnyNet.HttpConn{
+			Type:    sunnyPublic.HttpResponseOK,
+			Request: httptest.NewRequest(http.MethodGet, "https://channels.weixin.qq.com/finder-preview/pages/sph?id=test", nil),
+			Response: &http.Response{
+				StatusCode:    http.StatusOK,
+				ContentLength: int64(compressed.Len()),
+				Header: http.Header{
+					"content-type":     {"text/html; charset=utf-8"},
+					"content-encoding": {"gzip"},
+					"content-length":   {strconv.Itoa(compressed.Len())},
+				},
+				Body: io.NopCloser(bytes.NewReader(compressed.Bytes())),
+			},
+		}
+		if !handler.Handle(conn) {
+			t.Fatal("小写 header 的 HTML 应该被成功解压并注入改写")
+		}
+		defer conn.Response.Body.Close()
+		for k := range conn.Response.Header {
+			if strings.EqualFold(k, "content-encoding") {
+				t.Fatalf("小写 content-encoding 未被清除: %s", k)
 			}
-			if handler.Handle(conn) {
-				t.Fatal("压缩正文不应按明文改写")
+			if strings.EqualFold(k, "content-length") {
+				t.Fatalf("小写 content-length 未被清除: %s", k)
 			}
-			defer conn.Response.Body.Close()
-			body, err := io.ReadAll(conn.Response.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(body, compressed.Bytes()) || conn.Response.ContentLength != int64(compressed.Len()) ||
-				conn.Response.Header.Get("Content-Encoding") != "gzip" ||
-				conn.Response.Header.Get("Content-Length") != strconv.Itoa(compressed.Len()) ||
-				conn.Response.Header.Get("Cache-Control") != "public, max-age=600" {
-				t.Fatal("透传响应的正文、编码、长度或缓存策略被改变")
-			}
-		})
-	}
+		}
+	})
+
+	// 测试普通非 HTML/JS 的二进制数据应透传
+	t.Run("OctetStream_Gzip", func(t *testing.T) {
+		conn := &SunnyNet.HttpConn{
+			Type:    sunnyPublic.HttpResponseOK,
+			Request: httptest.NewRequest(http.MethodGet, "https://channels.weixin.qq.com/web/pages/s", nil),
+			Response: &http.Response{
+				StatusCode:    http.StatusOK,
+				ContentLength: int64(compressed.Len()),
+				Header: http.Header{
+					"Content-Type":     {"application/octet-stream"},
+					"Content-Encoding": {"gzip"},
+					"Content-Length":   {strconv.Itoa(compressed.Len())},
+					"Cache-Control":    {"public, max-age=600"},
+				},
+				Body: io.NopCloser(bytes.NewReader(compressed.Bytes())),
+			},
+		}
+		if handler.Handle(conn) {
+			t.Fatal("非 HTML/JS 二进制正文不应被改写")
+		}
+	})
 }
 
 func TestAPILoadedInjectionDoesNotBreakNativeModule(t *testing.T) {
@@ -210,3 +264,98 @@ if(!globalThis.nativeBooted||api$.finderSearch()!=="native")throw Error("native 
 		})
 	}
 }
+
+func TestSkipLiteAppInterception(t *testing.T) {
+	handler := NewScriptHandler(
+		&config.Config{Version: "1.0.21"},
+		[]byte("console.log('core');"),
+		[]byte("console.log('home');"),
+		[]byte("console.log('feed');"),
+		[]byte("console.log('profile');"),
+		[]byte("console.log('search');"),
+		[]byte("console.log('mitt');"),
+		[]byte("console.log('eventbus');"),
+		[]byte("console.log('utils');"),
+		[]byte("console.log('apiClient');"),
+		[]byte("console.log('keepAlive');"),
+		"1.0.21",
+	)
+
+	// 1. 测试 301/302 重定向时 Location 自动追加 skipLiteApp=1
+	t.Run("Redirect_Location_Append_SkipLiteApp", func(t *testing.T) {
+		conn := &SunnyNet.HttpConn{
+			Type:    sunnyPublic.HttpResponseOK,
+			Request: httptest.NewRequest(http.MethodGet, "https://weixin.qq.com/sph/AmC9yBjIA8", nil),
+			Response: &http.Response{
+				StatusCode: http.StatusMovedPermanently,
+				Header: http.Header{
+					"Location": []string{"https://channels.weixin.qq.com/finder-preview/pages/sph?id=AmC9yBjIA8"},
+				},
+				Body: io.NopCloser(bytes.NewReader(nil)),
+			},
+		}
+		handler.Handle(conn)
+		loc := conn.Response.Header.Get("Location")
+		if !strings.Contains(loc, "skipLiteApp=1") {
+			t.Fatalf("重定向 Location 未能追加 skipLiteApp=1: %s", loc)
+		}
+		if loc != "https://channels.weixin.qq.com/finder-preview/pages/sph?id=AmC9yBjIA8&skipLiteApp=1" {
+			t.Fatalf("重定向 Location 格式错误: %s", loc)
+		}
+	})
+
+	// 2. 测试 JS 响应中硬编码的 feed 跳转自动注入 skipLiteApp=1
+	t.Run("JS_Feed_Jump_Rewrite_SkipLiteApp", func(t *testing.T) {
+		jsCode := `l="https://channels.weixin.qq.com/web/pages/feed?eid="+o+"&context_id="+s`
+		conn := &SunnyNet.HttpConn{
+			Type:    sunnyPublic.HttpResponseOK,
+			Request: httptest.NewRequest(http.MethodGet, "https://res.wx.qq.com/t/wx_fed/finder/web/finder-preview/res/assets/feed.4bbb0c43.js", nil),
+			Response: &http.Response{
+				StatusCode:    http.StatusOK,
+				ContentLength: int64(len(jsCode)),
+				Header: http.Header{
+					"Content-Type": []string{"application/javascript; charset=utf-8"},
+				},
+				Body: io.NopCloser(strings.NewReader(jsCode)),
+			},
+		}
+		if !handler.Handle(conn) {
+			t.Fatal("feed.js 应该被 Handle 处理并改写")
+		}
+		defer conn.Response.Body.Close()
+		rewritten, _ := io.ReadAll(conn.Response.Body)
+		if !strings.Contains(string(rewritten), "skipLiteApp=1") {
+			t.Fatalf("JS 中 feed 跳转链接未能注入 skipLiteApp=1: %s", string(rewritten))
+		}
+		if !strings.Contains(string(rewritten), "https://channels.weixin.qq.com/web/pages/feed?skipLiteApp=1&eid=") {
+			t.Fatalf("改写后的 feed 链接不符合预期: %s", string(rewritten))
+		}
+	})
+
+	// 3. 测试注入的 HTML 包含 WeixinJSBridge Hook
+	t.Run("HTML_Injected_Contains_BridgeHook", func(t *testing.T) {
+		html := `<!DOCTYPE html><html><head><title>Preview</title></head><body><div id="app"></div></body></html>`
+		conn := &SunnyNet.HttpConn{
+			Type:    sunnyPublic.HttpResponseOK,
+			Request: httptest.NewRequest(http.MethodGet, "https://channels.weixin.qq.com/finder-preview/pages/sph?id=test", nil),
+			Response: &http.Response{
+				StatusCode:    http.StatusOK,
+				ContentLength: int64(len(html)),
+				Header: http.Header{
+					"Content-Type": []string{"text/html; charset=utf-8"},
+				},
+				Body: io.NopCloser(strings.NewReader(html)),
+			},
+		}
+		if !handler.Handle(conn) {
+			t.Fatal("HTML 响应应该被注入")
+		}
+		defer conn.Response.Body.Close()
+		injected, _ := io.ReadAll(conn.Response.Body)
+		injectedStr := string(injected)
+		if !strings.Contains(injectedStr, "openUrlWithExtraWebview") || !strings.Contains(injectedStr, "skipLiteApp=1") {
+			t.Fatal("注入的 HTML 中未找到 WeixinJSBridge Hook 逻辑")
+		}
+	})
+}
+

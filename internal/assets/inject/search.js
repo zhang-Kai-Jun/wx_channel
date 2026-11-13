@@ -39,9 +39,14 @@ window.__wx_channels_search_collector = {
   // 初始化
   init: function () {
     var self = this;
+    // 多级阶梯式注入，兼顾首次渲染与重载
+    self.injectToolbarIcon();
     setTimeout(function () {
       self.injectToolbarIcon();
-    }, 2000);
+    }, 600);
+    setTimeout(function () {
+      self.injectToolbarIcon();
+    }, 1800);
     // 自动恢复监听中的任务（搜索页加载后主动查询并恢复）
     this.checkAndRecoverListeningTasks();
   },
@@ -222,95 +227,163 @@ window.__wx_channels_search_collector = {
   injectToolbarIcon: function () {
     var self = this;
     var findIconContainer = function () {
-      var container = document.querySelector('div[data-v-bf57a568].flex.items-center');
-      if (container) return container;
-      var parent = document.querySelector('div.flex-initial.flex-shrink-0.pl-6');
-      if (parent) {
-        container = parent.querySelector('.flex.items-center');
-        if (container) return container;
+      // 1. 优先匹配原生右侧工具栏容器（排除左侧 Logo 及任何包含跳转链接的容器）
+      var candidates = [
+        'div.flex-initial.flex-shrink-0.pl-6 .flex.items-center',
+        'div.flex-initial.flex-shrink-0.pl-4 .flex.items-center',
+        'div.flex-initial.flex-shrink-0 .flex.items-center',
+        'header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center',
+        'header .pointer-events-auto.flex-initial.flex-shrink-0 .flex.items-center',
+        'header .flex-initial.flex-shrink-0 .flex.items-center',
+        'div[data-v-bf57a568].flex.items-center',
+        'header > div:last-child .flex.items-center'
+      ];
+
+      for (var i = 0; i < candidates.length; i++) {
+        var el = document.querySelector(candidates[i]);
+        if (el) {
+          // 严格检查：绝不能是 <a> 链接，也不能在任何跳转 home/页面的 <a> 标签内
+          if (el.tagName.toLowerCase() !== 'a' && !el.closest('a') && !el.closest('[href*="/pages/home"]')) {
+            return el;
+          }
+        }
       }
+
       return null;
     };
 
     var tryInject = function () {
       var container = findIconContainer();
       if (!container) return false;
-      if (container.querySelector('#wx-search-results-icon')) return true;
-      if (container.querySelector('#wx-search-more-icon')) return true;
 
       // 获取DOM按钮
-      var domIconWrapper = document.createElement('div');
-      domIconWrapper.id = 'wx-search-dom-icon';
-      domIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
-      domIconWrapper.title = '获取DOM';
-      domIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>';
+      var domIconWrapper = document.getElementById('wx-search-dom-icon');
+      if (!domIconWrapper) {
+        domIconWrapper = document.createElement('div');
+        domIconWrapper.id = 'wx-search-dom-icon';
+        domIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
+        domIconWrapper.title = '获取DOM';
+        domIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 9h6M9 12h6M9 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>';
 
-      domIconWrapper.style.display = 'none';
-      domIconWrapper.onclick = function () {
-        try {
-          var pageHTML = document.documentElement.outerHTML;
-          var blob = new Blob([pageHTML], { type: 'text/plain;charset=utf-8' });
-          var url = URL.createObjectURL(blob);
-          var a = document.createElement('a');
-          a.href = url;
-          var pageTitle = document.title || 'page';
-          pageTitle = pageTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
-          var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-          a.download = pageTitle + '_dom_' + timestamp + '.txt';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          __wx_log({ msg: 'DOM已下载: ' + a.download });
-          console.log('[搜索] DOM已下载:', a.download);
-        } catch (e) {
-          console.error('[搜索] 获取DOM失败:', e);
-          __wx_log({ msg: '获取DOM失败: ' + e.message });
-        }
-      };
+        domIconWrapper.onclick = function (e) {
+          if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+          try {
+            var pageHTML = document.documentElement.outerHTML;
+            var blob = new Blob([pageHTML], { type: 'text/plain;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            var pageTitle = document.title || 'page';
+            pageTitle = pageTitle.replace(/[\\/:*?"<>|]/g, '_').substring(0, 50);
+            var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            a.download = pageTitle + '_dom_' + timestamp + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            __wx_log({ msg: 'DOM已下载: ' + a.download });
+            console.log('[搜索] DOM已下载:', a.download);
+          } catch (err) {
+            console.error('[搜索] 获取DOM失败:', err);
+            __wx_log({ msg: '获取DOM失败: ' + err.message });
+          }
+          return false;
+        };
+        domIconWrapper.onmousedown = function (e) { e.stopPropagation(); };
+      }
 
       // 采集结果按钮
-      var iconWrapper = document.createElement('div');
-      iconWrapper.id = 'wx-search-results-icon';
-      iconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
-      iconWrapper.title = '搜索结果采集';
-      iconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>';
-      iconWrapper.style.display = 'none';
-      iconWrapper.onclick = function () {
-        var panel = document.getElementById('wx-channels-search-ui');
-        if (!panel) {
-          self.addSearchUI();
-          panel = document.getElementById('wx-channels-search-ui');
-        }
-        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-        self.updateSearchUI();
-        self.renderItemList();
-      };
+      var iconWrapper = document.getElementById('wx-search-results-icon');
+      if (!iconWrapper) {
+        iconWrapper = document.createElement('div');
+        iconWrapper.id = 'wx-search-results-icon';
+        iconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
+        iconWrapper.title = '搜索结果采集';
+        iconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>';
+
+        iconWrapper.onclick = function (e) {
+          if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+          var panel = document.getElementById('wx-channels-search-ui');
+          if (!panel) {
+            self.addSearchUI();
+            panel = document.getElementById('wx-channels-search-ui');
+          }
+          panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+          self.updateSearchUI();
+          self.renderItemList();
+          return false;
+        };
+        iconWrapper.onmousedown = function (e) { e.stopPropagation(); };
+      }
 
       // 获取更多视频按钮
-      var moreIconWrapper = document.createElement('div');
-      moreIconWrapper.id = 'wx-search-more-icon';
-      moreIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
-      moreIconWrapper.title = '获取更多视频';
-      moreIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
-      moreIconWrapper.style.display = 'none';
-      moreIconWrapper.onclick = function () {
-        self.triggerScrollAndCollect();
-      };
+      var moreIconWrapper = document.getElementById('wx-search-more-icon');
+      if (!moreIconWrapper) {
+        moreIconWrapper = document.createElement('div');
+        moreIconWrapper.id = 'wx-search-more-icon';
+        moreIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
+        moreIconWrapper.title = '获取更多视频';
+        moreIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12l7 7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
 
-      container.insertBefore(iconWrapper, container.firstChild);
-      container.insertBefore(moreIconWrapper, container.firstChild);
-      container.insertBefore(domIconWrapper, container.firstChild);
+        moreIconWrapper.onclick = function (e) {
+          if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+          console.log('[搜索] 点击了获取更多视频按钮');
+          self.triggerScrollAndCollect();
+          return false;
+        };
+        moreIconWrapper.onmousedown = function (e) { e.stopPropagation(); };
+      }
+
+      // 按序插入各个按钮（若尚未插入到该 container）
+      if (!container.contains(iconWrapper)) container.insertBefore(iconWrapper, container.firstChild);
+      if (!container.contains(moreIconWrapper)) container.insertBefore(moreIconWrapper, container.firstChild);
+      if (!container.contains(domIconWrapper)) container.insertBefore(domIconWrapper, container.firstChild);
+
       console.log('[搜索] ✅ 采集图标已注入到工具栏');
       return true;
     };
+
+    // 启动持续监听机制，防止 Vue 动态重新渲染时按钮丢失
+    self._startToolbarMonitor(tryInject);
 
     if (tryInject()) return;
     var observer = new MutationObserver(function (_mutations, obs) {
       if (tryInject()) { obs.disconnect(); }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
-    setTimeout(function () { observer.disconnect(); }, 5000);
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+    setTimeout(function () { observer.disconnect(); }, 8000);
+  },
+
+  // 持续监控工具栏按钮存在状态，Vue 重新渲染顶栏后自动重新补齐
+  _startToolbarMonitor: function (tryInjectFn) {
+    var self = this;
+    if (this._toolbarMonitorTimer) return;
+    this._toolbarMonitorTimer = setInterval(function () {
+      if (!window.location.pathname.includes('/pages/s')) return;
+      var existing = document.getElementById('wx-search-results-icon');
+      if (!existing) {
+        console.log('[搜索] 检测到搜索工具栏按钮丢失，自动重新注入...');
+        if (typeof tryInjectFn === 'function') {
+          tryInjectFn();
+        } else {
+          self.injectToolbarIcon();
+        }
+      }
+    }, 1500);
   },
 
   // 触发滚动加载更多视频
@@ -1543,18 +1616,7 @@ if (!window.__wx_search_event_registered) {
 function is_search_page() {
   var path = window.location.pathname || '';
   // 微信搜一搜页面路径特征
-  if (!path.includes('/pages/s')) {
-    return false;
-  }
-  // 额外验证：确保 URL 中包含 q= 参数（搜索关键词参数）
-  // 排除掉 q= 空值或只有占位符的情况
-  var searchParams = new URLSearchParams(window.location.search);
-  var q = searchParams.get('q') || '';
-  // 如果 q 参数为空或只有纯数字/英文短词（可能是测试数据），也认为不在有效搜索状态
-  if (!q || q.length < 2) {
-    return false;
-  }
-  return true;
+  return path.includes('/pages/s');
 }
 
 if (is_search_page()) {

@@ -22,28 +22,67 @@ public class NativePopoutTrigger {
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")]
     public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X; public int Y; }
+
+    const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    const uint MOUSEEVENTF_LEFTUP = 0x0004;
 
     static bool IsTargetButton(string name, string help, string className, string procName, string winClass) {
         name = (name ?? "").Trim();
         help = (help ?? "").Trim();
         className = (className ?? "").Trim();
 
-        // 1. 完全相等匹配“独立窗口显示”或“獨立窗口顯示”
-        if (name == "独立窗口显示" || help == "独立窗口显示" ||
-            name == "獨立窗口顯示" || help == "獨立窗口顯示") {
-            return true;
-        }
-
-        // 2. 微信内嵌视频号（Qt 窗口）：UIA 中按钮 Name 为“還原”/“还原”/“恢复”，Class 为 ImageButton
-        // 注意：只在微信主进程宿主窗口 (Weixin / Qt) 内触发独立，切勿在独立后的弹出窗口 (WeChatAppEx / Chrome_WidgetWin) 内触发反向还原！
         bool isHostWindow = procName.Equals("Weixin", StringComparison.OrdinalIgnoreCase) ||
-                            winClass.IndexOf("Qt5", StringComparison.OrdinalIgnoreCase) >= 0;
+                            procName.Equals("WeChat", StringComparison.OrdinalIgnoreCase) ||
+                            winClass.IndexOf("Qt", StringComparison.OrdinalIgnoreCase) >= 0;
 
-        if (isHostWindow && className == "ImageButton" && (name == "還原" || name == "恢复" || name == "还原")) {
+        // 仅匹配微信宿主窗口 (Qt) 右上角将侧边栏/创作者主页独立弹出的按钮：ImageButton，Name 为“恢复”/“还原”/“還原”
+        bool isRestore = name == "恢复" || name == "还原" || name == "還原" ||
+                         help == "恢复" || help == "还原" || help == "還原";
+
+        if (isHostWindow && className == "ImageButton" && isRestore) {
             return true;
         }
 
         return false;
+    }
+
+    static void ClickElement(IntPtr hWnd, AutomationElement el) {
+        var rect = el.Current.BoundingRectangle;
+        if (rect.Width <= 0 || rect.Height <= 0) return;
+
+        int cx = (int)(rect.Left + rect.Width / 2);
+        int cy = (int)(rect.Top + rect.Height / 2);
+
+        try {
+            var pat = el.GetCurrentPattern(InvokePattern.Pattern) as InvokePattern;
+            if (pat != null) pat.Invoke();
+        } catch {}
+
+        // Qt 宿主上的 ImageButton 依赖物理鼠标事件才能触发弹出
+        POINT oldPos;
+        bool hasOldPos = GetCursorPos(out oldPos);
+        SetForegroundWindow(hWnd);
+        System.Threading.Thread.Sleep(20);
+        SetCursorPos(cx, cy);
+        System.Threading.Thread.Sleep(20);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        System.Threading.Thread.Sleep(30);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        if (hasOldPos) {
+            System.Threading.Thread.Sleep(20);
+            SetCursorPos(oldPos.X, oldPos.Y);
+        }
     }
 
     public static int Main(string[] args) {
@@ -76,10 +115,9 @@ public class NativePopoutTrigger {
                 var winEl = AutomationElement.FromHandle(hWnd);
                 if (winEl == null) return true;
 
-                // 仅精准匹配【独立窗口显示】目标按钮
                 bool matched = false;
 
-                // 1. 先快速检查 Button 控件
+                // 1. 优先检查 Button 控件
                 var condBtn = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
                 var allBtns = winEl.FindAll(TreeScope.Descendants, condBtn);
                 for (int b = 0; b < allBtns.Count; b++) {
@@ -88,59 +126,25 @@ public class NativePopoutTrigger {
                     string help = btn.Current.HelpText;
                     string bCls = btn.Current.ClassName;
                     if (IsTargetButton(name, help, bCls, procName, cls)) {
-                        var pat = btn.GetCurrentPattern(InvokePattern.Pattern) as InvokePattern;
-                        if (pat != null) {
-                            pat.Invoke();
-                            clicked++;
-                            matched = true;
-                            break;
-                        } else {
-                            var rect = btn.Current.BoundingRectangle;
-                            if (rect.Width > 0 && rect.Height > 0) {
-                                int cx = (int)(rect.Left + rect.Width / 2);
-                                int cy = (int)(rect.Top + rect.Height / 2);
-                                IntPtr lparam = (IntPtr)((cy << 16) | (cx & 0xFFFF));
-                                PostMessage(hWnd, 0x0201, (IntPtr)1, lparam);
-                                System.Threading.Thread.Sleep(30);
-                                PostMessage(hWnd, 0x0202, IntPtr.Zero, lparam);
-                                clicked++;
-                                matched = true;
-                                break;
-                            }
-                        }
+                        ClickElement(hWnd, btn);
+                        clicked++;
+                        matched = true;
+                        break;
                     }
                 }
 
-                // 2. 若 Button 控件未命中，且是 Chromium 窗口，则遍历所有控件匹配
+                // 2. 若 Button 控件未命中，则遍历所有控件兜底
                 if (!matched) {
-                    bool isChromium = procName.Equals("WeChatAppEx", StringComparison.OrdinalIgnoreCase) || cls.Contains("Chrome_WidgetWin");
-                    if (isChromium) {
-                        var allDesc = winEl.FindAll(TreeScope.Descendants, Condition.TrueCondition);
-                        for (int i = 0; i < allDesc.Count; i++) {
-                            var el = allDesc[i];
-                            string name = el.Current.Name;
-                            string help = el.Current.HelpText;
-                            string elCls = el.Current.ClassName;
-                            if (IsTargetButton(name, help, elCls, procName, cls)) {
-                                var pat = el.GetCurrentPattern(InvokePattern.Pattern) as InvokePattern;
-                                if (pat != null) {
-                                    pat.Invoke();
-                                    clicked++;
-                                    break;
-                                } else {
-                                    var rect = el.Current.BoundingRectangle;
-                                    if (rect.Width > 0 && rect.Height > 0) {
-                                        int cx = (int)(rect.Left + rect.Width / 2);
-                                        int cy = (int)(rect.Top + rect.Height / 2);
-                                        IntPtr lparam = (IntPtr)((cy << 16) | (cx & 0xFFFF));
-                                        PostMessage(hWnd, 0x0201, (IntPtr)1, lparam);
-                                        System.Threading.Thread.Sleep(30);
-                                        PostMessage(hWnd, 0x0202, IntPtr.Zero, lparam);
-                                        clicked++;
-                                        break;
-                                    }
-                                }
-                            }
+                    var allDesc = winEl.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+                    for (int i = 0; i < allDesc.Count; i++) {
+                        var el = allDesc[i];
+                        string name = el.Current.Name;
+                        string help = el.Current.HelpText;
+                        string elCls = el.Current.ClassName;
+                        if (IsTargetButton(name, help, elCls, procName, cls)) {
+                            ClickElement(hWnd, el);
+                            clicked++;
+                            break;
                         }
                     }
                 }

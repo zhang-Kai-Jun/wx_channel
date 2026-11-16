@@ -522,14 +522,7 @@ public class SphSearch {
         SetClipboardText(targetUrl);
         LogInfo("Step3", "聚焦输入框并粘贴目标链接: " + targetUrl);
 
-        // Ctrl+A -> Ctrl+V -> Enter
-        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-        keybd_event(VK_A, 0, 0, UIntPtr.Zero);
-        Thread.Sleep(30);
-        keybd_event(VK_A, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        Thread.Sleep(50);
-
+        // Ctrl+V -> Enter
         keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
         keybd_event(VK_V, 0, 0, UIntPtr.Zero);
         Thread.Sleep(30);

@@ -378,37 +378,11 @@ func (h *APIHandler) saveBrowseRecord(videoID, title, author, authorID string, d
 	// 保存到数据库
 	repo := database.NewBrowseHistoryRepository()
 
-	// 先检查是否已存在该记录
-	existing, err := repo.GetByID(videoID)
-	if err != nil {
-		utils.Warn("检查浏览记录失败: %v", err)
-		return
-	}
-
-	if existing != nil {
-		// 更新现有记录
-		record.CreatedAt = existing.CreatedAt
-		// 如果现有记录没有解密密钥但新数据有，则更新
-		if existing.DecryptKey == "" && decryptKey != "" {
-			record.DecryptKey = decryptKey
-		} else if existing.DecryptKey != "" {
-			// 保留现有的解密密钥
-			record.DecryptKey = existing.DecryptKey
-		}
-		err = repo.Update(record)
-		if err != nil {
-			utils.Warn("更新浏览记录失败: %v", err)
-		} else {
-			utils.Info("✓ 浏览记录已更新: %s", title)
-		}
+	// 详情请求可能并发到达，使用原子幂等写入，避免查询与插入之间的竞态。
+	if err := repo.Create(record); err != nil {
+		utils.Warn("保存浏览记录失败: %v", err)
 	} else {
-		// 创建新记录
-		err = repo.Create(record)
-		if err != nil {
-			utils.Warn("保存浏览记录失败: %v", err)
-		} else {
-			utils.Info("✓ 浏览记录已保存: %s", title)
-		}
+		utils.Info("✓ 浏览记录已保存: %s", title)
 	}
 }
 

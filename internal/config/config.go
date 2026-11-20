@@ -54,7 +54,7 @@ type Config struct {
 	// 功能开关
 	RadarEnabled bool `mapstructure:"radar_enabled"`
 
-	// 代理模式: system (系统代理, 默认推荐), process (进程驱动代理)
+	// 仅支持 process；保留字段以兼容旧配置，system 不再启用系统代理。
 	ProxyMode string `mapstructure:"proxy_mode"`
 }
 
@@ -147,6 +147,7 @@ func loadConfig() *Config {
 
 	// 数据库加载覆盖（保持最高优先级）
 	loadFromDatabase(config)
+	config.ProxyMode = "process"
 
 	// Fallback: 确保端口有效
 	if config.Port == 0 {
@@ -189,7 +190,7 @@ func setDefaults() {
 
 	// 功能默认值
 	viper.SetDefault("radar_enabled", false)
-	viper.SetDefault("proxy_mode", "system")
+	viper.SetDefault("proxy_mode", "process")
 }
 
 // loadFromDatabase 从数据库加载配置（优先级最高）

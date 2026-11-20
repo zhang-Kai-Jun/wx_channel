@@ -40,7 +40,7 @@ for (const action of ['open_link', 'open_profile', 'enter_video']) {
           id: 'nav-1', key: 'key:channels:dom_action',
           body: { action, target: 'author', url: 'https://channels.weixin.qq.com/web/pages/profile', index: 0 },
         });
-        if (connected && action === 'open_link') {
+        if (connected) {
           assert.equal(events[0].type, 'api_response');
           assert.equal(events[0].data.id, 'nav-1');
           assert.equal(events[0].data.data.success, true);

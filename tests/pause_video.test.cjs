@@ -15,6 +15,7 @@ const pauseLabel = '\u6682\u505c';
 const playLabel = '\u64ad\u653e';
 
 function setup(html, onWait = () => {}, options = {}) {
+  let timerNow = Date.now();
   const dom = new JSDOM(html, { url: options.url || 'https://channels.weixin.qq.com/' });
   const { window } = dom;
   const document = window.document;
@@ -31,10 +32,10 @@ function setup(html, onWait = () => {}, options = {}) {
   vm.runInNewContext(clientSource, {
     window, document, XPathResult: window.XPathResult, KeyboardEvent: window.KeyboardEvent, MutationObserver: window.MutationObserver,
     console: { log() {}, warn() {}, error() {} },
-    Date: options.now ? class extends Date { static now() { return options.now(); } } : Date,
+    Date: class extends Date { static now() { return options.now ? options.now() : options.asyncTimers ? Date.now() : timerNow; } },
     fetch: async () => ({}), clearTimeout,
     setTimeout: (callback, delay) => {
-      const invoke = () => { onWait(delay, document); callback(); };
+      const invoke = () => { timerNow += delay; onWait(delay, document); callback(); };
       if (options.asyncTimers) return setTimeout(invoke, Math.min(delay, 5));
       invoke();
       return 0;
@@ -127,6 +128,114 @@ test('a reused image pause button can immediately stop a different feed', async 
 
 test('empty page is not reported as already paused', async () => {
   assert.equal((await setup('').run()).success, false);
+});
+
+for (const appearAt of [4200, 5000]) {
+  test(`媒体等待：同作品媒体在 ${appearAt} 毫秒出现后立即暂停并确认`, async () => {
+    let elapsed = 0, mountedAt = 0, pausedAt = 0, state;
+    const { window, run } = setup('<div class="slides-item"><div id="flow-feed-current"></div></div>', (delay, document) => {
+      elapsed += delay;
+      if (state || elapsed < appearAt) return;
+      const video = document.createElement('video');
+      document.querySelector('[id]').append(video);
+      state = mediaState(video);
+      const pause = video.pause;
+      video.pause = () => { pausedAt = elapsed; pause(); };
+      mountedAt = elapsed;
+    });
+    try {
+      const result = await run();
+      assert.equal(result.success, true);
+      assert.equal(result.isPaused, true);
+      assert.ok(state?.paused);
+      assert.equal(state.calls, 1);
+      assert.equal(pausedAt, mountedAt, '媒体出现后先暂停，再等待确认');
+      assert.ok(mountedAt >= appearAt && mountedAt <= 5000);
+    } finally { window.close(); }
+  });
+}
+
+test('媒体等待：缺失超过 5 秒明确超时，不无限等待或冒充成功', async () => {
+  let elapsed = 0;
+  const { window, run } = setup('<div class="slides-item"><div id="flow-feed-current"></div></div>', delay => { elapsed += delay; });
+  try {
+    const result = await run();
+    assert.equal(result.success, false);
+    assert.equal(result.isPaused, false);
+    assert.equal(result.reason, 'media_missing_timeout');
+    assert.match(result.message, /5秒/);
+    assert.equal(elapsed, 5000);
+    assert.equal(result.diagnostics.mediaWaitTimeoutMs, 5000);
+    assert.equal(result.diagnostics.mediaWaitElapsedMs, 5000);
+    assert.equal(result.diagnostics.media.length, 0);
+  } finally { window.close(); }
+});
+
+for (const change of ['feed', 'url', 'scope', 'store']) {
+  test(`媒体等待：${change} 切换后立即中止，不能暂停新作品`, async () => {
+    let elapsed = 0, state;
+    const { window, run } = setup(change === 'store' ? '<div class="slides-item"></div>' : '<div class="slides-item"><div id="flow-feed-current"></div></div>', (delay, document) => {
+      elapsed += delay;
+      if (state) return;
+      if (change === 'feed') document.querySelector('[id]').id = 'flow-feed-other';
+      if (change === 'url') window.history.replaceState({}, '', '/web/pages/feed?oid=other');
+      if (change === 'scope') document.body.innerHTML = '<div class="slides-item"><div id="flow-feed-current"></div></div>';
+      if (change === 'store') window.__wx_channels_store__.profile.id = 'other';
+      const video = document.createElement('video');
+      (document.querySelector('[id]') || document.querySelector('.slides-item')).append(video);
+      state = mediaState(video);
+    }, { url: 'https://channels.weixin.qq.com/web/pages/feed?oid=current' });
+    window.__wx_channels_store__ = { profile: { id: 'current' } };
+    try {
+      const result = await run();
+      assert.equal(result.success, false);
+      assert.equal(result.cancelled, true);
+      assert.equal(state.calls, 0);
+      assert.ok(elapsed <= 300, '身份变化不应等完 5 秒');
+    } finally { window.close(); }
+  });
+}
+
+test('媒体等待：首次媒体确认期间换源仍中止，不把新作品当作加载完成', async () => {
+  let elapsed = 0, state;
+  const { window, run } = setup('<div class="slides-item"><div id="flow-feed-current"></div></div>', (delay, document) => {
+    elapsed += delay;
+    if (!state) {
+      const video = document.createElement('video');
+      video.src = 'one.mp4';
+      document.querySelector('[id]').append(video);
+      state = mediaState(video);
+    } else if (delay === 200) document.querySelector('video').src = 'other.mp4';
+  });
+  try {
+    const result = await run();
+    assert.equal(result.success, false);
+    assert.equal(result.cancelled, true);
+    assert.equal(state.calls, 1);
+    assert.ok(elapsed < 5000);
+  } finally { window.close(); }
+});
+
+test('媒体等待：自动暂停与主动请求共用等待，首次媒体挂载不能使原请求取消', async t => {
+  let waits = 0, state;
+  const { window, document, run } = setup('<div class="slides-item"><div id="flow-feed-current" ml-key="flow-image"></div></div>', (_delay, doc) => {
+    if (++waits !== 2) return;
+    const video = doc.createElement('video');
+    doc.querySelector('[id]').append(video);
+    state = mediaState(video);
+  }, { asyncTimers: true, url: 'https://channels.weixin.qq.com/web/pages/feed?oid=current' });
+  const client = window.__wx_api_client;
+  t.after(async () => {
+    client.stopAutoPause();
+    if (client.pausePromise) await client.pausePromise;
+    window.close();
+  });
+  client.startAutoPause();
+  const result = await run();
+  assert.equal(result.success, true);
+  assert.equal(state.paused, true);
+  assert.equal(state.calls, 1);
+  assert.ok(document.querySelector('video'));
 });
 
 test('offscreen controls and media are left alone', async () => {
@@ -551,17 +660,63 @@ test('initially paused audio that autoplays during confirmation must be paused',
   assert.equal(result.byMethod, 'button_click');
   assert.equal(clicks, 1);
   assert.equal(state.paused, true);
-  assert.equal(result.diagnostics.version, 'pause-v5-no-toggle');
+  assert.equal(result.diagnostics.version, 'pause-v7-media-wait');
 });
 
-test('unloaded media is not reported as already paused', async () => {
-  const { document, run } = setup('<video></video>');
+for (const tag of ['video', 'audio']) for (const readyState of [0, 1]) test(`尚未加载的暂停媒体必须显式停止，${tag} readyState=${readyState}`, async () => {
+  const { document, window, run } = setup(`<div class="slides-item"><div id="flow-feed-current"></div><div ml-key="flow-image"><${tag}></${tag}></div></div>`);
+  try {
+    const video = document.querySelector(tag);
+    const state = mediaState(video, true);
+    Object.defineProperty(video, 'readyState', { get: () => readyState });
+    const result = await run();
+    assert.equal(result.success, true);
+    assert.equal(result.isPaused, true);
+    assert.equal(result.byMethod, `${tag}_element`);
+    assert.equal(state.calls, 1, '先调用原生 pause，不能只相信默认的 paused=true');
+    assert.equal(result.diagnostics.media[0].readyState, readyState);
+  } finally { window.close(); }
+});
+
+test('同作品有多个未加载媒体，不能用一个成功暂停掩盖另一个调用失败', async () => {
+  const { document, window, run } = setup('<video></video><video></video>');
+  try {
+    const videos = [...document.querySelectorAll('video')];
+    videos.forEach(video => {
+      mediaState(video, true);
+      Object.defineProperty(video, 'readyState', { get: () => 0 });
+    });
+    videos[0].pause = () => { throw new Error('pause unavailable'); };
+    assert.equal((await run()).success, false);
+  } finally { window.close(); }
+});
+
+test('未加载媒体的原生暂停调用抛错时仍失败，不能只读 paused=true 就放行', async () => {
+  const { document, window, run } = setup('<video></video>');
+  try {
+    const video = document.querySelector('video');
+    const state = mediaState(video, true);
+    Object.defineProperty(video, 'readyState', { get: () => 0 });
+    video.pause = () => { state.calls++; throw new Error('pause unavailable'); };
+    const result = await run();
+    assert.equal(result.success, false);
+    assert.equal(result.reason, 'media_not_ready');
+    assert.ok(state.calls > 0);
+  } finally { window.close(); }
+});
+
+test('尚未加载的媒体确认停止后，晚到的播放事件仍立即暂停', async t => {
+  const { document, window, client } = autoSetup(t, '<video></video>');
   const video = document.querySelector('video');
-  mediaState(video, true);
+  const state = mediaState(video, true);
   Object.defineProperty(video, 'readyState', { get: () => 0 });
-  const result = await run();
-  assert.equal(result.success, false);
-  assert.equal(result.diagnostics.media[0].readyState, 0);
+  client.startAutoPause();
+  await waitFor(() => !client.pausePromise);
+  assert.equal(state.calls, 1);
+  state.paused = false;
+  video.dispatchEvent(new window.Event('play'));
+  assert.equal(state.paused, true);
+  assert.equal(state.calls, 2);
 });
 
 test('media that resumes after a pause is not reported as successfully stopped', async () => {

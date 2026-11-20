@@ -10,7 +10,7 @@ function fixture() {
   const logs: any[] = [];
   const timers: (() => void)[] = [];
   const navigationTimers: (() => void)[] = [];
-  const listeners: Record<string, () => void> = {};
+  const listeners: Record<string, (event?: any) => void> = {};
   const observers: any[] = [];
   let now = 0;
   const counts = { nodes: 100, media: 1 };
@@ -18,7 +18,7 @@ function fixture() {
     getElementsByTagName: () => ({ length: counts.nodes }),
     querySelectorAll: () => Array.from({ length: counts.media }, () => ({ paused: true })),
     addEventListener: (name: string, fn: () => void) => { listeners[name] = fn; } };
-  const window: any = { location: { pathname: '/web/pages/feed' },
+  const window: any = { location: { pathname: '/web/pages/feed', href: 'https://channels.weixin.qq.com/web/pages/feed' },
     addEventListener: (name: string, fn: () => void) => { listeners[name] = fn; },
     __wx_api_client: { commentPageInstance: () => 'page-1' } };
   const performance: any = { now: () => now,
@@ -119,4 +119,74 @@ test('记录后台持续时间和长任务累计耗时，内存接口缺失时�
   f.listeners.visibilitychange();
   const visibility = f.logs.filter(l => l.event === 'visibility').at(-1);
   assert.equal(visibility.previous_state_ms, 60000);
+});
+
+test('页面异常记录位置和堆栈，地址去掉凭据且不阻止微信原有错误处理', async () => {
+  const f = fixture();
+  let prevented = false;
+  assert.equal(typeof f.listeners.error, 'function');
+  f.listeners.error({ message: 'failed https://res.wx.qq.com/app.js?token=secret#x',
+    filename: 'https://res.wx.qq.com/app.js?token=secret#x', lineno: 19, colno: 4,
+    error: { stack: 'Error at https://res.wx.qq.com/app.js?token=secret#x' },
+    preventDefault() { prevented = true; } });
+  const error = f.logs.find(l => l.event === 'js_error');
+  assert.equal(error.resource, 'https://res.wx.qq.com/app.js');
+  assert.equal(error.line, 19);
+  assert.equal(error.column, 4);
+  assert.ok(error.stack.includes('app.js'));
+  assert.ok(!JSON.stringify(error).includes('secret'));
+  assert.equal(prevented, false);
+  await new Promise(resolve => setImmediate(resolve));
+  f.listeners.error({ message: 'repeated' });
+  assert.equal(f.logs.filter(l => l.event === 'js_error').length, 1, '相同类型的错误需要限流');
+});
+
+test('脚本资源失败与 Promise 异常独立记录，忽略图片和诊断上传错误', async () => {
+  const f = fixture();
+  assert.equal(typeof f.listeners.error, 'function');
+  assert.equal(typeof f.listeners.unhandledrejection, 'function');
+  f.listeners.error({ target: { tagName: 'IMG', src: 'https://cdn.example.com/image.png' } });
+  f.listeners.error({ target: { tagName: 'SCRIPT', src: 'https://channels.weixin.qq.com/__wx_channels_api/tip' } });
+  assert.equal(f.logs.length, 0);
+  f.listeners.error({ target: { tagName: 'SCRIPT', src: 'https://res.wx.qq.com/module.js?pass_ticket=secret' } });
+  await new Promise(resolve => setImmediate(resolve));
+  f.listeners.unhandledrejection({ reason: { message: 'initialization failed', stack: 'x'.repeat(5000) } });
+  const resource = f.logs.find(l => l.event === 'resource_error');
+  const rejection = f.logs.find(l => l.event === 'unhandled_rejection');
+  assert.equal(resource.resource, 'https://res.wx.qq.com/module.js');
+  assert.equal(rejection.message, 'initialization failed');
+  assert.ok(rejection.stack.length <= 2048);
+  assert.doesNotThrow(() => f.listeners.error({ get message() { throw new Error('broken event'); } }));
+});
+
+test('导航细分连接、首包和正文阶段，便于定位进入代理回调前的等待', () => {
+  const f = fixture();
+  f.performance.getEntriesByType = () => [{ redirectStart: 1, redirectEnd: 101,
+    domainLookupStart: 101, domainLookupEnd: 111, connectStart: 111, secureConnectionStart: 121,
+    connectEnd: 151, requestStart: 160, responseStart: 460, responseEnd: 500,
+    domContentLoadedEventEnd: 800, loadEventEnd: 1000 }];
+  f.listeners.load();
+  f.navigationTimers.shift()!();
+  const nav = f.logs.find(l => l.event === 'navigation');
+  assert.equal(nav.redirect_ms, 100);
+  assert.equal(nav.dns_ms, 10);
+  assert.equal(nav.connect_ms, 40);
+  assert.equal(nav.tls_ms, 30);
+  assert.equal(nav.request_start_ms, 160);
+  assert.equal(nav.wait_response_ms, 300);
+  assert.equal(nav.download_ms, 40);
+});
+
+test('导航日志占满上传通道时保留一条异常，且页面后续改写 fetch 不影响诊断', async () => {
+  const f = fixture();
+  assert.equal(typeof f.listeners.error, 'function');
+  f.window.__sph_perf_log('navigation', {});
+  f.window.__sph_perf_log('page_resources', {});
+  f.window.fetch = () => { throw new Error('wrapped fetch must not be used'); };
+  f.listeners.error({ message: 'early initialization error' });
+  assert.equal(f.logs.length, 2, '诊断仍然最多同时上传两条');
+  await new Promise(resolve => setImmediate(resolve));
+  const error = f.logs.find(l => l.event === 'js_error');
+  assert.equal(error.message, 'early initialization error');
+  assert.equal(error.resource, '');
 });

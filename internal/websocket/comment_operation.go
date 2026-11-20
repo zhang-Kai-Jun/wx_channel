@@ -92,15 +92,27 @@ func (h *Hub) startCommentOperation(id string, body DOMActionBody, run func() (j
 			return
 		}
 		var result struct {
-			Success       *bool `json:"success"`
-			ResultUnknown bool  `json:"resultUnknown"`
+			Success       *bool           `json:"success"`
+			ResultUnknown bool            `json:"resultUnknown"`
+			Message       string          `json:"message"`
+			Reason        string          `json:"reason"`
+			Diagnostics   json.RawMessage `json:"diagnostics"`
 		}
-		if json.Unmarshal(data, &result) != nil || result.Success == nil || result.ResultUnknown {
+		if json.Unmarshal(data, &result) != nil || result.Success == nil {
 			outcome.Message = "comment returned no definite result"
 			return
 		}
-		outcome.Status = "completed"
 		outcome.Result = append(json.RawMessage(nil), data...)
+		if result.ResultUnknown {
+			outcome.Message = result.Message
+			if outcome.Message == "" {
+				outcome.Message = "comment returned no definite result"
+			}
+		} else {
+			outcome.Status = "completed"
+		}
+		utils.LogInfo("[CommentOperationResult] operation_id=%s success=%t unknown=%t reason=%s diagnostics=%s",
+			id, *result.Success, result.ResultUnknown, result.Reason, string(result.Diagnostics))
 	}()
 	return nil
 }

@@ -121,12 +121,14 @@ window.__wx_api_client = {
           // 立即重连
           self.connect();
         } else {
-          // 连接还在，发送一个心跳测试
+          // 连接还在，发送一个心跳测试并同步最新可见性状态
           self.sendHeartbeat();
+          self.sendClientState();
         }
       } else {
-        // 页面变为隐藏
+        // 页面变为隐藏，立即同步隐藏状态
         console.log('[API客户端] 📴 页面进入后台');
+        self.sendClientState();
       }
     });
 
@@ -353,6 +355,35 @@ window.__wx_api_client = {
     return window.__sph_page_instance;
   },
 
+  sameTargetUrl: function (expected, actual) {
+    if (!expected || !actual) return true;
+    try {
+      var a = new URL(expected, window.location.origin);
+      var b = new URL(actual, window.location.origin);
+      if (a.host === 'channels.weixin.qq.com' && b.host === 'channels.weixin.qq.com' && a.pathname && b.pathname && a.pathname !== b.pathname) {
+        if (!(a.pathname === '/web/pages/s' && b.pathname === '/pages/s') && !(a.pathname === '/pages/s' && b.pathname === '/web/pages/s')) return false;
+      }
+      var keys = ['objectId', 'feedId', 'oid', 'encryptedId', 'finderfeedid', 'id', 'username', 'finderUsername', 'q'];
+      var known = false, matched = false;
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var v1 = a.searchParams.get(k);
+        if (v1) {
+          known = true;
+          var v2 = b.searchParams.get(k);
+          if (v2) {
+            if (v1 !== v2) return false;
+            matched = true;
+          }
+        }
+      }
+      if (known) return matched;
+      return a.host !== 'channels.weixin.qq.com' || a.href === b.href;
+    } catch (_) {
+      return expected === actual;
+    }
+  },
+
   collectClientState: function () {
     var methods = {};
     if (window.WXU) {
@@ -364,7 +395,7 @@ window.__wx_api_client = {
     this.apiMethods = methods;
     return {
       page_instance_id: this.commentPageInstance(),
-      work_id: String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || ''),
+      work_id: this.currentWorkId(),
       pagePath: window.location.pathname,
       href: window.location.href,
       apiReady: !!(methods.finderGetCommentDetail || methods.finderUserPage || methods.finderSearch || methods.finderGetInteractionedFeedList),
@@ -808,6 +839,32 @@ window.__wx_api_client = {
     }).catch(function() {});
   },
 
+  // 作品 Store 可能晚于页面注册；只从当前播放区域取 DOM ID，绝不从主页列表推断。
+  currentWorkId: function() {
+    if (!/^\/web\/pages\/(feed|home)\/?$/.test(window.location.pathname)) return '';
+    var scope = this.getPlaybackScope();
+    var feed = scope && scope.querySelector('[id^="flow-feed-"]');
+    if (feed) return feed.id.replace(/^flow-feed-/, '');
+    return String((window.__wx_channels_store__ && window.__wx_channels_store__.profile && window.__wx_channels_store__.profile.id) || '');
+  },
+
+  // 可在异步等待后重复调用，避免 SPA 在同一文档内切换到其他作者/作品。
+  domIdentityFailure: function(body) {
+    if (!body || body.collection_id || body.action === 'open_profile') return null;
+    var reason = '', message = '';
+    if (body.page_instance_id && body.page_instance_id !== this.commentPageInstance()) {
+      reason = 'page_changed'; message = '页面实例已变化';
+    } else if (body.url && !this.sameTargetUrl(body.url, window.location.href)) {
+      reason = 'url_changed'; message = '目标页面已变化';
+    } else if (body.work_id) {
+      var work = this.currentWorkId();
+      if (body.work_id !== work) {
+        reason = 'work_mismatch'; message = '作品身份已变化或尚未就绪';
+      }
+    }
+    return reason ? { success: false, retryable: false, reason: reason, message: message } : null;
+  },
+
   // 处理 API 调用请求
   handleAPICall: async function (data) {
     var id = data.id;
@@ -832,6 +889,8 @@ window.__wx_api_client = {
     perfLog('api_received', {});
     function resp(responseData) {
       perfLog('api_response', { elapsed_ms: Date.now() - receivedAt });
+      // 作品 DOM 通常晚于连接出现。状态与回执走同一 WS，Go 会先更新身份再交付结果。
+      if (perfAction) self.sendClientState();
       self.sendResponse(id, responseData);
     }
 
@@ -871,6 +930,11 @@ window.__wx_api_client = {
       if (key === 'key:channels:dom_action' && body.action === 'open_link') {
         this.openManualLink(id, body);
         return;
+      }
+      // 通用 DOM 动作页面实例与作者/作品身份校验（不仅限于评论采集，覆盖点赞、关注、评论、列表等所有绑定操作）
+      if (key === 'key:channels:dom_action' && !body.collection_id && body.action !== 'open_profile') {
+        var identityFailure = this.domIdentityFailure(body);
+        if (identityFailure) { resp(identityFailure); return; }
       }
       // 等待 WXU.API 和 WXU.API2 初始化
       var maxWait = 10000; // 最多等待10秒
@@ -993,7 +1057,7 @@ window.__wx_api_client = {
           console.log('[API客户端] 检测到 open_profile，通过 HTTP 回调发送响应后执行导航');
           // 【优化】对于 open_profile，直接使用 HTTP 回调确保响应快速到达服务端
           // 因为页面导航会导致 WebSocket 断开，WebSocket 响应可能丢失
-          this.sendResponseViaHTTP(id, { success: true, message: '正在打开: ' + (body.url || '') });
+          this.sendResponse(id, { success: true, accepted: true, message: '正在打开目标主页' });
           // 延迟执行导航
           setTimeout(function() {
             // 导航前清理关键全局状态（应对 WeChatAppEx 不触发 beforeunload 的情况）
@@ -1028,12 +1092,12 @@ window.__wx_api_client = {
             profileCards = window.__wx_parsers__.getCardElements();
             var profileCard = profileCards[cardIndex];
             if (!profileCard) {
-              this.sendResponseViaHTTP(id, { success: false, message: '未找到可点击的非直播视频' });
+              this.sendResponse(id, { success: false, message: '未找到可点击的非直播视频' });
               return;
             }
             videoTitle = _normalizeText(window.__wx_parsers__.parseTitle(profileCard.outerHTML));
           }
-          this.sendResponseViaHTTP(id, { success: true, message: '已进入视频页面', videoTitle: videoTitle });
+          this.sendResponse(id, { success: true, accepted: true, message: '正在进入视频页面', videoTitle: videoTitle });
 
           // 延迟执行点击
           var self = this;
@@ -1212,6 +1276,8 @@ window.__wx_api_client = {
         var fvcTimeout;
 
         try {
+          var dispatchIdentityFailure = this.domIdentityFailure(body);
+          if (dispatchIdentityFailure) { resp(dispatchIdentityFailure); return; }
           var result = await this.executeDomAction(body, id);
           if (result) {
             resp(result);
@@ -1272,7 +1338,9 @@ window.__wx_api_client = {
     return {
       scope: scope,
       pagePath: window.location.pathname,
+      pageHref: window.location.href,
       feedId: feed ? feed.id : '',
+      workId: this.currentWorkId(),
       media: scope ? Array.from(scope.querySelectorAll('video, audio')).map(function(element) {
         return { element: element, source: [element.getAttribute('src') || '', element.currentSrc || '',
           Array.from(element.querySelectorAll('source')).map(function(source) { return source.src; }).join('|')].join('|') };
@@ -1281,10 +1349,13 @@ window.__wx_api_client = {
   },
 
   samePlaybackTarget: function(left, right) {
-    return !!left && !!right && left.scope === right.scope && left.pagePath === right.pagePath && left.feedId === right.feedId &&
-      left.media.length === right.media.length && left.media.every(function(media, index) {
-        return media.element === right.media[index].element && media.source === right.media[index].source;
-      });
+    if (!left || !right || left.scope !== right.scope || left.pagePath !== right.pagePath ||
+        left.pageHref !== right.pageHref || left.feedId !== right.feedId || left.workId !== right.workId) return false;
+    // 同一播放区域允许首次挂载媒体；绑定后仍严格校验节点和 source，不能跨作品等待。
+    if (!left.media.length && right.media.length) left.media = right.media;
+    return left.media.length === right.media.length && left.media.every(function(media, index) {
+      return media.element === right.media[index].element && media.source === right.media[index].source;
+    });
   },
 
   readPlaybackState: function(scope) {
@@ -1312,7 +1383,7 @@ window.__wx_api_client = {
   },
 
   // 不等待按钮渲染或异步确认；播放事件可直接指定切换动画中的媒体。
-  pausePlaybackNow: function(scope, eventMedia) {
+  pausePlaybackNow: function(scope, eventMedia, onPaused) {
     var state = this.readPlaybackState(scope);
     var method = 'already_paused';
     // 普通视频直接暂停媒体，避免 UI 标签滞后时切换按钮重新触发播放。
@@ -1331,9 +1402,11 @@ window.__wx_api_client = {
     state = this.readPlaybackState(scope);
     if (eventMedia && eventMedia.isConnected && !state.media.includes(eventMedia)) state.media.push(eventMedia);
     for (var i = 0; i < state.media.length; i++) {
-      if (state.media[i].paused) continue;
+      // 未加载时 paused=true 只是默认状态，仍需显式 pause() 取消待启动的播放。
+      if (state.media[i].paused && (state.media[i].readyState >= 2 || state.media[i].ended)) continue;
       try {
         state.media[i].pause();
+        if (onPaused) onPaused(state.media[i]);
         method = state.media[i].tagName === 'AUDIO' ? 'audio_element' : 'video_element';
       } catch(e) { console.log('[API客户端] 媒体暂停失败:', e); }
     }
@@ -1364,13 +1437,17 @@ window.__wx_api_client = {
     var self = this;
     var maxRetries = 5;
     var retryDelay = 300;
+    var explicitlyPaused = new WeakSet();
+    var mediaWaitTimeoutMs = 5000;
+    var mediaWaitStarted = Date.now();
+    var mediaWaitElapsedMs = 0;
     var getPauseScope = this.getPlaybackScope.bind(this);
     var isTargetCurrent = function(scope) {
       return pauseEpoch === (self.pauseEpoch || 0) && scope === getPauseScope() && self.samePlaybackTarget(target, self.getPlaybackTarget(scope));
     };
     var readPauseState = this.readPlaybackState.bind(this);
     // paused 在媒体初始化时也为 true，必须跨多个采样确认，不能读一次就结束。
-    var confirmPaused = async function(scope, initial) {
+    var confirmPaused = async function(scope) {
       var firstState = readPauseState(scope);
       if (!firstState.paused) return false;
       var mediaSources = firstState.media.map(function(element) { return element.currentSrc || element.src; });
@@ -1382,7 +1459,7 @@ window.__wx_api_client = {
         for (var pi = 0; pi < current.media.length; pi++) {
           var mediaElement = current.media[pi];
           if (mediaElement !== firstState.media[pi] || (mediaElement.currentSrc || mediaElement.src) !== mediaSources[pi]) return false;
-          if (initial && mediaElement.readyState < 2 && !mediaElement.ended) return false;
+          if (mediaElement.readyState < 2 && !mediaElement.ended && !explicitlyPaused.has(mediaElement)) return false;
         }
       }
       return true;
@@ -1391,7 +1468,10 @@ window.__wx_api_client = {
       var state = readPauseState(scope);
       var feed = scope && scope.querySelector('[id^="flow-feed-"]');
       return {
-        version: 'pause-v5-no-toggle',
+        version: 'pause-v7-media-wait',
+        mediaWaitTimeoutMs: mediaWaitTimeoutMs,
+        mediaWaitElapsedMs: mediaWaitElapsedMs,
+        visibility: document.visibilityState,
         pagePath: window.location.pathname,
         feedId: feed ? feed.id : '',
         slideIndex: Array.from(document.querySelectorAll('.slides-item')).indexOf(scope),
@@ -1403,8 +1483,27 @@ window.__wx_api_client = {
       };
     };
     var pauseResult = function(method) {
-      return { success: true, isPaused: true, message: '视频已暂停', byMethod: method, diagnostics: pauseDiagnostics(getPauseScope()) };
+      var state = readPauseState(getPauseScope());
+      var loading = state.media.some(function(media) { return media.readyState < 2 && !media.ended; });
+      return { success: true, isPaused: true, message: loading ? '媒体尚未加载，已执行暂停并确认停止' : '视频已暂停', byMethod: method, diagnostics: pauseDiagnostics(getPauseScope()) };
     };
+
+    // 媒体与控件尚未挂载时单独等待，不消耗暂停尝试次数，也不重置截止时间。
+    while (true) {
+      var waitingScope = getPauseScope();
+      if (!isTargetCurrent(waitingScope)) return { success: false, isPaused: false, message: '当前内容已切换', cancelled: true };
+      var waitingState = readPauseState(waitingScope);
+      var hasPlayer = waitingState.media.length || waitingState.pauseButton || waitingState.playButton;
+      if (mediaWaitElapsedMs > mediaWaitTimeoutMs || (!hasPlayer && mediaWaitElapsedMs >= mediaWaitTimeoutMs)) {
+        console.log('[API客户端] 等待媒体或播放控件出现超时（5秒）');
+        return { success: false, isPaused: false, reason: 'media_missing_timeout',
+          message: '等待媒体或播放控件出现超时（5秒），无法确认暂停', diagnostics: pauseDiagnostics(waitingScope) };
+      }
+      if (hasPlayer) break;
+      if (!mediaWaitElapsedMs) console.log('[API客户端] 媒体或播放控件尚未出现，最多等待5秒');
+      await new Promise(function(resolve) { setTimeout(resolve, Math.min(retryDelay, mediaWaitTimeoutMs - mediaWaitElapsedMs)); });
+      mediaWaitElapsedMs = Date.now() - mediaWaitStarted;
+    }
 
     for (var retry = 0; retry < maxRetries; retry++) {
       console.log('[API客户端] 暂停重试 ' + (retry + 1) + '/' + maxRetries);
@@ -1413,15 +1512,15 @@ window.__wx_api_client = {
       if (!isTargetCurrent(scope)) return { success: false, isPaused: false, message: '当前内容已切换', cancelled: true };
       var state = readPauseState(scope);
       if (state.paused) {
-        if (await confirmPaused(scope, true)) return pauseResult('already_paused');
+        if (await confirmPaused(scope)) return pauseResult('already_paused');
         if (!isTargetCurrent(scope)) continue;
         state = readPauseState(scope);
       }
 
-      var method = this.pausePlaybackNow(scope);
+      var method = this.pausePlaybackNow(scope, null, function(media) { explicitlyPaused.add(media); });
       if (!isTargetCurrent(scope)) continue;
       state = readPauseState(scope);
-      if (state.paused && await confirmPaused(scope, method === 'already_paused')) return pauseResult(method);
+      if (state.paused && await confirmPaused(scope)) return pauseResult(method);
       if (!isTargetCurrent(scope)) continue;
 
       if (retry < maxRetries - 1) {
@@ -1433,7 +1532,8 @@ window.__wx_api_client = {
     return {
       success: false,
       isPaused: false,
-      message: '暂停失败: 所有策略均未生效',
+      reason: readPauseState(getPauseScope()).media.some(function(media) { return media.readyState < 2 && !media.ended; }) ? 'media_not_ready' : 'pause_failed',
+      message: '暂停未确认，媒体可能尚未就绪',
       triedMethods: ['button_click', 'video_element', 'audio_element'],
       diagnostics: pauseDiagnostics(getPauseScope())
     };
@@ -1561,6 +1661,53 @@ window.__wx_api_client = {
   executeDomAction: async function(body, requestId) {
     var self = this;
     var action = body.action || 'click_element';
+    // 评论总数保留自己的 ready、实际作品身份和来源协议，由该动作内部校验。
+    var entryIdentityFailure = action === 'get_comment_count' ? null : this.domIdentityFailure(body);
+    if (entryIdentityFailure) return entryIdentityFailure;
+    var guardedMutation = (action.indexOf('do_') === 0 || action === 'get_profile_status' || action === 'get_status') && !body.collection_id;
+    // 即便旧调用方没有带完整身份，也固定本次执行开始时的页面，不能在重试中漂移。
+    var actionIdentity = Object.assign({}, body);
+    if (guardedMutation) {
+      actionIdentity.page_instance_id = body.page_instance_id || this.commentPageInstance();
+      actionIdentity.url = body.url || window.location.href;
+      actionIdentity.work_id = body.work_id || this.currentWorkId();
+    }
+    var mutationSubmitted = false;
+    function _assertActionIdentity() {
+      if (!guardedMutation) return;
+      var failure = self.domIdentityFailure(actionIdentity);
+      if (!failure) return;
+      if (mutationSubmitted) {
+        failure.resultUnknown = true;
+        failure.message = '动作已提交后页面变化，结果待核实';
+      }
+      var error = new Error(failure.message);
+      error.pageIdentityResult = failure;
+      throw error;
+    }
+    async function _checkedDelay(ms) {
+      _assertActionIdentity();
+      await new Promise(function(resolve) { setTimeout(resolve, ms); });
+      _assertActionIdentity();
+    }
+    function _unknownMutation(message) {
+      return { success: false, resultUnknown: true, retryable: false, message: message || '互动已提交，状态未确认，结果待核实' };
+    }
+    async function _confirmMutation(readState, field, message) {
+      for (var check = 0; check < 20; check++) {
+        await _checkedDelay(500);
+        window.__wx_parsers__.refreshAllDom();
+        if (readState()) {
+          var confirmed = { success: true, message: message };
+          confirmed[field] = true;
+          return confirmed;
+        }
+      }
+      return Object.assign(_unknownMutation(), {
+        reason: 'state_unconfirmed',
+        diagnostics: { action: action, confirmation_checks: 20, work_id: actionIdentity.work_id || '' }
+      });
+    }
     if (action === 'pause_video') return this.pauseVideo();
     var target = body.target || 'video';
     var content = body.content || '';
@@ -1637,7 +1784,7 @@ window.__wx_api_client = {
         if (window.__wx_parsers__) window.__wx_parsers__.refreshAllDom();
         var element = checkFn();
         if (element) return element;
-        await new Promise(function(resolve) { setTimeout(resolve, pollInterval); });
+        await _checkedDelay(pollInterval);
         elapsed += pollInterval;
       }
       return null;
@@ -1649,7 +1796,7 @@ window.__wx_api_client = {
       for (var attempt = 1; attempt <= maxRetries; attempt++) {
         console.log('[API客户端] ' + actionName + ' 第' + attempt + '次尝试');
         if (window.__wx_parsers__) window.__wx_parsers__.refreshAllDom();
-        await new Promise(function(resolve) { setTimeout(resolve, _RETRY_CONFIG.domRefreshDelay); });
+        await _checkedDelay(_RETRY_CONFIG.domRefreshDelay);
         try {
           var result = await actionFn();
           if (result && (result.resultUnknown || result.retryable === false)) return result;
@@ -1659,11 +1806,13 @@ window.__wx_api_client = {
           }
           console.log('[API客户端] ' + actionName + ' 第' + attempt + '次尝试失败:', result.message || result.error);
         } catch (err) {
+          if (err.pageIdentityResult) return err.pageIdentityResult;
+          if (mutationSubmitted) return Object.assign(_unknownMutation('提交后状态检查异常：' + err.message), { reason: 'post_submit_error' });
           console.error('[API客户端] ' + actionName + ' 第' + attempt + '次尝试异常:', err.message);
         }
         if (attempt < maxRetries) {
           console.log('[API客户端] ' + actionName + ' 等待' + retryDelay + 'ms后重试...');
-          await new Promise(function(resolve) { setTimeout(resolve, retryDelay); });
+          await _checkedDelay(retryDelay);
         }
       }
       // 所有重试都失败，收集 DOM 调试信息
@@ -1770,7 +1919,12 @@ window.__wx_api_client = {
     }
 
     // 等待页面稳定
-    await new Promise(function(resolve) { setTimeout(resolve, 500); });
+    try {
+      await _checkedDelay(500);
+    } catch (identityError) {
+      if (identityError.pageIdentityResult) return identityError.pageIdentityResult;
+      throw identityError;
+    }
 
     // 根据 target 确定选择器
     var selector = '';
@@ -1781,7 +1935,7 @@ window.__wx_api_client = {
     }
 
     // 使用 DOM Operator 执行操作
-    if (window.__wx_dom_operator__ && typeof window.__wx_dom_operator__.execute === 'function') {
+    if (!guardedMutation && window.__wx_dom_operator__ && typeof window.__wx_dom_operator__.execute === 'function') {
       var result = await window.__wx_dom_operator__.execute(action, selector, content, index);
       return {
         success: result.success || false,
@@ -1874,7 +2028,7 @@ window.__wx_api_client = {
               console.log('[API客户端] 初始数据已就绪: ' + count + ' 个 (等待 ' + elapsed + 'ms)');
               return count;
             }
-            await new Promise(function(resolve) { setTimeout(resolve, pollInterval); });
+            await _checkedDelay(pollInterval);
             elapsed += pollInterval;
           }
           console.log('[API客户端] 等待初始数据超时，继续执行，当前: ' + getVideoCount() + ' 个');
@@ -1891,7 +2045,7 @@ window.__wx_api_client = {
             scrollContainer.scrollTop = scrollHeight + 600;
             console.log('[API客户端] 滚动 #' + (i + 1) + ', scrollHeight: ' + scrollHeight);
 
-            await new Promise(function(resolve) { setTimeout(resolve, scrollDelay); });
+            await _checkedDelay(scrollDelay);
 
             // 检查是否还有 loading
             var loading = scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]');
@@ -1899,7 +2053,7 @@ window.__wx_api_client = {
               // 等待 loading 消失
               var waitLoading = 0;
               while (waitLoading < 10) {
-                await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+                await _checkedDelay(1000);
                 loading = scrollContainer.querySelector('.loading, [class*="loading"], [class*="spinner"]');
                 if (!loading) break;
                 waitLoading++;
@@ -2136,7 +2290,7 @@ window.__wx_api_client = {
         var cardIndex = body.index || 0;
         console.log('[API客户端] click_search_video_card 开始执行, index:', cardIndex);
 
-        await new Promise(function(resolve) { setTimeout(resolve, 800); });
+        await _checkedDelay(800);
 
         var validCards = [];
 
@@ -2200,7 +2354,7 @@ window.__wx_api_client = {
           console.log('[API客户端] 卡片标题: ' + title.substring(0, 50));
 
           targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          await new Promise(function(resolve) { setTimeout(resolve, 500); });
+          await _checkedDelay(500);
 
           targetEl.click();
           console.log('[API客户端] 点击完成');
@@ -2247,58 +2401,39 @@ window.__wx_api_client = {
         if (pageInfo.isProfilePage && !pageInfo.isDetailPage) {
           console.warn('[API客户端] ⚠️ 检测到可能仍在主页，等待页面切换...');
           // 等待页面稳定
-          await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+          await _checkedDelay(2000);
           // 重新检测
           pageInfo = _detectPageType();
           console.log('[API客户端] 重新检测页面类型:', pageInfo);
         }
 
-        // 定义一次点赞尝试（每次都会重新获取 DOM）
         var likeAttempt = async function() {
-          var likeBtn = null;
-          var feedDom = null;
-
-          var feedResult = null;
-          if (targetTitle) {
-            feedResult = _findFeedByTitle(targetTitle);
+          var scope = self.getPlaybackScope();
+          if (!scope) return { success: false, retryable: false, message: '当前播放区域未就绪' };
+          var area = scope.querySelector('.bottom-area') || scope;
+          if (window.__wx_parsers__.isLiked(area)) {
+            return { success: true, isLiked: true, message: '该视频已点赞' };
           }
-
-          if (feedResult) {
-            feedDom = document.getElementById(feedResult.feedId);
-            if (feedDom) {
-              if (window.__wx_parsers__.isLiked(feedDom)) {
-                console.log('[API客户端] feed#' + feedResult.feedIndex + ' 已点赞，跳过');
-                return { success: true, isLiked: true, message: '该视频已点赞' };
-              }
-              likeBtn = window.__wx_parsers__.getUnlikeBtn(feedDom);
-              console.log('[API客户端] 从 feed#' + feedResult.feedIndex + ' 获取点赞按钮:', likeBtn ? '找到' : '未找到');
-            } else {
-              console.log('[API客户端] feed DOM 不存在，使用全局查找');
-              likeBtn = window.__wx_parsers__.getUnlikeBtn();
-            }
-          } else {
-            console.log('[API客户端] 未找到匹配的 feed，使用全局查找');
-            if (window.__wx_parsers__.isLiked()) {
-              console.log('[API客户端] 全局检测到已点赞，跳过');
-              return { success: true, isLiked: true, message: '该视频已点赞' };
-            }
-            likeBtn = window.__wx_parsers__.getUnlikeBtn();
-          }
-
-          if (likeBtn) {
-            console.log('[API客户端] 点击爱心(私密赞/喜欢)按钮:', likeBtn.getAttribute('aria-label') || likeBtn.innerText || likeBtn.className);
-            try {
-              likeBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
-              likeBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-              likeBtn.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
-              likeBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-            } catch(e) {}
-            likeBtn.click();
-            await new Promise(function(resolve) { setTimeout(resolve, 1000); });
-            return { success: true, isLiked: true, message: '点赞成功' };
-          }
-          console.log('[API客户端] 未找到点赞按钮');
-          return { success: false, message: '未找到点赞按钮' };
+          var likeBtn = window.__wx_parsers__.getUnlikeBtn(area);
+          if (!likeBtn || !area.contains(likeBtn)) return { success: false, message: '未找到当前作品点赞按钮' };
+          _assertActionIdentity();
+          mutationSubmitted = true;
+          try {
+            likeBtn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
+            _assertActionIdentity();
+            likeBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            _assertActionIdentity();
+            likeBtn.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
+            _assertActionIdentity();
+            likeBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+          } catch(e) { if (e.pageIdentityResult) throw e; }
+          _assertActionIdentity();
+          likeBtn.click();
+          return await _confirmMutation(function() {
+            var currentScope = self.getPlaybackScope();
+            var currentArea = currentScope && currentScope.querySelector('.bottom-area');
+            return !!currentScope && window.__wx_parsers__.isLiked(currentArea || currentScope);
+          }, 'isLiked', '点赞状态已确认');
         };
 
         return await _executeWithRetry(likeAttempt, 'do_like');
@@ -2319,155 +2454,59 @@ window.__wx_api_client = {
         }
 
         var followAttempt = async function() {
-          var followBtn = null;
-
-          var feedResult = null;
-          if (targetTitle) {
-            feedResult = _findFeedByTitle(targetTitle);
+          var scope = self.getPlaybackScope();
+          if (!scope) return { success: false, retryable: false, message: '当前播放区域未就绪' };
+          var area = scope.querySelector('.bottom-area') || scope;
+          if (window.__wx_parsers__.isFollowed(area)) {
+            return { success: true, isFollowed: true, message: '该作者已关注' };
           }
-
-          if (feedResult) {
-            var feedDom = document.getElementById(feedResult.feedId);
-            if (feedDom) {
-              if (window.__wx_parsers__.isFollowed(feedDom)) {
-                console.log('[API客户端] feed#' + feedResult.feedIndex + ' 已关注，跳过');
-                return { success: true, isFollowed: true, message: '该作者已关注' };
-              }
-              followBtn = window.__wx_parsers__.getFollowBtn(feedDom);
-              console.log('[API客户端] 从 feed#' + feedResult.feedIndex + ' 获取关注按钮:', followBtn ? '找到' : '未找到');
-            }
-          }
-
-          if (!followBtn) {
-            var bottomArea = document.querySelector('.bottom-area');
-            if (bottomArea && window.__wx_parsers__.isFollowed(bottomArea)) {
-              console.log('[API客户端] bottom-area 检测到已关注，跳过');
-              return { success: true, isFollowed: true, message: '该作者已关注' };
-            }
-            var areaFollowBtn = bottomArea ? bottomArea.querySelector('[class*="follow-btn"]') : null;
-            if (areaFollowBtn) {
-              followBtn = areaFollowBtn;
-              console.log('[API客户端] bottom-area 范围内找到关注按钮');
-            }
-          }
-
-          if (followBtn) {
-            followBtn.click();
-            await new Promise(function(resolve) { setTimeout(resolve, 1000); });
-            return { success: true, isFollowed: true, message: '关注成功' };
-          }
-          console.log('[API客户端] 未找到关注按钮');
-          return { success: false, message: '未找到关注按钮' };
+          var followBtn = window.__wx_parsers__.getFollowBtn(area);
+          if (!followBtn || !area.contains(followBtn)) return { success: false, message: '未找到当前作品关注按钮' };
+          _assertActionIdentity();
+          mutationSubmitted = true;
+          followBtn.click();
+          return await _confirmMutation(function() {
+            var currentScope = self.getPlaybackScope();
+            var currentArea = currentScope && currentScope.querySelector('.bottom-area');
+            return !!currentScope && window.__wx_parsers__.isFollowed(currentArea || currentScope);
+          }, 'isFollowed', '关注状态已确认');
         };
 
         return await _executeWithRetry(followAttempt, 'do_follow');
       }
 
       // do_follow_on_profile 操作 - 在主页执行关注（用于用户无视频时）
-      if (action === 'do_follow_on_profile') {
+      if (action === 'do_follow_on_profile' || action === 'get_profile_status') {
         console.log('[API客户端] do_follow_on_profile 开始');
 
+        function isProfileFollowed(text) {
+          return /已关注|互相关注/.test(text || '');
+        }
+        function findProfileFollowButton() {
+          var containers = [document.querySelector('.opr-area'), document.querySelector('.floating-avatar-area'), document];
+          for (var ci = 0; ci < containers.length; ci++) {
+            if (!containers[ci]) continue;
+            var buttons = containers[ci].querySelectorAll('button');
+            for (var bi = 0; bi < buttons.length; bi++) {
+              var text = (buttons[bi].innerText || buttons[bi].textContent || '').trim();
+              if (text === '关注' || isProfileFollowed(text)) return buttons[bi];
+            }
+          }
+          return null;
+        }
         var followAttempt = async function() {
-          // 判断按钮是否表示已关注状态
-          function isFollowedState(text) {
-            return (text || '').includes('已关注') || (text || '').includes('互相关注');
-          }
-
-          // 辅助函数：收集容器内所有关注相关的按钮
-          function collectFollowBtns(container) {
-            if (!container) return [];
-            var result = [];
-            var allBtns = container.querySelectorAll('button');
-            for (var i = 0; i < allBtns.length; i++) {
-              var t = (allBtns[i].innerText || '').trim();
-              if (t === '关注' || isFollowedState(t)) result.push(allBtns[i]);
-            }
-            return result;
-          }
-
-          var profileBtn = null;
-
-          // 第一层：.opr-area（主页固定头部，精确优先）
-          var oprArea = document.querySelector('.opr-area');
-          if (oprArea) {
-            var oprBtns = oprArea.querySelectorAll('button');
-            for (var m = 0; m < oprBtns.length; m++) {
-              var mt = (oprBtns[m].innerText || '').trim();
-              if (mt === '关注' || isFollowedState(mt)) {
-                profileBtn = oprBtns[m];
-                break;
-              }
-            }
-          }
-
-          // 第二层：.floating-avatar-area（浮动头部）
-          if (!profileBtn) {
-            var floatingArea = document.querySelector('.floating-avatar-area');
-            if (floatingArea) {
-              var floatBtns = floatingArea.querySelectorAll('button');
-              for (var n = 0; n < floatBtns.length; n++) {
-                var nt = (floatBtns[n].innerText || '').trim();
-                if (nt === '关注' || isFollowedState(nt)) {
-                  profileBtn = floatBtns[n];
-                  break;
-                }
-              }
-            }
-          }
-
-          // 第三层兜底：全局遍历页面所有按钮
-          if (!profileBtn) {
-            var allBtns = document.querySelectorAll('button');
-            for (var j = 0; j < allBtns.length; j++) {
-              var bt = (allBtns[j].innerText || '').trim();
-              if (bt === '关注' || isFollowedState(bt)) {
-                profileBtn = allBtns[j];
-                break;
-              }
-            }
-          }
-
-          if (!profileBtn) {
-            console.log('[API客户端] do_follow_on_profile 未找到关注相关按钮');
-            return { success: false, message: '未找到主页关注按钮' };
-          }
-
-          var text = (profileBtn.innerText || '').trim();
-          console.log('[API客户端] 主页关注按钮文本:', text);
-
-          // 已关注状态 → 直接返回成功
-          if (isFollowedState(text)) {
-            console.log('[API客户端] 该作者已关注，跳过');
-            return { success: true, isFollowed: true, message: '该作者已关注' };
-          }
-
-          // 未关注 → 执行点击
-          if (text === '关注') {
-            profileBtn.click();
-            console.log('[API客户端] 主页关注按钮已点击');
-            await new Promise(function(resolve) { setTimeout(resolve, 1500); });
-
-            var textAfter = (profileBtn.innerText || '').trim();
-            var followed = isFollowedState(textAfter);
-            console.log('[API客户端] 点击后按钮文本:', textAfter, 'followed:', followed);
-
-            if (followed) {
-              return { success: true, isFollowed: true, message: '主页关注成功' };
-            } else {
-              return { success: false, isFollowed: false, message: '主页关注失败，按钮状态未变化' };
-            }
-          }
-
-          // 兜底：文字既不是"关注"也不是"已关注"，尝试点击
-          profileBtn.click();
-          console.log('[API客户端] 主页按钮（非标准文字）已点击:', text);
-          await new Promise(function(resolve) { setTimeout(resolve, 1500); });
-          var textAfter2 = (profileBtn.innerText || '').trim();
-          var followed2 = isFollowedState(textAfter2);
-          if (followed2) {
-            return { success: true, isFollowed: true, message: '主页关注成功' };
-          }
-          return { success: false, isFollowed: false, message: '主页关注失败，按钮状态未变化' };
+          var button = findProfileFollowButton();
+          if (!button) return { success: false, message: '未找到主页关注按钮' };
+          var followed = isProfileFollowed(button.innerText || button.textContent);
+          if (action === 'get_profile_status') return { success: true, isFollowed: followed };
+          if (followed) return { success: true, isFollowed: true, message: '该作者已关注' };
+          _assertActionIdentity();
+          mutationSubmitted = true;
+          button.click();
+          return await _confirmMutation(function() {
+            var current = findProfileFollowButton();
+            return current && isProfileFollowed(current.innerText || current.textContent);
+          }, 'isFollowed', '主页关注状态已确认');
         };
 
         return await _executeWithRetry(followAttempt, 'do_follow_on_profile');
@@ -2476,6 +2515,9 @@ window.__wx_api_client = {
       // do_comment 操作 - 执行评论（带重试机制）
       if (action === 'do_comment') {
         var commentText = body.content || '';
+        if (!commentText.trim()) {
+          return { success: false, isCommented: false, retryable: false, reason: 'empty_comment', message: '评论内容为空，未发送' };
+        }
 
         // 【关键】先检测页面类型，确保在详情页执行操作
         var pageInfoComment = _detectPageType();
@@ -2491,6 +2533,9 @@ window.__wx_api_client = {
         var commentStarted = Date.now();
         var commentAttemptNumber = 0;
         var commentSubmitted = false;
+        var commentClickCompleted = false;
+        var commentStage = 'initial';
+        var commentInput = null;
         function getCommentRestrictionResult() {
           // 每次查询实时 DOM；支持账号级风控、作者级门槛限制及通用弹窗拦截。
           var riskWarning = '操作太频繁，请稍后再试。检测到你的账号多次发布相似评论，恶意灌水可能被禁言处罚。';
@@ -2570,6 +2615,7 @@ window.__wx_api_client = {
           return null;
         }
         function logCommentStage(stage, details) {
+          commentStage = stage;
           __api_log('INF', '[CommentOperation]', {
             operation_id: body.operation_id || '', request_id: requestId,
             stage: stage, attempt: commentAttemptNumber,
@@ -2584,40 +2630,8 @@ window.__wx_api_client = {
           logCommentStage('attempt');
           var disabledResult = getCommentDisabledResult();
           if (disabledResult) return disabledResult;
-          var feedInfo = window.__wx_current_feed || {};
-          var feedId = feedInfo.feedId;
-          // 【关键】如果不在详情页，不使用缓存的 feedId
-          var feedDom = (feedId && pageInfoComment.isDetailPage) ? document.getElementById(feedId) : null;
-
-          console.log('[API客户端] 开始评论, title:', feedInfo.videoTitle || '', ', pageType:', pageInfoComment);
-
-          var commentBtn = null;
-          if (feedDom) {
-            commentBtn = feedDom.querySelector(window.__wx_selectors__.comment.btn);
-            if (commentBtn) {
-              console.log('[API客户端] 在 feed 中找到评论按钮');
-            }
-          }
-          if (!commentBtn) {
-            // 直接在当前页面查找评论按钮（不限于 feed 范围）
-            var allCommentBtns = document.querySelectorAll('[aria-label^="评论"]');
-            if (allCommentBtns.length > 0) {
-              // 优先选择有数字的评论按钮（如"评论，123"）
-              for (var i = 0; i < allCommentBtns.length; i++) {
-                var label = allCommentBtns[i].getAttribute('aria-label') || '';
-                if (/\d/.test(label)) {
-                  commentBtn = allCommentBtns[i];
-                  console.log('[API客户端] 全局查找评论按钮（带数字）:', label);
-                  break;
-                }
-              }
-              // 如果没找到带数字的，用第一个
-              if (!commentBtn) {
-                commentBtn = allCommentBtns[0];
-                console.log('[API客户端] 全局查找评论按钮:', allCommentBtns[0].getAttribute('aria-label'));
-              }
-            }
-          }
+          var scope = self.getPlaybackScope();
+          var commentBtn = window.__wx_parsers__.getCommentBtn(scope);
 
           if (!commentBtn) {
             logCommentStage('comment_button_missing');
@@ -2626,16 +2640,20 @@ window.__wx_api_client = {
           }
 
           logCommentStage('comment_button_found', { visible: !!commentBtn.getClientRects().length });
-          commentBtn.click();
-          await new Promise(function(resolve) { setTimeout(resolve, 3000); });
+          // 只重试尚未发送的准备阶段；已经展开的面板不能再次点击入口关闭。
+          if (!window.__wx_parsers__.getCommentInput()) {
+            _assertActionIdentity();
+            commentBtn.click();
+            await _checkedDelay(3000);
+          }
 
           window.__wx_parsers__.refreshAllDom();
-          await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+          await _checkedDelay(1000);
 
           console.log('[API客户端] 评论按钮已点击，等待浮层渲染');
 
           // 轮询查找输入框
-          var commentInput = null;
+          commentInput = null;
           var pollMax = 5;
           var pollDelay = 800;
           for (var pollI = 0; pollI < pollMax; pollI++) {
@@ -2647,17 +2665,20 @@ window.__wx_api_client = {
               break;
             }
             window.__wx_parsers__.refreshAllDom();
-            await new Promise(function(resolve) { setTimeout(resolve, pollDelay); });
+            await _checkedDelay(pollDelay);
           }
 
           disabledResult = getCommentDisabledResult();
           if (disabledResult) return disabledResult;
           if (!commentInput) {
-            var placeholder = document.querySelector(window.__wx_selectors__.comment.placeholder);
+            var placeholders = Array.prototype.filter.call(document.querySelectorAll(window.__wx_selectors__.comment.placeholder),
+              function(el) { return window.__wx_parsers__.isVisibleControl(el); });
+            var placeholder = placeholders.length === 1 ? placeholders[0] : null;
             if (placeholder) {
               console.log('[API客户端] textarea 未就绪，点击占位符触发渲染');
+              _assertActionIdentity();
               placeholder.click();
-              await new Promise(function(resolve) { setTimeout(resolve, 1500); });
+              await _checkedDelay(1500);
               commentInput = window.__wx_parsers__.getCommentInput();
             }
           }
@@ -2667,7 +2688,7 @@ window.__wx_api_client = {
           if (!commentInput) {
             logCommentStage('input_missing');
             console.log('[API客户端] 未找到评论输入框，检查页面状态...');
-            await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+            await _checkedDelay(2000);
             var commentBtns = document.querySelectorAll('[aria-label^="评论"]');
             if (commentBtns.length === 0) {
               return { success: false, message: '评论输入框未找到，页面状态已变化，未发送评论' };
@@ -2678,8 +2699,9 @@ window.__wx_api_client = {
           logCommentStage('input_found');
           console.log('[API客户端] 找到评论输入框');
           commentInput.focus();
-          await new Promise(function(resolve) { setTimeout(resolve, 200); });
+          await _checkedDelay(200);
 
+          _assertActionIdentity();
           var nativeInputValueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
           nativeInputValueSetter.call(commentInput, commentText);
           commentInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -2688,10 +2710,10 @@ window.__wx_api_client = {
           commentInput.dispatchEvent(new Event('keyup', { bubbles: true, cancelable: true }));
           commentInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: commentText }));
 
-          await new Promise(function(resolve) { setTimeout(resolve, 800); });
+          await _checkedDelay(800);
 
           window.__wx_parsers__.refreshAllDom();
-          await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+          await _checkedDelay(1000);
 
           var sendBtn = null;
           for (var pollJ = 0; pollJ < pollMax; pollJ++) {
@@ -2702,29 +2724,33 @@ window.__wx_api_client = {
               console.log('[API客户端] 第' + (pollJ + 1) + '次轮询找到发送按钮');
               break;
             }
-            await new Promise(function(resolve) { setTimeout(resolve, pollDelay); });
+            await _checkedDelay(pollDelay);
           }
 
           disabledResult = getCommentDisabledResult();
           if (disabledResult) return disabledResult;
           if (sendBtn) {
+            if (!commentInput.isConnected || !window.__wx_parsers__.isVisibleControl(commentInput) ||
+                commentInput.value !== commentText || !sendBtn.isConnected ||
+                window.__wx_parsers__.getSendBtn(commentInput) !== sendBtn) {
+              return { success: false, retryable: false, reason: 'comment_form_changed', message: '发送前评论输入框变化，未发送' };
+            }
+            _assertActionIdentity();
+            mutationSubmitted = true;
             commentSubmitted = true;
             logCommentStage('send_click');
+            _assertActionIdentity();
             sendBtn.click();
+            commentClickCompleted = true;
             for (var restrictionCheck = 0; restrictionCheck < 5; restrictionCheck++) {
-              await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+              await _checkedDelay(1000);
               var restrictionResult = getCommentRestrictionResult();
               if (restrictionResult) return restrictionResult;
             }
-            window.__wx_parsers__.refreshAllDom();
-            var closedCommentBtns = document.querySelectorAll('[aria-label^="评论"]');
-            if (closedCommentBtns.length === 0) {
-              console.log('[API客户端] 评论浮层已关闭，评论发送成功');
-              return { success: true, isCommented: true, message: '评论已发送' };
-            }
-            console.log('[API客户端] 评论浮层仍显示，视为发送成功');
-            return { success: true, isCommented: true, message: '评论已发送' };
+            // 按用户约定，以完成填写和发送点击作为提交成功；原输入框可能随组件关闭被销毁。
+            return { success: true, isCommented: true, confirmation: 'submitted', message: '评论已填写并点击发送' };
           }
+
 
           logCommentStage('send_button_missing');
           console.log('[API客户端] 未找到发送按钮，尝试检测评论是否已发出...');
@@ -2741,12 +2767,22 @@ window.__wx_api_client = {
           commentResult = await _executeWithRetry(commentAttempt, 'do_comment');
         } catch (commentError) {
           if (!commentSubmitted) throw commentError;
-          commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
+          commentResult = commentError.pageIdentityResult || {
+            success: false, resultUnknown: true, reason: 'comment_post_send_error',
+            message: '评论发送后检查异常：' + commentError.message
+          };
         }
         var knownInterceptions = ['comment_restricted', 'author_restricted', 'dialog_intercepted'];
         if (commentSubmitted && !commentResult.success && knownInterceptions.indexOf(commentResult.reason) === -1) {
-          commentResult = { success: false, resultUnknown: true, message: '评论已点击发送，结果待核实' };
+          commentResult = Object.assign({}, commentResult, { success: false, resultUnknown: true, retryable: false });
         }
+        commentResult.diagnostics = {
+          stage: commentStage, attempt: commentAttemptNumber, submitted: commentSubmitted,
+          click_completed: commentClickCompleted,
+          input_connected: !!(commentInput && commentInput.isConnected),
+          input_empty: !!(commentInput && !commentInput.value.trim()),
+          work_id: actionIdentity.work_id || '', elapsed_ms: Date.now() - commentStarted
+        };
         logCommentStage('finished', { success: commentResult.success, result_unknown: !!commentResult.resultUnknown });
         return commentResult;
       }
@@ -2852,7 +2888,7 @@ window.__wx_api_client = {
               try { window.__try_open_feed_comment_panel(); }
               catch (e) { console.warn('[API客户端] 打开原生评论面板失败:', e); }
             }
-            await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+            await _checkedDelay(1000);
           }
         }
         return countResult;
@@ -2922,9 +2958,11 @@ window.__wx_api_client = {
                 console.log('[API客户端] do_like_comment: 找到点赞按钮，准备点击');
                 // 滚动到可见区域
                 likeBtn.scrollIntoViewIfNeeded && likeBtn.scrollIntoViewIfNeeded();
-                await new Promise(function(resolve) { setTimeout(resolve, 300); });
-                likeBtn.click();
-                await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+                await _checkedDelay(300);
+                _assertActionIdentity();
+                mutationSubmitted = true;
+            likeBtn.click();
+                await _checkedDelay(1000);
                 return { success: true, isLiked: true, message: '评论点赞成功' };
               } else {
                 console.log('[API客户端] do_like_comment: 在评论行内未找到点赞按钮');
@@ -3022,7 +3060,8 @@ window.__wx_api_client = {
 
               __api_log('INF', 'do_reply_comment: 找到回复按钮，准备点击');
               replyBtn.scrollIntoViewIfNeeded && replyBtn.scrollIntoViewIfNeeded();
-              await new Promise(function(resolve) { setTimeout(resolve, 300); });
+              await _checkedDelay(300);
+              _assertActionIdentity();
               replyBtn.click();
 
               // 等待回复输入框出现
@@ -3031,7 +3070,7 @@ window.__wx_api_client = {
               var replyInput = null;
 
               for (var pi = 0; pi < pollMax; pi++) {
-                await new Promise(function(resolve) { setTimeout(resolve, pollDelay); });
+                await _checkedDelay(pollDelay);
 
                 // 查找回复输入框
                 replyInput = document.querySelector('textarea[placeholder*="回复"], textarea[placeholder*="写回复"]');
@@ -3072,9 +3111,10 @@ window.__wx_api_client = {
 
               // 输入回复内容
               replyInput.scrollIntoViewIfNeeded && replyInput.scrollIntoViewIfNeeded();
-              await new Promise(function(resolve) { setTimeout(resolve, 200); });
+              await _checkedDelay(200);
               replyInput.focus();
 
+              _assertActionIdentity();
               var nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
               if (nativeSetter) {
                 nativeSetter.call(replyInput, replyContent);
@@ -3085,11 +3125,13 @@ window.__wx_api_client = {
                 replyInput.dispatchEvent(new Event('input', { bubbles: true }));
               }
 
-              await new Promise(function(resolve) { setTimeout(resolve, 500); });
+              await _checkedDelay(500);
 
               // 提交：优先按 Enter
+              _assertActionIdentity();
+              mutationSubmitted = true;
               replyInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-              await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+              await _checkedDelay(2000);
 
               // 检查是否提交成功（输入框消失或内容清空）
               var stillOpen = document.querySelector('textarea[placeholder*="回复"], input[placeholder*="回复"]');
@@ -3109,8 +3151,9 @@ window.__wx_api_client = {
               for (var sbi = 0; sbi < sendBtnSelectors.length; sbi++) {
                 var sb = document.querySelector(sendBtnSelectors[sbi]);
                 if (sb) {
+                  _assertActionIdentity();
                   sb.click();
-                  await new Promise(function(resolve) { setTimeout(resolve, 1500); });
+                  await _checkedDelay(1500);
                   break;
                 }
               }
@@ -3126,64 +3169,18 @@ window.__wx_api_client = {
         return await _executeWithRetry(replyCommentAttempt, 'do_reply_comment');
       }
 
-      // get_status 操作 - 获取互动状态（先匹配 feed）
+      // 查询与点击使用同一播放区域，不能读到其他 slide 的按钮或已关注徽标。
       if (action === 'get_status') {
-        var targetTitle = _normalizeText(body.videoTitle);
-        console.log('[API客户端] get_status 开始, targetTitle:', targetTitle);
-
-        // 【关键】先检测页面类型，确保在详情页执行操作
-        var pageInfoStatus = _detectPageType();
-        console.log('[API客户端] get_status 页面类型检测:', pageInfoStatus);
-
-        // 先尝试匹配 feed
-        var feedResult = null;
-        if (targetTitle && !pageInfoStatus.isDetailPage) {
-          feedResult = _findFeedByTitle(targetTitle);
-        } else if (pageInfoStatus.isDetailPage) {
-          console.log('[API客户端] 详情页模式，不使用 feed 匹配');
-        }
-
-        var isLiked = false;
-        var isFollowed = false;
-
-        if (feedResult) {
-          var feedIndex = feedResult.feedIndex;
-          var feedId = feedResult.feedId;
-          var feedDom = document.getElementById(feedId);
-
-          if (feedDom) {
-            // 传入 DOM 元素，让 isFollowed 扩大检查范围到 bottom-area
-            isLiked = window.__wx_parsers__.isLiked(feedDom);
-            isFollowed = window.__wx_parsers__.isFollowed(feedDom);
-
-            console.log('[API客户端] 从 feed#' + feedIndex + ' 获取状态: liked=' + isLiked + ', followed=' + isFollowed);
-          } else {
-            console.log('[API客户端] 找到 feed 但 DOM 不存在，尝试 bottom-area 范围获取');
-            var bottomArea = document.querySelector('.bottom-area');
-            if (bottomArea) {
-              isLiked = window.__wx_parsers__.isLiked(bottomArea);
-              isFollowed = window.__wx_parsers__.isFollowed(bottomArea);
-            } else {
-              isLiked = window.__wx_parsers__.isLiked();
-              isFollowed = window.__wx_parsers__.isFollowed();
-            }
-          }
-        } else {
-          // 兜底：使用 bottom-area 范围
-          console.log('[API客户端] 未找到 feed，使用 bottom-area 范围获取状态');
-          var bottomArea = document.querySelector('.bottom-area');
-          if (bottomArea) {
-            isLiked = window.__wx_parsers__.isLiked(bottomArea);
-            isFollowed = window.__wx_parsers__.isFollowed(bottomArea);
-          } else {
-            isLiked = window.__wx_parsers__.isLiked();
-            isFollowed = window.__wx_parsers__.isFollowed();
-          }
-          console.log('[API客户端] bottom-area 获取状态: liked=' + isLiked + ', followed=' + isFollowed);
-        }
-
+        var statusScope = self.getPlaybackScope();
+        if (!statusScope) return { success: false, retryable: false, message: '当前播放区域未就绪' };
+        var statusArea = statusScope.querySelector('.bottom-area') || statusScope;
+        var isLiked = window.__wx_parsers__.isLiked(statusArea);
+        var isFollowed = window.__wx_parsers__.isFollowed(statusArea);
         return {
           success: true,
+          page_instance_id: this.commentPageInstance(),
+          url: window.location.href,
+          work_id: this.currentWorkId(),
           isLiked: isLiked,
           isFollowed: isFollowed,
           followStatus: isFollowed ? '已关注' : '未关注',
@@ -3194,7 +3191,7 @@ window.__wx_api_client = {
       // go_back 操作 - 返回上一页
       if (action === 'go_back') {
         window.history.back();
-        await new Promise(function(resolve) { setTimeout(resolve, 500); });
+        await _checkedDelay(500);
         return { success: true, message: '已返回上一页' };
       }
 
@@ -3228,6 +3225,7 @@ window.__wx_api_client = {
 
       return { success: false, message: '未知操作: ' + action };
     } catch (err) {
+      if (err.pageIdentityResult) return err.pageIdentityResult;
       return { success: false, message: err.message, error: err.message };
     }
   },
@@ -3647,9 +3645,6 @@ window.__wx_parsers__ = {
       searchRoot = rootEl.closest('.slides-item') || rootEl.parentElement || rootEl;
     }
     var btns = searchRoot.querySelectorAll('.feed-like-icon, [aria-label*="推荐"], div[aria-label*="点赞"], .feed-interact .op-item, [class*="op-item"]');
-    if ((!btns || btns.length === 0) && searchRoot !== document) {
-      btns = document.querySelectorAll('.feed-like-icon, [aria-label*="推荐"], div[aria-label*="点赞"], .feed-interact .op-item, [class*="op-item"]');
-    }
     return btns;
   },
 
@@ -3677,15 +3672,6 @@ window.__wx_parsers__ = {
         return this._getClickTarget(btns[i]);
       }
     }
-    // 全局兜底
-    if (rootEl && rootEl !== document) {
-      var globalBtns = this._getLikeBtns(document);
-      for (var j = 0; j < globalBtns.length; j++) {
-        if (this.isLikeBtn(globalBtns[j]) && !this.isLikedState(globalBtns[j])) {
-          return this._getClickTarget(globalBtns[j]);
-        }
-      }
-    }
     return null;
   },
 
@@ -3698,20 +3684,36 @@ window.__wx_parsers__ = {
   REG_MUTUAL: /<div[^>]*class="[^"]*bg-white\/5[^"]*"[^>]*>\s*互相关注\s*<\/div>/,
 
   isFollowed: function(feedDom) {
-    // feedDom 可以是 DOM 元素或字符串
-    // "已关注" badge 不在 feed 容器内，需要扩大到 bottom-area 区域
-    if (feedDom && typeof feedDom === 'object' && feedDom.innerHTML) {
-      // feedDom 是 DOM 元素，扩大到 bottom-area 范围
-      var bottomArea = feedDom.closest('.bottom-area') || feedDom;
-      var html = bottomArea.innerHTML;
-      return this.REG_FOLLOWED.test(html) || this.REG_MUTUAL.test(html);
+    var root = feedDom || document.body;
+    var fromHtml = typeof root === 'string';
+    if (typeof root === 'string') {
+      var container = document.createElement('div');
+      container.innerHTML = root;
+      root = container;
+    } else if (root.id && root.id.startsWith('flow-feed-')) {
+      root = root.closest('.slides-item') || root.parentElement || root;
     }
-    // feedDom 是字符串（HTML）
-    var html = (typeof feedDom === 'string') ? feedDom : document.body.innerHTML;
-    return this.REG_FOLLOWED.test(html) || this.REG_MUTUAL.test(html);
+    // 只认关注控件的完整状态文本，兼容 button/span 替换；正文出现“已关注”不算证据。
+    var controls = root.querySelectorAll('button, [role="button"], [class*="follow"], [class~="bg-white/5"]');
+    for (var i = 0; i < controls.length; i++) {
+      if (!fromHtml && !this.isVisibleControl(controls[i])) continue;
+      var text = (controls[i].innerText || controls[i].textContent || '').replace(/\s+/g, '');
+      if (/^(已关注|互相关注)$/.test(text)) return true;
+    }
+    return false;
   },
 
   getFollowBtn: function(feedHtml) {
+    if (feedHtml && typeof feedHtml.querySelectorAll === 'function') {
+      var candidates = feedHtml.querySelectorAll('button.follow-btn');
+      var visible = [];
+      for (var i = 0; i < candidates.length; i++) {
+        var btn = candidates[i];
+        if (this.isVisibleControl(btn) && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true' &&
+            /^(\+|＋)?关注$/.test((btn.innerText || btn.textContent || '').replace(/\s+/g, ''))) visible.push(btn);
+      }
+      return visible.length === 1 ? visible[0] : null;
+    }
     // feedHtml 可以是字符串或 DOM 元素
     var html;
     var searchRoot;
@@ -3774,22 +3776,35 @@ window.__wx_parsers__ = {
   },
 
   // ========== 评论 ==========
-  getCommentBtn: function(feedHtml) {
-    var btns = document.querySelectorAll('[aria-label^="评论"]');
-    if (!btns.length) return null;
-    if (feedHtml) {
-      var count = this.parseCommentCount(feedHtml);
-      if (count) {
-        for (var i = 0; i < btns.length; i++) {
-          if (btns[i].getAttribute('aria-label') === '评论，' + count) return btns[i];
-        }
-      }
+  isVisibleControl: function(el) {
+    if (!el || !el.isConnected || !el.getClientRects().length) return false;
+    for (var node = el; node; node = node.parentElement) {
+      var style = window.getComputedStyle(node);
+      if (node.hidden || node.getAttribute('aria-hidden') === 'true' || style.display === 'none' ||
+          style.visibility === 'hidden' || style.visibility === 'collapse') return false;
     }
-    return btns[0];
+    return true;
+  },
+
+  getCommentBtn: function(scope) {
+    if (!scope || typeof scope.querySelectorAll !== 'function') return null;
+    var self = this;
+    var btns = Array.prototype.filter.call(scope.querySelectorAll('[aria-label^="评论"]'), function(el) {
+      return self.isVisibleControl(el) && !el.closest('.input-box, .comment-item');
+    });
+    return btns.length === 1 ? btns[0] : null;
   },
 
   getCommentInput: function() {
-    return document.querySelector('textarea.weui-textarea');
+    var self = this;
+    var scope = window.__wx_api_client.getPlaybackScope();
+    var inputs = Array.prototype.filter.call(document.querySelectorAll('textarea.weui-textarea'), function(el) {
+      var slide = el.closest('.slides-item');
+      return self.isVisibleControl(el) && !el.disabled && !el.readOnly &&
+        !/^回复\s*/.test(el.getAttribute('placeholder') || '') &&
+        !el.closest('.comment-item') && (!slide || slide === scope);
+    });
+    return inputs.length === 1 ? inputs[0] : null;
   },
 
   getSendBtn: function(commentInput) {

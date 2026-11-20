@@ -58,12 +58,7 @@ test('an exception after the send click cannot send the comment twice', async ()
   let clicks = 0;
   try {
     const send = f.window.document.querySelector('[aria-label="发送"]');
-    send.click = () => { clicks++; };
-    const refresh = f.window.__wx_parsers__.refreshAllDom;
-    f.window.__wx_parsers__.refreshAllDom = function() {
-      if (clicks) throw new Error('DOM changed after send');
-      return refresh.call(this);
-    };
+    send.click = () => { clicks++; throw new Error('DOM changed during send'); };
     const result = await f.run();
     assert.equal(clicks, 1);
     assert.equal(result.success, false);
@@ -143,7 +138,8 @@ test('评论流程打开操作栏入口后只点击输入框内的发送按钮',
   try {
     const doc = f.window.document;
     const input = doc.querySelector('textarea');
-    doc.querySelector('.op-item').addEventListener('click', () => events.push('open'));
+    input.closest('.input-box').hidden = true;
+    doc.querySelector('.op-item').addEventListener('click', () => { events.push('open'); input.closest('.input-box').hidden = false; });
     doc.querySelector('.weui-btn').addEventListener('click', () => {
       assert.equal(input.value, 'private-text');
       events.push('send');
@@ -174,7 +170,8 @@ for (const [name, change] of [
       doc.querySelector('.op-item').addEventListener('click', () => opens++);
       const result = await f.run();
       assert.equal(result.success, false);
-      assert.equal(opens, 3, '每次重试只打开一次评论入口，不把入口当作发送按钮');
+      const unavailableInput = name === '输入容器已移除';
+      assert.equal(opens, unavailableInput ? 3 : 0, '可见输入框已经展开时不反复开关入口，不把入口当作发送按钮');
       assert.ok(!f.stages.some(s => s.includes('"stage":"send_click"')));
     } finally { f.close(); }
   });

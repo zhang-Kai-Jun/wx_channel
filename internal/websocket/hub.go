@@ -3,6 +3,7 @@ package websocket
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,9 @@ type Hub struct {
 	lastClient *Client // 最后注册的客户端
 
 	clientSequence uint64 // 由 mu 保护，记录真实注册顺序，不能用请求负载或心跳排序
+
+	// 任务页面绑定（页面路径 → 已确认的目标客户端），由 mu 保护；新导航开始时清除
+	pageBindings map[string]pageBinding
 
 	// API 调用管理
 	requests   map[string]chan APICallResponse
@@ -263,13 +267,26 @@ func (h *Hub) ClientStatuses() []ClientStatus {
 
 	statuses := make([]ClientStatus, 0, len(h.clients))
 	for client := range h.clients {
-		statuses = append(statuses, client.Status())
+		status := client.Status()
+		status.RegisteredSeq = client.registeredSequence
+		statuses = append(statuses, status)
 	}
 	return statuses
 }
 
 // CallAPI 调用前端 API
 func (h *Hub) CallAPI(key string, body interface{}, timeout time.Duration) (json.RawMessage, error) {
+	if key == domActionKey {
+		if req, ok := body.(DOMActionBody); ok {
+			// 作品页/主页/搜索页与导航动作按页面类型、实例及目标身份路由，目标未就绪时等待而不是发给其他页面
+			if routed, handled, err := h.resolveDOMActionClient(req); handled {
+				if err != nil {
+					return nil, err
+				}
+				return h.callAPIOnClient(routed, key, body, timeout)
+			}
+		}
+	}
 	client, err := h.GetClientForKey(key)
 	if err != nil {
 		return nil, err
@@ -393,6 +410,19 @@ func (h *Hub) callAPIOnClient(client *Client, key string, body interface{}, time
 		outcome = "success"
 		utils.LogInfo("API 调用成功: ID=%s, Duration=%v, DataSize=%d",
 			reqID, duration, len(resp.Data))
+		// 传输成功不等于互动成功；仅记录结果诊断，不写入评论正文或带凭据的页面 URL。
+		if domBody, ok := body.(DOMActionBody); ok && strings.HasPrefix(domBody.Action, "do_") {
+			var result struct {
+				Success       bool            `json:"success"`
+				ResultUnknown bool            `json:"resultUnknown"`
+				Reason        string          `json:"reason"`
+				Diagnostics   json.RawMessage `json:"diagnostics"`
+			}
+			if json.Unmarshal(resp.Data, &result) == nil {
+				utils.LogInfo("[InteractionResult] request_id=%s action=%s success=%t unknown=%t reason=%s diagnostics=%s",
+					reqID, domBody.Action, result.Success, result.ResultUnknown, result.Reason, string(result.Diagnostics))
+			}
+		}
 		if isPauseVideo {
 			utils.LogInfo("[PauseVideo] 结果: ID=%s, client=%s, data=%s", reqID, client.RemoteAddr, string(resp.Data))
 		}
@@ -664,6 +694,7 @@ func (h *Hub) ResetSession() {
 
 	// 2b. 清除导航客户端指针
 	h.ClearNavigatingClient()
+	h.ClearPageBindings()
 
 	// 3. 清理 pending 请求（同步，立即关闭所有 channel）
 	h.ClearPendingRequests()

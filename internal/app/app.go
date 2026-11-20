@@ -23,7 +23,9 @@ import (
 	"wx_channel/internal/config"
 	"wx_channel/internal/database"
 	"wx_channel/internal/diagnostics"
+	"wx_channel/internal/domainpolicy"
 	"wx_channel/internal/handlers"
+	"wx_channel/internal/processproxy"
 	"wx_channel/internal/router"
 	"wx_channel/internal/services"
 	"wx_channel/internal/utils"
@@ -129,35 +131,20 @@ func (app *App) Run() {
 	// 确保端口设置正确
 	app.Sunny.SetPort(app.Port)
 
-	done := make(chan struct{})
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-signalChan
-		color.Red("\n正在关闭服务...%v\n\n", sig)
-		utils.LogSystemShutdown(fmt.Sprintf("收到信号: %v", sig))
-		database.Close()
-		if os_env == "windows" {
-			app.Sunny.SetIeProxy(true)
-		}
-		if os_env == "darwin" {
-			proxy.DisableProxyInMacOS(proxy.ProxySettings{
-				Device:   "",
-				Hostname: "127.0.0.1",
-				Port:     strconv.Itoa(app.Port),
-			})
-		}
-		close(done)
-	}()
+	defer signal.Stop(signalChan)
 
 	if err := app.initDataStore(); err != nil {
 		utils.HandleError(err, "初始化采集数据库")
+		return
 	} else {
 		if app.LogInitMsg != "" {
 			utils.Info(app.LogInitMsg)
 			app.LogInitMsg = ""
 		}
 	}
+	defer database.Close()
 
 	app.printEnvConfig()
 
@@ -233,13 +220,31 @@ func (app *App) Run() {
 	}
 
 	// 1. 立即启动核心驱动
+	app.Sunny.SetGoCallback(GlobalHttpCallback, nil, nil, nil)
 	sunnyErr := app.Sunny.Start().Error
 	if sunnyErr != nil {
 		utils.LogError("启动代理核心失败: %v", sunnyErr)
-		utils.Warn("请检查程序是否已被防火墙拦截，按 Ctrl+C 退出...")
-		select {}
+		return
 	}
-	app.Sunny.SetGoCallback(GlobalHttpCallback, nil, nil, nil)
+	defer app.Sunny.Close()
+	if os_env == "windows" {
+		changed, err := processproxy.CleanupLegacySystemProxy(app.Port)
+		if err != nil {
+			utils.LogError("%v", err)
+			return
+		}
+		if changed {
+			utils.Info("✓ 已清理指向本服务端口的旧系统代理，保留其他代理设置")
+		}
+		app.Cfg.ProxyMode = "process"
+		cleanup, err := configureWindowsProxy(app.Cfg.ProxyMode, app.Sunny)
+		if err != nil {
+			utils.LogError("%v", err)
+			return
+		}
+		defer cleanup()
+		utils.Info("✓ 视频号进程驱动已就绪，仅接管经路径和归属核验的微信 PID")
+	}
 
 	// 2. 立即渲染界面面板 (不再受网络连接阻塞)
 	utils.PrintSeparator()
@@ -249,11 +254,7 @@ func (app *App) Run() {
 	utils.PrintLabelValue("🔌", "代理端口", app.Port)
 	utils.PrintLabelValue("📱", "支持平台", "微信视频号")
 
-	proxyMode := "系统代理"
-	if app.Cfg.ProxyMode == "process" {
-		proxyMode = "进程代理"
-	}
-	utils.LogSystemStart(app.Port, proxyMode)
+	utils.LogSystemStart(app.Port, "进程代理")
 
 	// 3. 立即启动各类后台服务
 	go app.WSHub.Run()
@@ -278,30 +279,8 @@ func (app *App) Run() {
 
 	// 4. 【异步】处理 Windows 代理和连通性检查 (不阻塞主线程)
 	go func() {
-		// 如果是 Windows，根据模式启动代理
+		// 页面入口提示与代理模式无关，保留微信 4.x 网页版适配。
 		if os_env == "windows" {
-			if app.Cfg.ProxyMode == "process" {
-				app.Sunny.ProcessAddName("WeChatAppEx.exe")
-				app.Sunny.ProcessAddName("Weixin.exe")
-				app.Sunny.ProcessAddName("WeChat.exe")
-				if ok := app.Sunny.StartProcess(); ok {
-					app.Sunny.ProcessAddName("WeChatAppEx.exe")
-					app.Sunny.ProcessAddName("Weixin.exe")
-					app.Sunny.ProcessAddName("WeChat.exe")
-					utils.Info("✓ 视频号进程驱动已就绪 (WeChatAppEx.exe, Weixin.exe, WeChat.exe)")
-				} else {
-					utils.Warn("⚠️ 进程驱动启动失败：建议切换为系统代理模式")
-				}
-			} else {
-				// 默认系统代理模式：微信 4.x / 3.x 视频号基于 Chromium 架构，严格遵循 WinINet 系统代理
-				// 通过 HTTP CONNECT 隧道代理，可完美兼容现代 TLS 1.3 / IPv6，无需内核驱动或管理员权限
-				if app.Sunny.SetIeProxy(false) {
-					utils.Info("✓ 系统代理已启用 (127.0.0.1:%d)", app.Port)
-				} else {
-					utils.Warn("⚠️ 系统代理设置失败")
-				}
-				utils.Info("💡 微信基于 Chromium 内核，已通过系统代理自动拦截")
-			}
 			utils.Info("─────────────────────────────────────────────────────────────────")
 			utils.Info("💡 【微信 4.x / 4.2+ 版本重要操作说明】")
 			utils.Info("微信 4.x 左侧侧边栏「视频号」默认加载本地 LiteApp 离线包，不发起网页请求。")
@@ -335,10 +314,10 @@ func (app *App) Run() {
 
 	utils.Info("💡 服务正在运行，按 Ctrl+C 退出...")
 
-	<-done
-
-	if os_env == "windows" {
-		app.Sunny.SetIeProxy(true)
+	sig := <-signalChan
+	utils.LogSystemShutdown(fmt.Sprintf("收到信号: %v", sig))
+	if os_env == "darwin" {
+		proxy.DisableProxyInMacOS(proxy.ProxySettings{Hostname: "127.0.0.1", Port: strconv.Itoa(app.Port)})
 	}
 
 	// 清理服务
@@ -356,6 +335,13 @@ func GlobalHttpCallback(Conn *SunnyNet.HttpConn) {
 
 // HandleRequest 处理 HTTP 回调
 func (app *App) HandleRequest(Conn *SunnyNet.HttpConn) {
+	if Conn == nil || Conn.Request == nil || Conn.Request.URL == nil {
+		return
+	}
+	host := domainpolicy.RequestHost(Conn.Request)
+	if !domainpolicy.IsLocalHost(host) && !domainpolicy.IsTargetHost(host) {
+		return
+	}
 	// 恐慌恢复
 	defer func() {
 		if r := recover(); r != nil {
@@ -364,19 +350,17 @@ func (app *App) HandleRequest(Conn *SunnyNet.HttpConn) {
 	}()
 
 	if Conn.Type == public.HttpSendRequest {
-		if Conn.Request != nil && Conn.Request.Header != nil {
+		if domainpolicy.MayRewrite(host, Conn.Request.URL.Path) && Conn.Request.Header != nil {
 			// 优先请求 gzip 编码，既避免服务端使用未知压缩（如 br/zstd），又可由 Go 标准库解压
 			Conn.Request.Header.Set("Accept-Encoding", "gzip, deflate")
 
 			// 针对微信视频号关键请求，清理条件请求头，避免 304 Not Modified 响应导致 Body 为空无法改写
-			if Conn.Request.URL != nil && strings.Contains(Conn.Request.URL.Hostname(), "weixin.qq.com") {
-				Conn.Request.Header.Del("If-None-Match")
-				Conn.Request.Header.Del("If-Modified-Since")
-			}
+			Conn.Request.Header.Del("If-None-Match")
+			Conn.Request.Header.Del("If-Modified-Since")
 		}
 
-		if Conn.Request != nil && Conn.Request.URL != nil && strings.Contains(Conn.Request.URL.Hostname(), "weixin.qq.com") {
-			utils.Info("[HTTP请求] %s %s (PID=%d)", Conn.Request.Method, Conn.Request.URL.Path, Conn.PID)
+		if domainpolicy.IsTargetHost(host) {
+			utils.Info("[HTTP请求] %s Host=%s Path=%s (PID=%d)", Conn.Request.Method, host, Conn.Request.URL.Path, Conn.PID)
 		}
 
 		for _, interceptor := range app.requestInterceptors {
@@ -385,7 +369,7 @@ func (app *App) HandleRequest(Conn *SunnyNet.HttpConn) {
 			}
 		}
 	} else if Conn.Type == public.HttpResponseOK {
-		if Conn.Request != nil && Conn.Request.URL != nil && strings.Contains(Conn.Request.URL.Hostname(), "weixin.qq.com") {
+		if domainpolicy.IsTargetHost(host) && Conn.Response != nil {
 			utils.Info("[HTTP响应] %s %s 状态=%d", Conn.Request.Method, Conn.Request.URL.Path, Conn.Response.StatusCode)
 		}
 
@@ -399,7 +383,7 @@ func (app *App) HandleRequest(Conn *SunnyNet.HttpConn) {
 		if Conn.Request != nil && Conn.Request.URL != nil {
 			reqURL = Conn.Request.URL.String()
 		}
-		if strings.Contains(reqURL, "weixin.qq.com") {
+		if domainpolicy.IsTargetHost(host) {
 			utils.Warn("[HTTP失败] %s 错误: %s (PID=%d)", reqURL, Conn.GetError(), Conn.PID)
 		}
 	}

@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"wx_channel/internal/config"
+	"wx_channel/internal/domainpolicy"
 	"wx_channel/internal/utils"
 
 	"wx_channel/pkg/util"
@@ -60,9 +63,9 @@ func (h *ScriptHandler) getConfig() *config.Config {
 }
 
 // Handle implements router.Interceptor
-func (h *ScriptHandler) Handle(Conn *SunnyNet.HttpConn) bool {
+func (h *ScriptHandler) Handle(Conn *SunnyNet.HttpConn) (handled bool) {
 
-	if Conn.Type != sunnyPublic.HttpResponseOK {
+	if Conn == nil || Conn.Type != sunnyPublic.HttpResponseOK {
 		return false
 	}
 
@@ -70,36 +73,59 @@ func (h *ScriptHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 	if Conn.Request == nil || Conn.Request.URL == nil {
 		return false
 	}
+	host := domainpolicy.RequestHost(Conn.Request)
+	path := Conn.Request.URL.Path
+	if !domainpolicy.IsTargetHost(host) {
+		return false
+	}
 
 	// 针对 301/302 重定向到 channels.weixin.qq.com 的请求，确保 Location 追加 skipLiteApp=1
 	if Conn.Response != nil && Conn.Response.StatusCode >= 300 && Conn.Response.StatusCode < 400 {
 		loc := getResponseHeaderCaseInsensitive(Conn.Response.Header, "Location")
-		if loc != "" && strings.Contains(loc, "channels.weixin.qq.com") && !strings.Contains(loc, "skipLiteApp=1") {
-			if strings.Contains(loc, "?") {
-				loc += "&skipLiteApp=1"
-			} else {
-				loc += "?skipLiteApp=1"
-			}
-			Conn.Response.Header.Set("Location", loc)
-			utils.Info("[重定向改写] Location 自动追加 skipLiteApp=1 -> %s", loc)
+		parsed, err := url.Parse(loc)
+		if err == nil && parsed.Hostname() == "channels.weixin.qq.com" && parsed.Query().Get("skipLiteApp") != "1" {
+			query := parsed.Query()
+			query.Set("skipLiteApp", "1")
+			parsed.RawQuery = query.Encode()
+			Conn.Response.Header.Set("Location", parsed.String())
 		}
+		return false
 	}
 
 	// 只有响应成功且有内容才处理
 	if Conn.Response == nil || Conn.Response.Body == nil {
 		return false
 	}
+	contentType := strings.ToLower(getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Type"))
+	canRewrite := (domainpolicy.IsChannelPage(host, path) && strings.Contains(contentType, "text/html")) ||
+		(domainpolicy.IsJavaScriptResource(host, path) && (strings.Contains(contentType, "javascript") || strings.Contains(contentType, "ecmascript")))
+	if !canRewrite || Conn.Response.StatusCode != http.StatusOK ||
+		getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Disposition") != "" ||
+		Conn.Response.ContentLength > maxRewriteBodySize {
+		return false
+	}
+
+	timing := &responseRewriteTiming{started: time.Now()}
+	defer func() { timing.log(Conn, host, path, handled) }()
 
 	// 读取响应体
 	// 注意：这里读取了Body，如果未被修改，需要重新赋值回去
-	body, err := io.ReadAll(Conn.Response.Body)
-	if err != nil {
+	original := Conn.Response.Body
+	readStarted := time.Now()
+	body, err := io.ReadAll(io.LimitReader(original, maxRewriteBodySize+1))
+	timing.read = time.Since(readStarted)
+	timing.rawBytes = len(body)
+	if err != nil || len(body) > maxRewriteBodySize {
+		timing.failure = "body_too_large"
+		if err != nil {
+			timing.failure = "read_error"
+		}
+		// 失败或超限时保留已读前缀及剩余流，关闭责任仍交给调用方。
+		Conn.Response.Body = &prefixedResponseBody{Reader: io.MultiReader(bytes.NewReader(body), original), Closer: original}
 		return false
 	}
-	_ = Conn.Response.Body.Close()
-
-	host := Conn.Request.URL.Hostname()
-	path := Conn.Request.URL.Path
+	_ = original.Close()
+	Conn.Response.Body = io.NopCloser(bytes.NewReader(body))
 
 	// 记录所有JS文件的加载（简略日志）
 	if strings.HasSuffix(path, ".js") {
@@ -107,17 +133,32 @@ func (h *ScriptHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 		utils.LogFileInfo("[响应] Path=%s | ContentType=%s", path, contentType)
 	}
 
-	if h.HandleHTMLResponse(Conn, host, path, body) {
+	if h.handleHTMLResponse(Conn, host, path, body, timing) {
 		return true
 	}
 
-	if h.HandleJavaScriptResponse(Conn, host, path, body) {
+	if h.handleJavaScriptResponse(Conn, host, path, body, timing) {
 		return true
 	}
 
 	// 如果没有处理，恢复Body
 	Conn.Response.Body = io.NopCloser(bytes.NewBuffer(body))
 	return false
+}
+
+const maxRewriteBodySize = 16 << 20
+
+type prefixedResponseBody struct {
+	io.Reader
+	io.Closer
+}
+
+func readDecodedBody(reader io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, maxRewriteBodySize+1))
+	if err == nil && len(body) > maxRewriteBodySize {
+		err = fmt.Errorf("decoded response exceeds %d bytes", maxRewriteBodySize)
+	}
+	return body, err
 }
 
 // getResponseHeaderCaseInsensitive 不区分大小写获取响应头
@@ -163,7 +204,7 @@ func decodeResponseBody(encoding string, body []byte) ([]byte, bool, error) {
 			return body, false, err
 		}
 		defer reader.Close()
-		unzipped, err := io.ReadAll(reader)
+		unzipped, err := readDecodedBody(reader)
 		if err != nil {
 			return body, false, err
 		}
@@ -172,12 +213,12 @@ func decodeResponseBody(encoding string, body []byte) ([]byte, bool, error) {
 	if strings.Contains(enc, "deflate") {
 		reader := flate.NewReader(bytes.NewReader(body))
 		defer reader.Close()
-		uncompressed, err := io.ReadAll(reader)
+		uncompressed, err := readDecodedBody(reader)
 		if err != nil {
 			zreader, zerr := zlib.NewReader(bytes.NewReader(body))
 			if zerr == nil {
 				defer zreader.Close()
-				if uz, err2 := io.ReadAll(zreader); err2 == nil {
+				if uz, err2 := readDecodedBody(zreader); err2 == nil {
 					return uz, true, nil
 				}
 			}
@@ -190,13 +231,20 @@ func decodeResponseBody(encoding string, body []byte) ([]byte, bool, error) {
 
 // HandleHTMLResponse 处理HTML响应，注入JavaScript代码
 func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path string, rawBody []byte) bool {
+	return h.handleHTMLResponse(Conn, host, path, rawBody, nil)
+}
+
+func (h *ScriptHandler) handleHTMLResponse(Conn *SunnyNet.HttpConn, host, path string, rawBody []byte, timing *responseRewriteTiming) bool {
+	if !domainpolicy.IsChannelPage(host, path) {
+		return false
+	}
 	contentType := strings.ToLower(getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Type"))
 	if !strings.Contains(contentType, "text/html") {
 		return false
 	}
 
 	encoding := getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Encoding")
-	body, wasCompressed, err := decodeResponseBody(encoding, rawBody)
+	body, wasCompressed, err := timing.decodeBody(encoding, rawBody)
 	if err != nil {
 		utils.LogWarn("[HandleHTMLResponse] 响应解压缩失败 (Encoding=%s): %v，原样透传以保证页面可用", encoding, err)
 		return false
@@ -212,10 +260,7 @@ func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path s
 	Conn.Response.Header.Set("__debug", "append_script")
 
 	cleanPath := strings.TrimSuffix(path, "/")
-	isChannelPage := (host == "channels.weixin.qq.com" || host == "weixin.qq.com") && (strings.HasPrefix(cleanPath, "/web/pages") ||
-		strings.HasPrefix(cleanPath, "/finder-preview") ||
-		strings.HasPrefix(cleanPath, "/sph") ||
-		cleanPath == "" || cleanPath == "/")
+	isChannelPage := domainpolicy.IsChannelPage(host, cleanPath)
 
 	if isChannelPage {
 		// 根据页面路径注入不同的脚本
@@ -237,27 +282,32 @@ func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path s
 		return true
 	}
 
-	cleanModifiedResponseHeaders(Conn)
-	Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(html)))
-	return true
+	return false
 }
 
 // HandleJavaScriptResponse 处理JavaScript响应，修改JavaScript代码
 func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, path string, rawBody []byte) bool {
+	return h.handleJavaScriptResponse(Conn, host, path, rawBody, nil)
+}
+
+func (h *ScriptHandler) handleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, path string, rawBody []byte, timing *responseRewriteTiming) bool {
+	if !domainpolicy.IsJavaScriptResource(host, path) {
+		return false
+	}
 	contentType := strings.ToLower(getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Type"))
 	if !strings.Contains(contentType, "javascript") && !strings.Contains(contentType, "ecmascript") {
 		return false
 	}
 
 	encoding := getResponseHeaderCaseInsensitive(Conn.Response.Header, "Content-Encoding")
-	body, _, err := decodeResponseBody(encoding, rawBody)
+	body, _, err := timing.decodeBody(encoding, rawBody)
 	if err != nil {
 		utils.LogWarn("[HandleJavaScriptResponse] JS解压缩失败 (Encoding=%s): %v，原样透传", encoding, err)
 		return false
 	}
 
 	// 记录所有JS文件的加载（用于调试）
-	utils.Info("[JS文件] %s", path)
+	utils.Info("[JS文件] Host=%s Path=%s", host, path)
 
 	// 保存关键的 JS 文件到本地以便分析
 	h.saveJavaScriptFile(path, body)
@@ -273,7 +323,6 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 	content = depReg.ReplaceAllString(content, `"js/$1.js`+h.version+`"`)
 	content = lazyImportReg.ReplaceAllString(content, `import("$1.js`+h.version+`")`)
 	content = importReg.ReplaceAllString(content, `import "$1.js`+h.version+`"`)
-	Conn.Response.Header.Set("__debug", "replace_script")
 
 	// 针对前端页面中的视频详情跳转链接，自动注入 skipLiteApp=1，避免微信打开本地 LiteApp 离线包导致无网络请求
 	if strings.Contains(content, "channels.weixin.qq.com/web/pages/feed?") && !strings.Contains(content, "skipLiteApp=1") {
@@ -282,18 +331,12 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 	}
 
 	// 处理不同的JS文件
-	content, handled := h.handleVirtualSvgIcons(path, content)
-	if handled {
-		cleanModifiedResponseHeaders(Conn)
-		Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
-		return true
+	content, _ = h.handleVirtualSvgIcons(path, content)
+	if content == string(body) {
+		return false
 	}
 
-	content, handled = h.handleConnectPublish(Conn, path, content)
-	if handled {
-		return true
-	}
-
+	Conn.Response.Header.Set("__debug", "replace_script")
 	cleanModifiedResponseHeaders(Conn)
 	Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
 	return true
@@ -301,7 +344,7 @@ func (h *ScriptHandler) HandleJavaScriptResponse(Conn *SunnyNet.HttpConn, host, 
 
 // buildInjectedScripts 构建所有需要注入的脚本（根据页面路径注入不同脚本）
 func (h *ScriptHandler) buildInjectedScripts(path string) string {
-	// 微信 JSBridge 拦截脚本（必须在最前面，拦截 openUrlWithExtraWebview 强制追加 skipLiteApp=1）
+	// 异常监听先于桥接和采集脚本安装，桥接仍先于微信原生脚本执行。
 	bridgeHookScript := h.getBridgeHookScript()
 
 	// 日志面板脚本（必须在最前面，以便拦截所有console输出）- 所有页面都需要
@@ -332,7 +375,7 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 	savePageContentScript := h.getSavePageContentScript()
 
 	// 基础脚本（所有页面都需要）
-	baseScripts := bridgeHookScript + h.getPerformanceDiagnosticsScript() + logPanelScript + mittScript + eventbusScript + utilsScript + apiClientScript + keepAliveScript + coreScript + feedScript + profileScript + searchScript + homeScript + captureUrlScript + savePageContentScript
+	baseScripts := h.getPerformanceDiagnosticsScript() + bridgeHookScript + logPanelScript + mittScript + eventbusScript + utilsScript + apiClientScript + keepAliveScript + coreScript + feedScript + profileScript + searchScript + homeScript + captureUrlScript + savePageContentScript
 
 	// 根据页面路径决定是否注入特定脚本
 	var pageSpecificScripts string
@@ -679,20 +722,6 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// handleConnectPublish 处理connect.publish JS文件（参考 wx_channels_download 项目的实现）
-func (h *ScriptHandler) handleConnectPublish(Conn *SunnyNet.HttpConn, path string, content string) (string, bool) {
-	if !util.Includes(path, "connect.publish") {
-		return content, false
-	}
-
-	utils.LogFileInfo("[Home数据采集] ✅ 正在处理 connect.publish 文件")
-	utils.LogFileInfo("[Home数据采集] ⏭️ 跳过 goToNextFlowFeed/goToPrevFlowFeed 重写，避免干扰新版 Home 状态机")
-
-	cleanModifiedResponseHeaders(Conn)
-	Conn.Response.Body = io.NopCloser(bytes.NewBuffer([]byte(content)))
-	return content, true
 }
 
 // getCommentCaptureScript 获取评论采集脚本 (优化版 - 基于 Pinia 订阅)

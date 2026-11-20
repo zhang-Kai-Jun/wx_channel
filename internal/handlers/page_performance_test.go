@@ -32,7 +32,7 @@ func TestPagePerformanceTipsPersistWithoutConsoleOutput(t *testing.T) {
 	os.Stdout = writer
 	defer func() { os.Stdout = previousStdout; _ = writer.Close() }()
 	h := NewAPIHandler(&config.Config{}, nil)
-	conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "/__wx_channels_api/tip",
+	conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/tip",
 		strings.NewReader(`{"msg":"[Perf] {\"event\":\"page_resources\",\"page_instance_id\":\"page-1\",\"dom_nodes\":100}"}`))}
 	if !h.HandleTip(conn) || conn.Response.StatusCode != 200 {
 		t.Fatal("performance tip was not accepted")

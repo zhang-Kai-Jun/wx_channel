@@ -18,7 +18,7 @@ func TestManualNavigationIsIsolatedFromTaskResponseContract(t *testing.T) {
 	for _, action := range []string{"open_link", "open_profile", "enter_video"} {
 		conn := &SunnyNet.HttpConn{
 			Type:    public.HttpSendRequest,
-			Request: httptest.NewRequest("POST", "/__wx_channels_api/action", strings.NewReader(`{"action":"`+action+`","url":"https://channels.weixin.qq.com/web/pages/profile"}`)),
+			Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/action", strings.NewReader(`{"action":"`+action+`","url":"https://channels.weixin.qq.com/web/pages/profile"}`)),
 		}
 		if !h.Handle(conn) || conn.Response == nil {
 			t.Fatal("missing response")
@@ -61,7 +61,7 @@ func TestManualNavigationLeavesLinkValidationToFrontend(t *testing.T) {
 				t.Fatal(err)
 			}
 			h := NewAPIHandler(&config.Config{}, websocket.NewHub(nil))
-			conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "/__wx_channels_api/action", strings.NewReader(string(body)))}
+			conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/action", strings.NewReader(string(body)))}
 			h.Handle(conn)
 			defer conn.Response.Body.Close()
 			var result struct {
@@ -75,5 +75,34 @@ func TestManualNavigationLeavesLinkValidationToFrontend(t *testing.T) {
 				t.Fatalf("unexpected result: %+v", result)
 			}
 		})
+	}
+}
+
+func TestResponseCallbackRejectsMissingResult(t *testing.T) {
+	h := NewAPIHandler(&config.Config{}, websocket.NewHub(nil))
+	conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/response_callback", strings.NewReader(`{"id":"nav"}`))}
+	h.Handle(conn)
+	defer conn.Response.Body.Close()
+	if conn.Response.StatusCode != 400 {
+		t.Fatalf("missing result accepted: %d", conn.Response.StatusCode)
+	}
+}
+
+func TestResponseCallbackKeepsNestedAndFlatResults(t *testing.T) {
+	for _, body := range []string{
+		`{"id":"nav","data":{"errCode":0,"errMsg":"ok","data":{"success":true,"accepted":true}}}`,
+		`{"id":"nav","errCode":0,"data":{"success":true,"accepted":true}}`,
+	} {
+		resp, err := parseResponseCallback([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(resp.Data, &result); err != nil {
+			t.Fatal(err)
+		}
+		if resp.ID != "nav" || result["success"] != true || result["accepted"] != true {
+			t.Fatalf("lost receipt: %+v %s", resp, resp.Data)
+		}
 	}
 }

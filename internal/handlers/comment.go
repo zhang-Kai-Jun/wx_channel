@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"wx_channel/internal/config"
+	"wx_channel/internal/domainpolicy"
 	"wx_channel/internal/utils"
 
 	"github.com/qtgolang/SunnyNet/SunnyNet"
@@ -32,6 +33,10 @@ func (h *CommentHandler) getConfig() *config.Config {
 
 // Handle implements router.Interceptor
 func (h *CommentHandler) Handle(Conn *SunnyNet.HttpConn) bool {
+	if Conn == nil || Conn.Request == nil || Conn.Request.URL == nil ||
+		!domainpolicy.AllowsChannelAPI(domainpolicy.RequestHost(Conn.Request)) {
+		return false
+	}
 	// 处理保存评论数据
 	if h.HandleSaveCommentData(Conn) {
 		return true

@@ -20,7 +20,7 @@ func TestCommentOperationHTTPProtocol(t *testing.T) {
 	id := fmt.Sprintf("comment_%d_0123456789abcdef", time.Now().UnixMilli())
 	call := func(method, path, body string) (int, map[string]interface{}) {
 		t.Helper()
-		conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest(method, path, strings.NewReader(body))}
+		conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest(method, "http://127.0.0.1:2025"+path, strings.NewReader(body))}
 		if !h.Handle(conn) || conn.Response == nil {
 			t.Fatal("missing HTTP response")
 		}
@@ -59,5 +59,27 @@ func TestCommentOperationHTTPProtocol(t *testing.T) {
 	}
 	if status, _ := call("POST", "/__wx_channels_api/action", `{"action":"do_comment","async_comment":true}`); status != 400 {
 		t.Fatal("missing operation ID executed")
+	}
+}
+
+func TestCommentOperationHTTPPreservesWorkID(t *testing.T) {
+	h := NewAPIHandler(&config.Config{}, websocket.NewHub(nil))
+	id := fmt.Sprintf("comment_%d_0123456789abcdef", time.Now().UnixMilli())
+	for i, work := range []string{"work-A", "work-B"} {
+		body := fmt.Sprintf(`{"action":"do_comment","async_comment":true,"operation_id":%q,"content":"same","work_id":%q}`, id, work)
+		conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/action", strings.NewReader(body))}
+		h.Handle(conn)
+		if conn.Response == nil {
+			t.Fatal("missing HTTP response")
+		}
+		data, _ := io.ReadAll(conn.Response.Body)
+		conn.Response.Body.Close()
+		want := 202
+		if i == 1 {
+			want = 400 // 同一操作 ID 对应不同作品，必须触发幂等冲突。
+		}
+		if conn.Response.StatusCode != want {
+			t.Fatalf("work_id=%s: want %d, got %d: %s", work, want, conn.Response.StatusCode, data)
+		}
 	}
 }

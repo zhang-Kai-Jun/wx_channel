@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"wx_channel/internal/config"
+	"wx_channel/internal/domainpolicy"
 	"wx_channel/internal/response"
 	"wx_channel/internal/utils"
 	"wx_channel/internal/websocket"
@@ -54,7 +55,10 @@ func (h *APIHandler) GetCurrentURL() string {
 // Handle implements router.Interceptor
 func (h *APIHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 	// CORS Preflight for all __wx_channels_api requests
-	if Conn.Request == nil || Conn.Request.URL == nil {
+	if Conn == nil || Conn.Request == nil || Conn.Request.URL == nil {
+		return false
+	}
+	if !domainpolicy.AllowsChannelAPI(domainpolicy.RequestHost(Conn.Request)) {
 		return false
 	}
 
@@ -279,6 +283,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 	var req struct {
 		CollectionID   string `json:"collection_id"`
 		PageInstanceID string `json:"page_instance_id"`
+		WorkID         string `json:"work_id"`
 		PreferLatest   bool   `json:"prefer_latest"`
 		RetryPending   bool   `json:"retry_pending"`
 		Action         string `json:"action"`
@@ -331,6 +336,7 @@ func (h *APIHandler) HandleDOMAction(Conn *SunnyNet.HttpConn) {
 	domReq := websocket.DOMActionBody{
 		CollectionID:   req.CollectionID,
 		PageInstanceID: req.PageInstanceID,
+		WorkID:         req.WorkID,
 		PreferLatest:   req.PreferLatest,
 		OperationID:    req.OperationID,
 		Action:         req.Action,
@@ -735,59 +741,56 @@ func (h *APIHandler) HandleResponseCallback(Conn *SunnyNet.HttpConn) {
 
 	utils.LogInfo("[HandleResponseCallback] 收到回调: %s", string(body))
 
-	// 解析回调负载
-	// inject 发送的格式: { "id": "123", "data": { "errCode": 0, "errMsg": "ok", "data": {...} } }
-	var payload struct {
-		ID           string `json:"id"`
-		InnerPayload *struct {
-			ErrCode     int             `json:"errCode,omitempty"`
-			ErrMsg      string          `json:"errMsg,omitempty"`
-			InnerResult json.RawMessage `json:"data,omitempty"`
-		} `json:"data,omitempty"`
-		ErrCode     int             `json:"errCode,omitempty"`
-		ErrMsg      string          `json:"errMsg,omitempty"`
-		OuterResult json.RawMessage `json:"data,omitempty"`
-	}
-
-	if err := json.Unmarshal(body, &payload); err != nil {
+	resp, err := parseResponseCallback(body)
+	if err != nil {
 		headers := http.Header{}
 		headers.Set("Content-Type", "application/json")
 		h.setCORSHeadersFromConn(Conn, headers)
 		Conn.StopRequest(400, string(response.ErrorJSON(400, "Invalid callback payload: "+err.Error())), headers)
 		return
 	}
-
-	if payload.ID == "" {
-		headers := http.Header{}
-		headers.Set("Content-Type", "application/json")
-		h.setCORSHeadersFromConn(Conn, headers)
-		Conn.StopRequest(400, string(response.ErrorJSON(400, "id is required")), headers)
-		return
-	}
-
-	// 提取 errCode / errMsg / respData（可能在内层 data 里，也可能在外层）
-	var errCode int
-	var errMsg string
-	var respData json.RawMessage
-
-	if payload.InnerPayload != nil {
-		errCode = payload.InnerPayload.ErrCode
-		errMsg = payload.InnerPayload.ErrMsg
-		respData = payload.InnerPayload.InnerResult
-	} else {
-		errCode = payload.ErrCode
-		errMsg = payload.ErrMsg
-		respData = payload.OuterResult
-	}
-
-	// 提交响应到 Hub 的 requests 通道
-	h.domActionHub.SubmitResponseByPayload(payload.ID, errCode, errMsg, respData)
+	h.domActionHub.SubmitResponse(resp)
 
 	// 返回 200 表示已收到
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json")
 	h.setCORSHeadersFromConn(Conn, headers)
 	Conn.StopRequest(200, `{"success":true}`, headers)
+}
+
+// parseResponseCallback 使用唯一 data 字段，兼容注入端嵌套回执和旧版平面回执。
+func parseResponseCallback(body []byte) (websocket.APICallResponse, error) {
+	var payload struct {
+		ID      string          `json:"id"`
+		ErrCode int             `json:"errCode"`
+		ErrMsg  string          `json:"errMsg"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return websocket.APICallResponse{}, err
+	}
+	resp := websocket.APICallResponse{ID: payload.ID, ErrCode: payload.ErrCode, ErrMsg: payload.ErrMsg, Data: payload.Data}
+	var inner map[string]json.RawMessage
+	if json.Unmarshal(payload.Data, &inner) == nil {
+		if _, nested := inner["errCode"]; nested {
+			var envelope struct {
+				ErrCode int             `json:"errCode"`
+				ErrMsg  string          `json:"errMsg"`
+				Data    json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(payload.Data, &envelope); err != nil {
+				return resp, err
+			}
+			resp.ErrCode, resp.ErrMsg, resp.Data = envelope.ErrCode, envelope.ErrMsg, envelope.Data
+		}
+	}
+	if resp.ID == "" {
+		return resp, errors.New("id is required")
+	}
+	if resp.ErrCode == 0 && (len(resp.Data) == 0 || string(resp.Data) == "null") {
+		return resp, errors.New("result is required")
+	}
+	return resp, nil
 }
 
 // setCORSHeadersFromConn 设置 CORS 头（从 SunnyNet 连接）

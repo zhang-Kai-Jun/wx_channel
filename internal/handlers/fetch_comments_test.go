@@ -19,7 +19,7 @@ func TestFetchCommentsDispatchFailurePublishesResult(t *testing.T) {
 	h := NewAPIHandler(&config.Config{}, hub)
 	conn := &SunnyNet.HttpConn{
 		Type:    public.HttpSendRequest,
-		Request: httptest.NewRequest("POST", "/__wx_channels_api/action", strings.NewReader(`{"action":"fetch_video_comments","task_id":"fetch-test"}`)),
+		Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/action", strings.NewReader(`{"action":"fetch_video_comments","task_id":"fetch-test"}`)),
 	}
 	h.Handle(conn)
 	deadline := time.Now().Add(time.Second)
@@ -39,11 +39,11 @@ func TestFetchCommentsCallbackPreservesDisabledReason(t *testing.T) {
 	hub := websocket.NewHub(nil)
 	h := NewAPIHandler(&config.Config{}, hub)
 	post := &SunnyNet.HttpConn{Type: public.HttpSendRequest,
-		Request: httptest.NewRequest("POST", "/__wx_channels_api/fetch_comments_callback", strings.NewReader(`{"task_id":"closed","success":false,"message":"作者已关闭评论","result":{"reason":"comments_disabled","comment_count":0}}`)),
+		Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/fetch_comments_callback", strings.NewReader(`{"task_id":"closed","success":false,"message":"作者已关闭评论","result":{"reason":"comments_disabled","comment_count":0}}`)),
 	}
 	h.Handle(post)
 	get := &SunnyNet.HttpConn{Type: public.HttpSendRequest,
-		Request: httptest.NewRequest("GET", "/__wx_channels_api/fetch_comments_result?task_id=closed", nil),
+		Request: httptest.NewRequest("GET", "http://127.0.0.1:2025/__wx_channels_api/fetch_comments_result?task_id=closed", nil),
 	}
 	h.Handle(get)
 	data, err := io.ReadAll(get.Response.Body)

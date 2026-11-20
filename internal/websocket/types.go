@@ -88,6 +88,9 @@ type ClientStatus struct {
 	SupportsSearch  bool            `json:"supports_search"`
 	SupportsFeed    bool            `json:"supports_feed"`
 	SupportsProfile bool            `json:"supports_profile"`
+	RegisteredSeq   uint64          `json:"registered_seq"`
+	Visible         bool            `json:"visible"`
+	HiddenForMs     int64           `json:"hidden_for_ms,omitempty"`
 }
 
 // TaskMessage 任务消息类型

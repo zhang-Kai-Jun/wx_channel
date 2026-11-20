@@ -5,6 +5,7 @@ import (
 
 	"wx_channel/internal/api"
 	"wx_channel/internal/config"
+	"wx_channel/internal/domainpolicy"
 	"wx_channel/internal/handlers"
 	"wx_channel/internal/websocket"
 
@@ -37,6 +38,9 @@ func (r *APIRouter) Handle(Conn *SunnyNet.HttpConn) bool {
 		return false
 	}
 	if Conn == nil || Conn.Request == nil || Conn.Request.URL == nil {
+		return false
+	}
+	if !domainpolicy.IsLocalHost(domainpolicy.RequestHost(Conn.Request)) {
 		return false
 	}
 

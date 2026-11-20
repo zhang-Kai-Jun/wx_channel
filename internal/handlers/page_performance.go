@@ -9,6 +9,8 @@ func (h *ScriptHandler) getPerformanceDiagnosticsScript() string {
   if (window.__sph_perf_log) return;
   var inFlight = 0;
   var dropped = 0;
+  var pendingError = null;
+  var reportFetch = fetch.bind(window);
   var lastReports = Object.create(null);
   var lastTick = performance.now();
   var startedAt = lastTick;
@@ -28,7 +30,13 @@ func (h *ScriptHandler) getPerformanceDiagnosticsScript() string {
     window.__sph_perf_log(kind, fields);
   }
   window.__sph_perf_log = function(kind, fields) {
-    if (inFlight >= 2 || stopped) { dropped++; return; }
+    if (stopped) return;
+    if (inFlight >= 2) {
+      dropped++;
+      // 错误最多保留一条待上传，避免刚好被导航日志占满通道而完全丢失。
+      if (/^(js_error|resource_error|unhandled_rejection)$/.test(kind)) pendingError = { kind: kind, fields: fields };
+      return;
+    }
     var controller;
     var timer;
     try {
@@ -44,15 +52,59 @@ func (h *ScriptHandler) getPerformanceDiagnosticsScript() string {
       controller = new AbortController();
       timer = setTimeout(function() { controller.abort(); }, 2000);
       inFlight++;
-      Promise.resolve(fetch('/__wx_channels_api/tip', {
+      Promise.resolve(reportFetch('/__wx_channels_api/tip', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: body, signal: controller.signal
-      })).catch(function() {}).finally(function() { clearTimeout(timer); inFlight--; });
+      })).catch(function() {}).finally(function() {
+        clearTimeout(timer); inFlight--;
+        if (pendingError) {
+          var pending = pendingError; pendingError = null;
+          window.__sph_perf_log(pending.kind, pending.fields);
+        }
+      });
       dropped = 0;
     } catch (_) {
       if (timer) { clearTimeout(timer); inFlight--; }
     }
   };
+  function safeResource(value) {
+    if (!value) return '';
+    try {
+      var url = new URL(value, window.location.href);
+      if (!/^https?:$/.test(url.protocol) || url.pathname.indexOf('/__wx_channels_api/') === 0) return '';
+      return (url.origin + url.pathname).slice(0, 1024);
+    } catch (_) { return ''; }
+  }
+  function safeText(value, limit) {
+    return String(value || '').replace(/https?:\/\/[^\s"'<>]+/g, function(url) {
+      return safeResource(url) || '[url]';
+    }).slice(0, limit);
+  }
+  // 仅观察错误，不 preventDefault，也不依赖 WXU、WebSocket 或 console。
+  window.addEventListener('error', function(event) {
+    try {
+      var target = event.target;
+      if (target && /^(SCRIPT|LINK)$/.test(target.tagName)) {
+        var resource = safeResource(target.src || target.href);
+        if (resource) limited('resource_error', { resource: resource, tag: target.tagName });
+      } else if (event.message) {
+        limited('js_error', {
+          message: safeText(event.message, 512), resource: safeResource(event.filename),
+          line: event.lineno || 0, column: event.colno || 0,
+          stack: safeText(event.error && event.error.stack, 2048)
+        });
+      }
+    } catch (_) {}
+  }, true);
+  window.addEventListener('unhandledrejection', function(event) {
+    try {
+      var reason = event.reason;
+      limited('unhandled_rejection', {
+        message: safeText(reason && reason.message || reason, 512),
+        stack: safeText(reason && reason.stack, 2048)
+      });
+    } catch (_) {}
+  });
   // 每分钟只读数量和内存计数，不序列化 DOM、Vue store 或采集结果。
   function sampleResources(reason) {
     try {
@@ -121,6 +173,13 @@ func (h *ScriptHandler) getPerformanceDiagnosticsScript() string {
     if (!entry) return;
     window.__sph_perf_log('navigation', {
       phase: phase, response_end_ms: Math.round(entry.responseEnd),
+      redirect_ms: Math.round(Math.max(0, (entry.redirectEnd || 0) - (entry.redirectStart || 0))),
+      dns_ms: Math.round(Math.max(0, (entry.domainLookupEnd || 0) - (entry.domainLookupStart || 0))),
+      connect_ms: Math.round(Math.max(0, (entry.connectEnd || 0) - (entry.connectStart || 0))),
+      tls_ms: entry.secureConnectionStart > 0 ? Math.round(Math.max(0, entry.connectEnd - entry.secureConnectionStart)) : 0,
+      request_start_ms: Math.round(entry.requestStart || 0),
+      wait_response_ms: Math.round(Math.max(0, (entry.responseStart || 0) - (entry.requestStart || 0))),
+      download_ms: Math.round(Math.max(0, entry.responseEnd - (entry.responseStart || 0))),
       dom_ready_ms: Math.round(entry.domContentLoadedEventEnd), load_ms: Math.round(entry.loadEventEnd)
     });
   }

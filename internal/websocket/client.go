@@ -33,6 +33,8 @@ type Client struct {
 	pageInstanceID string
 	workID         string
 	apiReady       bool
+	visible        bool
+	hiddenSince    time.Time
 	methods        map[string]bool
 	activeRequests int32 // 活跃请求数（原子操作）
 
@@ -355,6 +357,12 @@ func (c *Client) UpdateState(state ClientStateBody) {
 	c.pageInstanceID = state.PageInstanceID
 	c.workID = state.WorkID
 	c.apiReady = state.APIReady
+	c.visible = state.Visible
+	if state.Visible {
+		c.hiddenSince = time.Time{}
+	} else if c.hiddenSince.IsZero() {
+		c.hiddenSince = time.Now()
+	}
 	c.lastSeen = time.Now()
 	if state.Timestamp > 0 {
 		c.lastPing = time.UnixMilli(state.Timestamp)
@@ -408,6 +416,11 @@ func (c *Client) Status() ClientStatus {
 		lastPingAt = c.lastPing.Format(time.RFC3339)
 	}
 
+	hiddenForMs := int64(0)
+	if !c.visible && !c.hiddenSince.IsZero() {
+		hiddenForMs = time.Since(c.hiddenSince).Milliseconds()
+	}
+
 	return ClientStatus{
 		PageInstanceID:  c.pageInstanceID,
 		WorkID:          c.workID,
@@ -422,6 +435,8 @@ func (c *Client) Status() ClientStatus {
 		SupportsSearch:  c.apiReady && methods["finderSearch"],
 		SupportsFeed:    c.apiReady && methods["finderUserPage"],
 		SupportsProfile: c.apiReady && methods["finderGetCommentDetail"],
+		Visible:         c.visible,
+		HiddenForMs:     hiddenForMs,
 	}
 }
 

@@ -1,8 +1,8 @@
 # 视频号采集助手
 port: 2025
 
-# 代理模式: system (系统代理, 推荐, 微信4.x/3.x无需管理员权限稳定拦截), process (仅驱动进程代理)
-proxy_mode: system
+# 仅代理微信进程（需要驱动权限）；旧 system 配置也按 process 处理。
+proxy_mode: process
 
 # 沿用原目录以兼容已有的采集数据库和评论结果，不再保存视频或封面。
 data_dir: downloads

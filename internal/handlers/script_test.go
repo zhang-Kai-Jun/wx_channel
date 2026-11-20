@@ -104,7 +104,7 @@ func TestScriptHandlerModuleReferenceWhitespace(t *testing.T) {
 			source := `import {x} from` + whitespace + `"./named.js";import` + whitespace + `"./side.js";` +
 				`const lazy=import("./lazy.js");const deps=["js/dependency.js"];`
 			conn := &SunnyNet.HttpConn{Response: &http.Response{Header: http.Header{"Content-Type": {"application/javascript"}}}}
-			if !handler.HandleJavaScriptResponse(conn, "res.wx.qq.com", "/ordinary.js", []byte(source)) {
+			if !handler.HandleJavaScriptResponse(conn, "res.wx.qq.com", "/t/wx_fed/finder/web/web-finder/res/js/ordinary.js", []byte(source)) {
 				t.Fatal("JavaScript 响应未处理")
 			}
 			defer conn.Response.Body.Close()
@@ -358,4 +358,3 @@ func TestSkipLiteAppInterception(t *testing.T) {
 		}
 	})
 }
-

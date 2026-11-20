@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"wx_channel/internal/domainpolicy"
 	"wx_channel/internal/utils"
 
 	"github.com/qtgolang/SunnyNet/SunnyNet"
@@ -22,7 +23,10 @@ func NewStaticFileHandler() *StaticFileHandler {
 // Handle implements router.Interceptor
 func (h *StaticFileHandler) Handle(Conn *SunnyNet.HttpConn) bool {
 
-	if Conn.Request == nil || Conn.Request.URL == nil {
+	if Conn == nil || Conn.Request == nil || Conn.Request.URL == nil {
+		return false
+	}
+	if !domainpolicy.IsLocalHost(domainpolicy.RequestHost(Conn.Request)) {
 		return false
 	}
 	path := Conn.Request.URL.Path

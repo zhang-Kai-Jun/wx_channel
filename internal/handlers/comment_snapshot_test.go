@@ -30,10 +30,10 @@ func TestSnapshotStatusRetainsTerminalOwnership(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			post := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "/__wx_channels_api/comment_snapshot_callback", strings.NewReader(string(payload)))}
+			post := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/comment_snapshot_callback", strings.NewReader(string(payload)))}
 			h.Handle(post)
 			post.Response.Body.Close()
-			get := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("GET", "/__wx_channels_api/comment_snapshot_status?task_id=snapshot", nil)}
+			get := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("GET", "http://127.0.0.1:2025/__wx_channels_api/comment_snapshot_status?task_id=snapshot", nil)}
 			h.Handle(get)
 			defer get.Response.Body.Close()
 			var result map[string]interface{}
@@ -67,7 +67,7 @@ func TestSnapshotFileRetainsCollectionAndCompleteness(t *testing.T) {
 	cfg.DataDir = rel
 	t.Cleanup(func() { cfg.DataDir = previous })
 	h := NewCommentHandler(cfg)
-	conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "/__wx_channels_api/dump_pinia_store", strings.NewReader(`{"stores":{"home":{}},"page":"feed","url":"https://channels.weixin.qq.com/web/pages/feed?oid=a","collection_id":"a","page_instance_id":"doc-a","complete":true,"stop_reason":"completed"}`))}
+	conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest, Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/dump_pinia_store", strings.NewReader(`{"stores":{"home":{}},"page":"feed","url":"https://channels.weixin.qq.com/web/pages/feed?oid=a","collection_id":"a","page_instance_id":"doc-a","complete":true,"stop_reason":"completed"}`))}
 	if !h.Handle(conn) {
 		t.Fatal("snapshot not handled")
 	}

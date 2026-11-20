@@ -29,6 +29,21 @@ func (r *BrowseHistoryRepository) Create(record *BrowseRecord) error {
 			decrypt_key, browse_time, like_count, comment_count, fav_count, forward_count, page_url,
 			created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			title = COALESCE(NULLIF(excluded.title, ''), browse_history.title),
+			author = COALESCE(NULLIF(excluded.author, ''), browse_history.author),
+			author_id = COALESCE(NULLIF(excluded.author_id, ''), browse_history.author_id),
+			duration = COALESCE(NULLIF(excluded.duration, 0), browse_history.duration),
+			size = COALESCE(NULLIF(excluded.size, 0), browse_history.size),
+			resolution = COALESCE(NULLIF(excluded.resolution, ''), browse_history.resolution),
+			cover_url = COALESCE(NULLIF(excluded.cover_url, ''), browse_history.cover_url),
+			video_url = COALESCE(NULLIF(excluded.video_url, ''), browse_history.video_url),
+			decrypt_key = COALESCE(NULLIF(browse_history.decrypt_key, ''), excluded.decrypt_key),
+			browse_time = MAX(browse_history.browse_time, excluded.browse_time),
+			like_count = excluded.like_count, comment_count = excluded.comment_count,
+			fav_count = excluded.fav_count, forward_count = excluded.forward_count,
+			page_url = COALESCE(NULLIF(excluded.page_url, ''), browse_history.page_url),
+			updated_at = excluded.updated_at
 	`
 	_, err := r.db.Exec(query,
 		record.ID, record.Title, record.Author, record.AuthorID,

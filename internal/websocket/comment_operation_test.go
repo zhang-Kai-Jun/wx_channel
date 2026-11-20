@@ -109,7 +109,7 @@ func TestCommentOperationPreservesFailures(t *testing.T) {
 			if result.Status != tc.status {
 				t.Fatalf("result: %+v", result)
 			}
-			if tc.status == "unknown" && (result.Message == "" || len(result.Result) != 0) {
+			if tc.status == "unknown" && (result.Message == "" || (tc.name != "uncertain send" && len(result.Result) != 0)) {
 				t.Fatalf("unknown must not return success: %+v", result)
 			}
 		})
@@ -132,5 +132,20 @@ func TestCommentOperationExpiryAndMissing(t *testing.T) {
 	}}
 	if h.GetCommentOperation(id).Status != "missing" || len(h.commentOperations) != 0 {
 		t.Fatal("expired result not removed")
+	}
+}
+
+func TestCommentOperationUnknownRetainsDiagnosticResult(t *testing.T) {
+	h := NewHub(nil)
+	id := commentTestID()
+	data := json.RawMessage(`{"success":false,"resultUnknown":true,"reason":"comment_unconfirmed","message":"发送后输入未清空","diagnostics":{"stage":"send_click","input_connected":true}}`)
+	if err := h.startCommentOperation(id, DOMActionBody{Action: "do_comment"}, func() (json.RawMessage, error) {
+		return data, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := awaitComment(t, h, id)
+	if result.Status != "unknown" || result.Message != "发送后输入未清空" || string(result.Result) != string(data) {
+		t.Fatalf("unknown lost diagnostic evidence: %+v", result)
 	}
 }

@@ -41,7 +41,7 @@ func TestAuthorCommentPageBindingHTTPUsesLatestOnlyForFirstBind(t *testing.T) {
 	bind := func(body string, wantStatus int, wantInstance string) {
 		t.Helper()
 		conn := &SunnyNet.HttpConn{Type: public.HttpSendRequest,
-			Request: httptest.NewRequest("POST", "/__wx_channels_api/action", strings.NewReader(body))}
+			Request: httptest.NewRequest("POST", "http://127.0.0.1:2025/__wx_channels_api/action", strings.NewReader(body))}
 		if !h.Handle(conn) || conn.Response == nil {
 			t.Fatal("missing binding response")
 		}

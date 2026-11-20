@@ -46,6 +46,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 2025, cfg.Port)
 	assert.Equal(t, version.Current, cfg.Version)
 	assert.Equal(t, 500*time.Millisecond, cfg.SaveDelay)
+	assert.Equal(t, "process", cfg.ProxyMode)
 }
 
 func TestLoad_EnvVars(t *testing.T) {
@@ -89,6 +90,30 @@ func TestSetPort(t *testing.T) {
 	cfg := &Config{Port: 8080}
 	cfg.SetPort(9090)
 	assert.Equal(t, 9090, cfg.Port)
+}
+
+func TestLegacyProxyModeCannotEnableSystemProxy(t *testing.T) {
+	for _, scenario := range []struct{ value, want string }{
+		{"process", "process"}, {"system", "process"}, {" SYSTEM ", "process"}, {"typo", "process"}, {"", "process"},
+	} {
+		t.Run(scenario.value, func(t *testing.T) {
+			setupIsolatedTestEnv(t)
+			t.Setenv("WX_CHANNEL_PROXY_MODE", scenario.value)
+			if got := Load().ProxyMode; got != scenario.want {
+				t.Fatalf("proxy_mode=%q, want %q", got, scenario.want)
+			}
+		})
+	}
+}
+
+func TestLegacyConfigFileCannotEnableSystemProxy(t *testing.T) {
+	setupIsolatedTestEnv(t)
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(file, []byte("proxy_mode: system\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	viper.SetConfigFile(file)
+	assert.Equal(t, "process", Load().ProxyMode)
 }
 
 func TestLegacyDataDirectory(t *testing.T) {

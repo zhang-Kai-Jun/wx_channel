@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
 using Microsoft.Win32;
+using Accessibility;
 
 public class SphSearch {
     // ----------------------------------------------------
@@ -46,14 +47,26 @@ public class SphSearch {
     public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")]
     public static extern bool BringWindowToTop(IntPtr hWnd);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT {
+        public int X;
+        public int Y;
+    }
+
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")]
+    public static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT lpPoint);
     [DllImport("user32.dll")]
     public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")]
     public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     // ShellExecute 原生协议唤醒 (零物理按键模拟)
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -67,7 +80,11 @@ public class SphSearch {
     [DllImport("user32.dll")]
     public static extern bool EmptyClipboard();
     [DllImport("user32.dll")]
+    public static extern IntPtr GetClipboardData(uint uFormat);
+    [DllImport("user32.dll")]
     public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+    [DllImport("user32.dll")]
+    public static extern bool IsClipboardFormatAvailable(uint format);
     [DllImport("kernel32.dll")]
     public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
     [DllImport("kernel32.dll")]
@@ -83,6 +100,23 @@ public class SphSearch {
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool CloseHandle(IntPtr hObject);
 
+    // MSAA (oleacc.dll) - 兼容新版微信 4.x / WeChatAppEx (UIA2 无法枚举标题栏控件时使用)
+    [DllImport("oleacc.dll")]
+    public static extern int AccessibleObjectFromWindow(IntPtr hwnd, int dwId, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IAccessible ppvObject);
+    [DllImport("oleacc.dll")]
+    public static extern int AccessibleChildren(IAccessible paccContainer, int iChildStart, int cChildren, [Out, MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.Struct, SizeParamIndex = 2)] object[] rgvarChildren, out int pcObtained);
+
+    static readonly Guid IID_IAccessible = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+    const int OBJID_CLIENT         = -4;
+    const int ROLE_SYSTEM_DOCUMENT = 15;
+    const int ROLE_SYSTEM_TEXT     = 42;
+    const int TOP_BAR_MAX_HEIGHT   = 160; // 兼容最高 250% DPI 缩放
+
+    const uint WM_MOUSEMOVE        = 0x0200;
+    const uint WM_LBUTTONDOWN      = 0x0201;
+    const uint WM_LBUTTONUP        = 0x0202;
+    const int  MK_LBUTTON          = 0x0001;
+
     const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     const uint MOUSEEVENTF_LEFTUP   = 0x0004;
     const uint KEYEVENTF_KEYUP      = 0x0002;
@@ -91,6 +125,7 @@ public class SphSearch {
     const byte VK_A                 = 0x41;
     const byte VK_V                 = 0x56;
     const byte VK_RETURN            = 0x0D;
+    const uint CF_UNICODETEXT       = 13;
 
     // 运行状态与控制
     static bool g_JsonOnly = false;
@@ -138,6 +173,361 @@ public class SphSearch {
         try { return el.Current.ControlType; } catch { return null; }
     }
 
+    // ----------------------------------------------------
+    // UIA2 CacheRequest + MSAA 极速兼容层（跳过网页 DOM，兼容 3.x / 4.x 与高 DPI）
+    // ----------------------------------------------------
+    class SearchBtnInfo {
+        public string Source;
+        public int Cx;
+        public int Cy;
+        public AutomationElement UiaEl;
+        public IAccessible MsaaEl;
+    }
+
+    class OmniboxInfo {
+        public string Source;
+        public int Cx;
+        public int Cy;
+        public int Width;
+        public AutomationElement UiaEl;
+        public IAccessible MsaaEl;
+    }
+
+    static CacheRequest CreateTopBarCacheRequest() {
+        var req = new CacheRequest();
+        req.TreeScope = TreeScope.Element;
+        req.Add(AutomationElement.ClassNameProperty);
+        req.Add(AutomationElement.NameProperty);
+        req.Add(AutomationElement.ControlTypeProperty);
+        req.Add(AutomationElement.BoundingRectangleProperty);
+        return req;
+    }
+
+    static string SafeCachedClassName(AutomationElement el) {
+        try { return el != null ? (el.Cached.ClassName ?? string.Empty) : string.Empty; } catch { return SafeGetClassName(el); }
+    }
+
+    static string SafeCachedName(AutomationElement el) {
+        try { return el != null ? (el.Cached.Name ?? string.Empty) : string.Empty; } catch { return SafeGetName(el); }
+    }
+
+    static Rect SafeCachedRect(AutomationElement el) {
+        try { return el != null ? el.Cached.BoundingRectangle : Rect.Empty; } catch { return SafeGetBoundingRectangle(el); }
+    }
+
+    static ControlType SafeCachedControlType(AutomationElement el) {
+        try { return el != null ? el.Cached.ControlType : null; } catch { return SafeGetControlType(el); }
+    }
+
+    static void CollectTopBarUiaRec(AutomationElement el, int depth, int winTop, CacheRequest cacheReq, List<AutomationElement> results) {
+        if (el == null || depth > 12 || results.Count >= 200) return;
+
+        string cls = depth == 0 ? SafeGetClassName(el) : SafeCachedClassName(el);
+        if (cls == "Chrome_RenderWidgetHostHWND" || cls == "Intermediate D3D Window") {
+            return;
+        }
+        ControlType ct = depth == 0 ? SafeGetControlType(el) : SafeCachedControlType(el);
+        if (ct == ControlType.Document) {
+            return;
+        }
+        Rect r = depth == 0 ? SafeGetBoundingRectangle(el) : SafeCachedRect(el);
+        if (depth > 0 && !r.IsEmpty && r.Height > 0 && r.Top >= winTop + TOP_BAR_MAX_HEIGHT) {
+            return;
+        }
+
+        if (depth > 0) {
+            results.Add(el);
+        }
+
+        try {
+            var walker = TreeWalker.RawViewWalker;
+            var child = walker.GetFirstChild(el, cacheReq);
+            while (child != null && results.Count < 200) {
+                CollectTopBarUiaRec(child, depth + 1, winTop, cacheReq, results);
+                child = walker.GetNextSibling(child, cacheReq);
+            }
+        } catch {}
+    }
+
+    static List<AutomationElement> CollectTopBarUiaElements(AutomationElement winEl, int winTop) {
+        var results = new List<AutomationElement>();
+        var cacheReq = CreateTopBarCacheRequest();
+        CollectTopBarUiaRec(winEl, 0, winTop, cacheReq, results);
+        return results;
+    }
+
+    static IAccessible GetMsaaRoot(IntPtr hWnd) {
+        try {
+            Guid iid = IID_IAccessible;
+            IAccessible acc = null;
+            int hr = AccessibleObjectFromWindow(hWnd, OBJID_CLIENT, ref iid, out acc);
+            if (hr == 0) return acc;
+        } catch {}
+        return null;
+    }
+
+    static object[] GetMsaaChildren(IAccessible acc) {
+        if (acc == null) return new object[0];
+        try {
+            int cc = acc.accChildCount;
+            if (cc <= 0 || cc > 60) return new object[0];
+            object[] arr = new object[cc];
+            int got = 0;
+            int hr = AccessibleChildren(acc, 0, cc, arr, out got);
+            if ((hr == 0 || hr == 1) && got > 0) {
+                if (got == cc) return arr;
+                object[] trimmed = new object[got];
+                Array.Copy(arr, trimmed, got);
+                return trimmed;
+            }
+        } catch {}
+        return new object[0];
+    }
+
+    static string SafeMsaaName(IAccessible acc) {
+        if (acc == null) return string.Empty;
+        try { return acc.get_accName(0) ?? string.Empty; } catch { return string.Empty; }
+    }
+
+    static string SafeMsaaValue(IAccessible acc) {
+        if (acc == null) return string.Empty;
+        try { return acc.get_accValue(0) ?? string.Empty; } catch { return string.Empty; }
+    }
+
+    static int SafeMsaaRole(IAccessible acc) {
+        if (acc == null) return 0;
+        try {
+            object r = acc.get_accRole(0);
+            if (r is int) return (int)r;
+            int parsed;
+            if (r != null && int.TryParse(r.ToString(), out parsed)) return parsed;
+        } catch {}
+        return 0;
+    }
+
+    static bool SafeMsaaLocation(IAccessible acc, out int x, out int y, out int w, out int h) {
+        x = y = w = h = 0;
+        if (acc == null) return false;
+        try {
+            acc.accLocation(out x, out y, out w, out h, 0);
+            return w > 0 && h > 0;
+        } catch {
+            return false;
+        }
+    }
+
+    static void ScanMsaaTopBarRec(IAccessible acc, int depth, int winTop, int omniMinWidth,
+        ref OmniboxInfo foundOmni, ref SearchBtnInfo foundBtn) {
+        if (acc == null || depth > 10 || (foundOmni != null && foundBtn != null)) return;
+        int role = SafeMsaaRole(acc);
+        if (role == ROLE_SYSTEM_DOCUMENT) return;
+
+        int ax, ay, aw, ah;
+        bool hasLoc = SafeMsaaLocation(acc, out ax, out ay, out aw, out ah);
+        if (hasLoc && ay >= winTop + TOP_BAR_MAX_HEIGHT) return;
+
+        if (foundOmni == null && role == ROLE_SYSTEM_TEXT && hasLoc && aw >= omniMinWidth && ah >= 12 && ay < winTop + TOP_BAR_MAX_HEIGHT) {
+            string name = SafeMsaaName(acc);
+            if (name.Contains("地址") || name.Contains("搜索") || name.IndexOf("Address", StringComparison.OrdinalIgnoreCase) >= 0 || string.IsNullOrEmpty(name)) {
+                foundOmni = new OmniboxInfo {
+                    Source = "MSAA:AddressBar",
+                    Cx = ax + Math.Min(50, aw / 2),
+                    Cy = ay + ah / 2,
+                    Width = aw,
+                    MsaaEl = acc
+                };
+            }
+        }
+
+        object[] children = GetMsaaChildren(acc);
+        if (foundBtn == null && depth <= 8 && children.Length > 0) {
+            bool hasReload = false;
+            int reloadRight = 0;
+            foreach (object ch in children) {
+                IAccessible ca = ch as IAccessible;
+                if (ca == null) continue;
+                string name = SafeMsaaName(ca);
+                if (name == "重新加载" || name.Equals("Reload", StringComparison.OrdinalIgnoreCase) || name == "刷新") {
+                    int rx, ry, rw, rh;
+                    if (SafeMsaaLocation(ca, out rx, out ry, out rw, out rh)) reloadRight = rx + rw;
+                    hasReload = true;
+                    break;
+                }
+            }
+            if (hasReload) {
+                foreach (object ch in children) {
+                    IAccessible ca = ch as IAccessible;
+                    if (ca == null) continue;
+                    foreach (object sub in GetMsaaChildren(ca)) {
+                        IAccessible sa = sub as IAccessible;
+                        if (sa == null) continue;
+                        int sx, sy, sw, sh;
+                        if (!SafeMsaaLocation(sa, out sx, out sy, out sw, out sh)) continue;
+                        int subCc = 0;
+                        try { subCc = sa.accChildCount; } catch {}
+                        if (subCc == 0 && sw >= 20 && sw <= 72 && sh >= 20 && sh <= 72 &&
+                            Math.Abs(sw - sh) <= 10 && sx >= reloadRight - 5 && sy < winTop + TOP_BAR_MAX_HEIGHT) {
+                            foundBtn = new SearchBtnInfo {
+                                Source = "MSAA:TabBarSearchBtn",
+                                Cx = sx + sw / 2,
+                                Cy = sy + sh / 2,
+                                MsaaEl = sa
+                            };
+                            break;
+                        }
+                    }
+                    if (foundBtn != null) break;
+                }
+            }
+        }
+
+        foreach (object ch in children) {
+            IAccessible ca = ch as IAccessible;
+            if (ca != null) {
+                ScanMsaaTopBarRec(ca, depth + 1, winTop, omniMinWidth, ref foundOmni, ref foundBtn);
+                if (foundOmni != null && foundBtn != null) return;
+            }
+        }
+    }
+
+    static void ScanTopBarOnce(IntPtr hWnd, AutomationElement winEl, Rect winRect, int winTop,
+        out OmniboxInfo openOmni, out SearchBtnInfo searchBtn) {
+        openOmni = null;
+        searchBtn = null;
+
+        // 1. 先扫一次 UIA2（CacheRequest 批量拉属性 + 跳过网页正文）
+        var topEls = CollectTopBarUiaElements(winEl, winTop);
+        AutomationElement minBtn = null;
+        for (int i = 0; i < topEls.Count; i++) {
+            var el = topEls[i];
+            string cls = SafeCachedClassName(el);
+            Rect r = SafeCachedRect(el);
+            if (openOmni == null && cls.Contains("OmniboxViewViews") && r.Width > 100 && r.Left < winRect.Right - 150) {
+                openOmni = new OmniboxInfo {
+                    Source = "UIA2:Omnibox",
+                    Cx = (int)(r.Left + Math.Min(50, r.Width / 2)),
+                    Cy = (int)(r.Top + r.Height / 2),
+                    Width = (int)r.Width,
+                    UiaEl = el
+                };
+                return;
+            }
+            if (searchBtn == null && (cls.Contains("LocationBarView") || cls.Contains("ToolbarView"))) {
+                if (r.Top < winRect.Top + TOP_BAR_MAX_HEIGHT && r.Width > 0 && r.Height > 0) {
+                    searchBtn = new SearchBtnInfo {
+                        Source = "UIA2:LocationBarView",
+                        Cx = (int)(r.Left + r.Width / 2),
+                        Cy = (int)(r.Top + r.Height / 2),
+                        UiaEl = el
+                    };
+                }
+            }
+            if (minBtn == null && SafeCachedName(el) == "最小化") {
+                minBtn = el;
+            }
+        }
+
+        if (searchBtn == null && minBtn != null) {
+            Rect minR = SafeCachedRect(minBtn);
+            for (int i = 0; i < topEls.Count; i++) {
+                Rect r = SafeCachedRect(topEls[i]);
+                if (r.Top >= minR.Top - 10 && r.Top <= minR.Bottom + 10 &&
+                    r.Right <= minR.Left + 5 && r.Left >= minR.Left - 80 && r.Width >= 16) {
+                    searchBtn = new SearchBtnInfo {
+                        Source = "UIA2:MinimizeAdjacent",
+                        Cx = (int)(r.Left + r.Width / 2),
+                        Cy = (int)(r.Top + r.Height / 2),
+                        UiaEl = topEls[i]
+                    };
+                    break;
+                }
+            }
+        }
+
+        if (openOmni != null || searchBtn != null) return;
+
+        // 2. UIA2 未命中 -> 单次 MSAA 扫描同时定位已展开输入框或放大镜按钮
+        IAccessible root = GetMsaaRoot(hWnd);
+        if (root != null) {
+            ScanMsaaTopBarRec(root, 0, winTop, 100, ref openOmni, ref searchBtn);
+        }
+    }
+
+    static OmniboxInfo FindOmniboxUia(AutomationElement winEl, Rect winRect, int winTop, int minWidth) {
+        try {
+            var topEls = CollectTopBarUiaElements(winEl, winTop);
+            for (int i = 0; i < topEls.Count; i++) {
+                var el = topEls[i];
+                string cls = SafeCachedClassName(el);
+                Rect r = SafeCachedRect(el);
+                ControlType ct = SafeCachedControlType(el);
+                if ((cls.Contains("OmniboxViewViews") || ct == ControlType.Edit) &&
+                    r.Width >= minWidth && r.Left < winRect.Right - 100) {
+                    return new OmniboxInfo {
+                        Source = "UIA2:Omnibox",
+                        Cx = (int)(r.Left + Math.Min(50, r.Width / 2)),
+                        Cy = (int)(r.Top + r.Height / 2),
+                        Width = (int)r.Width,
+                        UiaEl = el
+                    };
+                }
+            }
+        } catch {}
+        return null;
+    }
+
+    static OmniboxInfo FindOmniboxMsaa(IntPtr hWnd, IAccessible hintContainer, int winTop, int minWidth) {
+        if (hintContainer != null) {
+            OmniboxInfo quickOmni = null;
+            SearchBtnInfo dummy = new SearchBtnInfo();
+            ScanMsaaTopBarRec(hintContainer, 0, winTop, minWidth, ref quickOmni, ref dummy);
+            if (quickOmni != null) return quickOmni;
+        }
+        IAccessible root = GetMsaaRoot(hWnd);
+        if (root != null) {
+            OmniboxInfo omni = null;
+            SearchBtnInfo dummy = new SearchBtnInfo();
+            ScanMsaaTopBarRec(root, 0, winTop, minWidth, ref omni, ref dummy);
+            return omni;
+        }
+        return null;
+    }
+
+    static OmniboxInfo WaitForOmnibox(IntPtr hWnd, AutomationElement winEl, Rect winRect, int winTop, int minWidth, int timeoutMs, bool preferMsaa, IAccessible msaaHint) {
+        Stopwatch sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs) {
+            OmniboxInfo box = preferMsaa
+                ? (FindOmniboxMsaa(hWnd, msaaHint, winTop, minWidth) ?? FindOmniboxUia(winEl, winRect, winTop, minWidth))
+                : (FindOmniboxUia(winEl, winRect, winTop, minWidth) ?? FindOmniboxMsaa(hWnd, msaaHint, winTop, minWidth));
+            if (box != null) return box;
+            Thread.Sleep(40);
+        }
+        return null;
+    }
+
+    static string ReadOmniboxValue(OmniboxInfo box) {
+        if (box == null) return string.Empty;
+        if (box.UiaEl != null) {
+            try {
+                object pat;
+                if (box.UiaEl.TryGetCurrentPattern(ValuePattern.Pattern, out pat)) {
+                    return ((ValuePattern)pat).Current.Value ?? string.Empty;
+                }
+            } catch {}
+        }
+        if (box.MsaaEl != null) {
+            return SafeMsaaValue(box.MsaaEl);
+        }
+        return string.Empty;
+    }
+
+    static bool ValueMatchesTarget(string actual, string targetUrl) {
+        if (string.IsNullOrEmpty(actual)) return false;
+        if (actual.IndexOf(targetUrl, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        string stripped = targetUrl.Replace("https://", "").Replace("http://", "");
+        return actual.IndexOf(stripped, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     // 退出并输出标准化 JSON 结果（保证即使异常也绝对输出合法 JSON）
     static void ExitWithResult(bool success, int code, string errorName, int failedStep, string message, string detail = "", string windowHwnd = "0x0", int clientCount = 0, string pagePath = "") {
         if (g_Exited) return;
@@ -171,8 +561,32 @@ public class SphSearch {
         }
     }
 
+    // 备份原剪贴板文本（避免破坏用户正在复制的内容）
+    static string BackupClipboardText() {
+        try {
+            if (!IsClipboardFormatAvailable(CF_UNICODETEXT)) return null;
+            if (!OpenClipboard(IntPtr.Zero)) return null;
+            try {
+                IntPtr hData = GetClipboardData(CF_UNICODETEXT);
+                if (hData == IntPtr.Zero) return null;
+                IntPtr ptr = GlobalLock(hData);
+                if (ptr == IntPtr.Zero) return null;
+                try {
+                    return Marshal.PtrToStringUni(ptr);
+                } finally {
+                    GlobalUnlock(hData);
+                }
+            } finally {
+                CloseClipboard();
+            }
+        } catch {
+            return null;
+        }
+    }
+
     // 原生剪贴板写入
     static void SetClipboardText(string text) {
+        if (text == null) return;
         for (int retry = 0; retry < 5; retry++) {
             if (OpenClipboard(IntPtr.Zero)) {
                 EmptyClipboard();
@@ -181,7 +595,7 @@ public class SphSearch {
                 IntPtr target = GlobalLock(hGlobal);
                 Marshal.Copy(bytes, 0, target, bytes.Length);
                 GlobalUnlock(hGlobal);
-                SetClipboardData(13 /* CF_UNICODETEXT */, hGlobal);
+                SetClipboardData(CF_UNICODETEXT, hGlobal);
                 CloseClipboard();
                 return;
             }
@@ -189,14 +603,50 @@ public class SphSearch {
         }
     }
 
-    // 动态鼠标点击
+    static IntPtr MakeLParam(int x, int y) {
+        return (IntPtr)(((y & 0xFFFF) << 16) | (x & 0xFFFF));
+    }
+
+    // 无鼠标窗口消息点击 (PostMessage)
+    static bool PostMessageClick(IntPtr hWnd, int screenX, int screenY) {
+        POINT pt = new POINT { X = screenX, Y = screenY };
+        if (!ScreenToClient(hWnd, ref pt)) return false;
+        IntPtr lParam = MakeLParam(pt.X, pt.Y);
+        PostMessage(hWnd, WM_MOUSEMOVE, IntPtr.Zero, lParam);
+        Thread.Sleep(20);
+        PostMessage(hWnd, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, lParam);
+        Thread.Sleep(30);
+        PostMessage(hWnd, WM_LBUTTONUP, IntPtr.Zero, lParam);
+        return true;
+    }
+
+    // 物理鼠标点击兜底（点击后瞬时复原用户原光标位置）
     static void Click(int x, int y) {
+        POINT orig;
+        bool hasOrig = GetCursorPos(out orig);
         SetCursorPos(x, y);
-        Thread.Sleep(50);
+        Thread.Sleep(40);
         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
-        Thread.Sleep(50);
+        Thread.Sleep(40);
         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
-        Thread.Sleep(100);
+        Thread.Sleep(30);
+        if (hasOrig) {
+            SetCursorPos(orig.X, orig.Y);
+        }
+    }
+
+    static void SendKeyCombo(byte modVk, byte keyVk) {
+        keybd_event(modVk, 0, 0, UIntPtr.Zero);
+        keybd_event(keyVk, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(25);
+        keybd_event(keyVk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        keybd_event(modVk, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    }
+
+    static void SendEnterKey() {
+        keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(40);
+        keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
     }
 
     // 前置守护：微信运行/登录检测
@@ -370,10 +820,10 @@ public class SphSearch {
             SetForegroundWindow(hVideoWin);
             BringWindowToTop(hVideoWin);
         } catch {}
-        Thread.Sleep(300);
+        Thread.Sleep(150);
 
         // ====================================================
-        // [步骤 2] 分析窗体结构，动态定位右上角搜索按钮并点击
+        // [步骤 2] 极速单次扫描标题栏，无鼠标优先展开搜索栏（失败自动降级物理点击）
         // ====================================================
         AutomationElement winEl = null;
         try {
@@ -387,125 +837,75 @@ public class SphSearch {
         }
 
         var winRect = SafeGetBoundingRectangle(winEl);
-        AutomationElementCollection allDesc = null;
-        try {
-            allDesc = winEl.FindAll(TreeScope.Descendants, Condition.TrueCondition);
-        } catch (Exception ex) {
-            LogWarn("Step2", "枚举子节点时发生异常: " + ex.Message);
-        }
+        int winTop = winRect.IsEmpty ? 0 : (int)winRect.Top;
 
-        bool alreadyOpen = false;
-        if (allDesc != null) {
-            for (int i = 0; i < allDesc.Count; i++) {
-                try {
-                    var el = allDesc[i];
-                    string cls = SafeGetClassName(el);
-                    if (cls.Contains("OmniboxViewViews")) {
-                        var r = SafeGetBoundingRectangle(el);
-                        if (r.Width > 100 && r.Left < winRect.Right - 150) {
-                            alreadyOpen = true;
-                            break;
-                        }
-                    }
-                } catch {}
-            }
-        }
+        OmniboxInfo omni;
+        SearchBtnInfo searchBtn;
+        ScanTopBarOnce(hVideoWin, winEl, winRect, winTop, out omni, out searchBtn);
 
-        if (alreadyOpen) {
+        if (omni != null) {
             LogInfo("Step2", "搜索栏已处于展开就绪状态，跳过点击");
         } else {
-            AutomationElement searchBtn = null;
-            if (allDesc != null) {
-                // 结构特征 1: LocationBarView / ToolbarView
-                for (int i = 0; i < allDesc.Count; i++) {
-                    try {
-                        var el = allDesc[i];
-                        string cls = SafeGetClassName(el);
-                        if (cls.Contains("LocationBarView") || cls.Contains("ToolbarView")) {
-                            var r = SafeGetBoundingRectangle(el);
-                            if (r.Top < winRect.Top + 60 && r.Width > 0 && r.Height > 0) {
-                                searchBtn = el;
-                                break;
-                            }
-                        }
-                    } catch {}
-                }
-
-                // 结构特征 2: 最小化按钮左邻近容器
-                if (searchBtn == null) {
-                    AutomationElement minBtn = null;
-                    for (int i = 0; i < allDesc.Count; i++) {
-                        try {
-                            if (SafeGetName(allDesc[i]) == "最小化") {
-                                minBtn = allDesc[i];
-                                break;
-                            }
-                        } catch {}
-                    }
-                    if (minBtn != null) {
-                        var minR = SafeGetBoundingRectangle(minBtn);
-                        for (int i = 0; i < allDesc.Count; i++) {
-                            try {
-                                var r = SafeGetBoundingRectangle(allDesc[i]);
-                                if (r.Top >= minR.Top - 10 && r.Top <= minR.Bottom + 10 &&
-                                    r.Right <= minR.Left + 5 && r.Left >= minR.Left - 50 && r.Width >= 16) {
-                                    searchBtn = allDesc[i];
-                                    break;
-                                }
-                            } catch {}
-                        }
-                    }
-                }
-            }
-
             if (searchBtn == null) {
-                errMsg = "未能通过结构特征定位到右上角搜索按钮";
+                errMsg = "未能通过结构特征定位到搜索按钮";
                 errCode = CODE_SEARCH_BTN_NOT_FOUND;
                 errCodeName = "SEARCH_BTN_NOT_FOUND";
                 errStep = 2;
-                errDetail = "标题栏未匹配到 LocationBarView 容器或最小化相邻元素";
+                errDetail = "标题栏未匹配到 UIA2 LocationBarView/最小化相邻元素，也未匹配到 MSAA 多标签栏搜索按钮";
                 return false;
             }
 
-            var sRect = SafeGetBoundingRectangle(searchBtn);
-            int searchCx = (int)(sRect.Left + sRect.Width / 2);
-            int searchCy = (int)(sRect.Top + sRect.Height / 2);
-            LogInfo("Step2", string.Format("点击搜索按钮: Center=({0},{1})", searchCx, searchCy));
-            Click(searchCx, searchCy);
-            Thread.Sleep(500);
-        }
+            bool preferMsaa = searchBtn.MsaaEl != null;
+            LogInfo("Step2", string.Format("定位到搜索按钮 [{0}]: Center=({1},{2})", searchBtn.Source, searchBtn.Cx, searchBtn.Cy));
 
-        // ====================================================
-        // [步骤 3] 定位展开的输入框，粘贴指定链接并回车
-        // ====================================================
-        AutomationElement omniEl = null;
-        for (int retry = 0; retry < 15; retry++) {
-            Thread.Sleep(200);
-            AutomationElementCollection refreshDesc = null;
+            // 方案 2-1: 无障碍原生动作 (InvokePattern / accDoDefaultAction) [无鼠标]
+            bool a11yTried = false;
             try {
-                refreshDesc = winEl.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+                if (searchBtn.UiaEl != null) {
+                    object pat;
+                    if (searchBtn.UiaEl.TryGetCurrentPattern(InvokePattern.Pattern, out pat)) {
+                        a11yTried = true;
+                        ((InvokePattern)pat).Invoke();
+                    }
+                } else if (searchBtn.MsaaEl != null) {
+                    a11yTried = true;
+                    searchBtn.MsaaEl.accDoDefaultAction(0);
+                }
             } catch {}
 
-            if (refreshDesc != null) {
-                for (int i = 0; i < refreshDesc.Count; i++) {
-                    try {
-                        var el = refreshDesc[i];
-                        string cls = SafeGetClassName(el);
-                        var r = SafeGetBoundingRectangle(el);
-                        ControlType ct = SafeGetControlType(el);
-                        if ((cls.Contains("OmniboxViewViews") || ct == ControlType.Edit) && 
-                            r.Width > 50 && r.Left < winRect.Right - 100) {
-                            omniEl = el;
-                            break;
-                        }
-                    } catch {}
+            if (a11yTried) {
+                omni = WaitForOmnibox(hVideoWin, winEl, winRect, winTop, 50, 400, preferMsaa, searchBtn.MsaaEl);
+                if (omni != null) {
+                    LogInfo("Step2", "展开搜索栏成功 [A11Y无鼠标]");
                 }
             }
-            if (omniEl != null) break;
+
+            // 方案 2-2: PostMessage 窗口消息虚拟点击 [无鼠标]
+            if (omni == null) {
+                PostMessageClick(hVideoWin, searchBtn.Cx, searchBtn.Cy);
+                omni = WaitForOmnibox(hVideoWin, winEl, winRect, winTop, 50, 500, preferMsaa, searchBtn.MsaaEl);
+                if (omni != null) {
+                    LogInfo("Step2", "展开搜索栏成功 [PostMessage无鼠标]");
+                }
+            }
+
+            // 方案 2-3: 兜底 - 物理鼠标点击（含光标瞬时复原）
+            if (omni == null) {
+                LogInfo("Step2", string.Format("无鼠标方案未生效，降级物理点击兜底: Center=({0},{1})", searchBtn.Cx, searchBtn.Cy));
+                Click(searchBtn.Cx, searchBtn.Cy);
+                omni = WaitForOmnibox(hVideoWin, winEl, winRect, winTop, 50, 2500, preferMsaa, searchBtn.MsaaEl);
+            }
         }
 
-        if (omniEl == null) {
-            errMsg = "未能在点击后捕获到展开的输入框 (OmniboxViewViews)";
+        // ====================================================
+        // [步骤 3] 聚焦输入框，原生粘贴指定链接并回车（无鼠标优先 -> 物理点击兜底）
+        // ====================================================
+        if (omni == null) {
+            omni = WaitForOmnibox(hVideoWin, winEl, winRect, winTop, 50, 1500, false, null);
+        }
+
+        if (omni == null) {
+            errMsg = "未能在点击后捕获到展开的输入框 (OmniboxViewViews / MSAA 地址和搜索栏)";
             errCode = CODE_OMNIBOX_NOT_FOUND;
             errCodeName = "OMNIBOX_NOT_FOUND";
             errStep = 3;
@@ -513,26 +913,51 @@ public class SphSearch {
             return false;
         }
 
-        var oRect = SafeGetBoundingRectangle(omniEl);
-        int omniCx = (int)(oRect.Left + 50);
-        int omniCy = (int)(oRect.Top + oRect.Height / 2);
-        Click(omniCx, omniCy);
-        Thread.Sleep(100);
+        LogInfo("Step3", string.Format("定位到输入框 [{0}]: Click=({1},{2})", omni.Source, omni.Cx, omni.Cy));
+        string backupClip = BackupClipboardText();
 
-        SetClipboardText(targetUrl);
-        LogInfo("Step3", "聚焦输入框并粘贴目标链接: " + targetUrl);
+        try {
+            // 方案 3-1: PostMessage 虚拟点击聚焦 + 原生 Ctrl+A / Ctrl+V 粘贴 + 动态短轮询读回校验 + 单次回车 [无鼠标]
+            PostMessageClick(hVideoWin, omni.Cx, omni.Cy);
+            Thread.Sleep(50);
+            SetClipboardText(targetUrl);
+            SendKeyCombo(VK_CONTROL, VK_A);
+            Thread.Sleep(20);
+            SendKeyCombo(VK_CONTROL, VK_V);
 
-        // Ctrl+V -> Enter
-        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-        keybd_event(VK_V, 0, 0, UIntPtr.Zero);
-        Thread.Sleep(30);
-        keybd_event(VK_V, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        Thread.Sleep(300);
+            bool pasteVerified = false;
+            Stopwatch pasteSw = Stopwatch.StartNew();
+            while (pasteSw.ElapsedMilliseconds < 260) {
+                Thread.Sleep(25);
+                string actual = ReadOmniboxValue(omni);
+                if (ValueMatchesTarget(actual, targetUrl)) {
+                    pasteVerified = true;
+                    break;
+                }
+            }
 
-        keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
-        Thread.Sleep(50);
-        keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            if (pasteVerified) {
+                LogInfo("Step3", "聚焦并粘贴目标链接成功 [PostMessage无鼠标]: " + targetUrl);
+                SendEnterKey();
+            } else {
+                // 方案 3-2: 兜底 - 物理点击聚焦（含光标复原）+ 原生粘贴 + 单次回车
+                LogWarn("Step3", "PostMessage 聚焦粘贴未通过读回校验，降级物理点击聚焦兜底...");
+                Click(omni.Cx, omni.Cy);
+                Thread.Sleep(60);
+                SetClipboardText(targetUrl);
+                SendKeyCombo(VK_CONTROL, VK_A);
+                Thread.Sleep(25);
+                SendKeyCombo(VK_CONTROL, VK_V);
+                Thread.Sleep(150);
+                LogInfo("Step3", "聚焦并粘贴目标链接成功 [物理点击兜底]: " + targetUrl);
+                SendEnterKey();
+            }
+        } finally {
+            if (backupClip != null) {
+                Thread.Sleep(100);
+                SetClipboardText(backupClip);
+            }
+        }
 
         // 如果显式传入了 --url 打开具体链接，完成回车输入后即视为成功打开，跳过步骤 4 的代理连接校验
         if (g_HasExplicitUrl) {

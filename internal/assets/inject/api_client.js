@@ -1354,7 +1354,14 @@ window.__wx_api_client = {
     // 同一播放区域允许首次挂载媒体；绑定后仍严格校验节点和 source，不能跨作品等待。
     if (!left.media.length && right.media.length) left.media = right.media;
     return left.media.length === right.media.length && left.media.every(function(media, index) {
-      return media.element === right.media[index].element && media.source === right.media[index].source;
+      if (media.element !== right.media[index].element) return false;
+      if (media.source === right.media[index].source) return true;
+      // 同作品起播时允许空 source 初次灌流，已加载源切换为其他源仍判为切换作品。
+      if (!media.source.replace(/\|/g, '') && right.media[index].source.replace(/\|/g, '')) {
+        media.source = right.media[index].source;
+        return true;
+      }
+      return false;
     });
   },
 
@@ -1383,19 +1390,29 @@ window.__wx_api_client = {
   },
 
   // 不等待按钮渲染或异步确认；播放事件可直接指定切换动画中的媒体。
-  pausePlaybackNow: function(scope, eventMedia, onPaused) {
+  pausePlaybackNow: function(scope, eventMedia, onPaused, options) {
     var state = this.readPlaybackState(scope);
     var method = 'already_paused';
-    // 普通视频直接暂停媒体，避免 UI 标签滞后时切换按钮重新触发播放。
-    // 图文还需停止轮播；同一内容只点一次，直到观察到播放按钮或切换作品。
-    if (state.pauseButton && !state.nativeVideo) {
+    var hasPlayingMedia = state.media.some(function(media) { return !media.paused; });
+    var allowVideoButton = !!(options && options.allowButtonFallback && hasPlayingMedia && !state.playButton);
+    // 普通视频优先直接暂停媒体，避免 UI 标签滞后时误触；仅在多次拉回播放时允许受控按钮兜底。
+    // 图文需停止轮播：若首次点击未生效且媒体仍在播放，800ms 冷却后允许补点（单作品最多 3 次）。
+    if (state.pauseButton && (!state.nativeVideo || allowVideoButton)) {
       if (!this.pauseButtonClicks) this.pauseButtonClicks = new WeakMap();
-      var lastClick = this.pauseButtonClicks.get(scope);
+      var lastRecord = this.pauseButtonClicks.get(scope);
       var target = this.getPlaybackTarget(scope);
-      var sameContent = lastClick && lastClick.pagePath === target.pagePath &&
-        (target.feedId ? lastClick.feedId === target.feedId : this.samePlaybackTarget(lastClick, target));
-      if (!sameContent) {
-        this.pauseButtonClicks.set(scope, target);
+      var lastTarget = lastRecord && lastRecord.target;
+      var sameContent = lastTarget && lastTarget.pagePath === target.pagePath &&
+        (target.feedId ? lastTarget.feedId === target.feedId : this.samePlaybackTarget(lastTarget, target));
+      var now = Date.now();
+      var canRetryClick = sameContent && hasPlayingMedia && !state.playButton &&
+        (lastRecord.count || 1) < 3 && (now - (lastRecord.clickedAt || 0)) >= 800;
+      if (!sameContent || canRetryClick) {
+        this.pauseButtonClicks.set(scope, {
+          target: target,
+          clickedAt: now,
+          count: sameContent ? (lastRecord.count || 1) + 1 : 1
+        });
         try { state.pauseButton.click(); method = 'button_click'; } catch(e) {}
       }
     }
@@ -1438,7 +1455,7 @@ window.__wx_api_client = {
     var maxRetries = 5;
     var retryDelay = 300;
     var explicitlyPaused = new WeakSet();
-    var mediaWaitTimeoutMs = 5000;
+    var mediaWaitTimeoutMs = 8000;
     var mediaWaitStarted = Date.now();
     var mediaWaitElapsedMs = 0;
     var getPauseScope = this.getPlaybackScope.bind(this);
@@ -1458,7 +1475,12 @@ window.__wx_api_client = {
         if (!current.paused || current.media.length !== firstState.media.length) return false;
         for (var pi = 0; pi < current.media.length; pi++) {
           var mediaElement = current.media[pi];
-          if (mediaElement !== firstState.media[pi] || (mediaElement.currentSrc || mediaElement.src) !== mediaSources[pi]) return false;
+          var currentSource = mediaElement.currentSrc || mediaElement.src;
+          if (mediaElement !== firstState.media[pi]) return false;
+          if (currentSource !== mediaSources[pi]) {
+            if (!mediaSources[pi] && currentSource) mediaSources[pi] = currentSource;
+            else return false;
+          }
           if (mediaElement.readyState < 2 && !mediaElement.ended && !explicitlyPaused.has(mediaElement)) return false;
         }
       }
@@ -1495,12 +1517,12 @@ window.__wx_api_client = {
       var waitingState = readPauseState(waitingScope);
       var hasPlayer = waitingState.media.length || waitingState.pauseButton || waitingState.playButton;
       if (mediaWaitElapsedMs > mediaWaitTimeoutMs || (!hasPlayer && mediaWaitElapsedMs >= mediaWaitTimeoutMs)) {
-        console.log('[API客户端] 等待媒体或播放控件出现超时（5秒）');
+        console.log('[API客户端] 等待媒体或播放控件出现超时（8秒）');
         return { success: false, isPaused: false, reason: 'media_missing_timeout',
-          message: '等待媒体或播放控件出现超时（5秒），无法确认暂停', diagnostics: pauseDiagnostics(waitingScope) };
+          message: '等待媒体或播放控件出现超时（8秒），无法确认暂停', diagnostics: pauseDiagnostics(waitingScope) };
       }
       if (hasPlayer) break;
-      if (!mediaWaitElapsedMs) console.log('[API客户端] 媒体或播放控件尚未出现，最多等待5秒');
+      if (!mediaWaitElapsedMs) console.log('[API客户端] 媒体或播放控件尚未出现，最多等待8秒');
       await new Promise(function(resolve) { setTimeout(resolve, Math.min(retryDelay, mediaWaitTimeoutMs - mediaWaitElapsedMs)); });
       mediaWaitElapsedMs = Date.now() - mediaWaitStarted;
     }
@@ -1517,7 +1539,7 @@ window.__wx_api_client = {
         state = readPauseState(scope);
       }
 
-      var method = this.pausePlaybackNow(scope, null, function(media) { explicitlyPaused.add(media); });
+      var method = this.pausePlaybackNow(scope, null, function(media) { explicitlyPaused.add(media); }, { allowButtonFallback: retry >= 2 });
       if (!isTargetCurrent(scope)) continue;
       state = readPauseState(scope);
       if (state.paused && await confirmPaused(scope)) return pauseResult(method);

@@ -130,7 +130,7 @@ test('empty page is not reported as already paused', async () => {
   assert.equal((await setup('').run()).success, false);
 });
 
-for (const appearAt of [4200, 5000]) {
+for (const appearAt of [4200, 8000]) {
   test(`媒体等待：同作品媒体在 ${appearAt} 毫秒出现后立即暂停并确认`, async () => {
     let elapsed = 0, mountedAt = 0, pausedAt = 0, state;
     const { window, run } = setup('<div class="slides-item"><div id="flow-feed-current"></div></div>', (delay, document) => {
@@ -150,12 +150,12 @@ for (const appearAt of [4200, 5000]) {
       assert.ok(state?.paused);
       assert.equal(state.calls, 1);
       assert.equal(pausedAt, mountedAt, '媒体出现后先暂停，再等待确认');
-      assert.ok(mountedAt >= appearAt && mountedAt <= 5000);
+      assert.ok(mountedAt >= appearAt && mountedAt <= 8000);
     } finally { window.close(); }
   });
 }
 
-test('媒体等待：缺失超过 5 秒明确超时，不无限等待或冒充成功', async () => {
+test('媒体等待：缺失超过 8 秒明确超时，不无限等待或冒充成功', async () => {
   let elapsed = 0;
   const { window, run } = setup('<div class="slides-item"><div id="flow-feed-current"></div></div>', delay => { elapsed += delay; });
   try {
@@ -163,10 +163,10 @@ test('媒体等待：缺失超过 5 秒明确超时，不无限等待或冒充�
     assert.equal(result.success, false);
     assert.equal(result.isPaused, false);
     assert.equal(result.reason, 'media_missing_timeout');
-    assert.match(result.message, /5秒/);
-    assert.equal(elapsed, 5000);
-    assert.equal(result.diagnostics.mediaWaitTimeoutMs, 5000);
-    assert.equal(result.diagnostics.mediaWaitElapsedMs, 5000);
+    assert.match(result.message, /8秒/);
+    assert.equal(elapsed, 8000);
+    assert.equal(result.diagnostics.mediaWaitTimeoutMs, 8000);
+    assert.equal(result.diagnostics.mediaWaitElapsedMs, 8000);
     assert.equal(result.diagnostics.media.length, 0);
   } finally { window.close(); }
 });
@@ -726,6 +726,72 @@ test('media that resumes after a pause is not reported as successfully stopped',
   });
   state = mediaState(document.querySelector('video'));
   assert.equal((await run()).success, false);
+});
+
+test('图文首次点击未生效且音频仍在播放时，冷却后允许补点并成功暂停', async () => {
+  let state, clicks = 0;
+  const { document, window, run } = setup(slide().replace('ml-key="flow-image"', 'ml-key="flow-image" id="flow-feed-img1"'), delay => {
+    // 首次点击未生效，图文播放器在重试等待期间继续拉起音频播放
+    if (clicks === 1 && delay === 300) state.paused = false;
+  });
+  try {
+    state = mediaState(document.querySelector('audio'));
+    const button = document.querySelector('button');
+    button.onclick = () => {
+      clicks++;
+      if (clicks >= 2) {
+        state.paused = true;
+        button.setAttribute('aria-label', playLabel);
+        button.querySelector('svg').setAttribute('ml-key', 'flow-video-play');
+      }
+    };
+    const result = await run();
+    assert.equal(result.success, true);
+    assert.equal(result.isPaused, true);
+    assert.equal(clicks, 2);
+    assert.equal(state.paused, true);
+  } finally { window.close(); }
+});
+
+test('普通视频原生 pause 被播放器拉回播放时，第 3 轮触发受控按钮兜底成功暂停', async () => {
+  let state, clicks = 0, buttonPaused = false;
+  const { document, window, run } = setup(
+    '<div class="slides-item"><div id="flow-feed-v1"></div><video src="v1.mp4"></video><button aria-label="' + pauseLabel + '"></button></div>',
+    delay => {
+      if (!buttonPaused && delay === 200) state.paused = false;
+    }
+  );
+  try {
+    state = mediaState(document.querySelector('video'));
+    const button = document.querySelector('button');
+    button.onclick = () => {
+      clicks++;
+      buttonPaused = true;
+      state.paused = true;
+      button.setAttribute('aria-label', playLabel);
+    };
+    const result = await run();
+    assert.equal(result.success, true);
+    assert.equal(clicks, 1);
+    assert.equal(state.paused, true);
+  } finally { window.close(); }
+});
+
+test('同作品起播空源初次灌流不误判为切换作品', async () => {
+  let filled = false;
+  const { document, window, run } = setup('<div class="slides-item"><div id="flow-feed-current"><video></video></div></div>', delay => {
+    if (!filled && delay === 200) {
+      filled = true;
+      document.querySelector('video').src = 'blob:https://channels.weixin.qq.com/test-stream';
+    }
+  });
+  try {
+    const state = mediaState(document.querySelector('video'));
+    const result = await run();
+    assert.equal(result.success, true);
+    assert.equal(state.paused, true);
+    assert.equal(filled, true);
+  } finally { window.close(); }
 });
 
 if (process.env.PAUSE_DOM_FIXTURE) {

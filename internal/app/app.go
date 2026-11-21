@@ -266,7 +266,6 @@ func (app *App) Run() {
 	// 启动 Windows 自动独立窗口监听
 	if os_env == "windows" {
 		winwindow.StartAutoPopout()
-		utils.Info("✓ 自动独立窗口监控已启动")
 	}
 
 	// 启动对标雷达服务（默认关闭，按配置启用）
@@ -279,18 +278,8 @@ func (app *App) Run() {
 
 	// 4. 【异步】处理 Windows 代理和连通性检查 (不阻塞主线程)
 	go func() {
+		// 如果是 Windows，根据模式启动代理
 		// 页面入口提示与代理模式无关，保留微信 4.x 网页版适配。
-		if os_env == "windows" {
-			utils.Info("─────────────────────────────────────────────────────────────────")
-			utils.Info("💡 【微信 4.x / 4.2+ 版本重要操作说明】")
-			utils.Info("微信 4.x 左侧侧边栏「视频号」默认加载本地 LiteApp 离线包，不发起网页请求。")
-			utils.Info("若要启用注入脚本与功能按钮，请在微信【文件传输助手】或任意聊天中发送并点击：")
-			utils.Info("👉 https://channels.weixin.qq.com/web/pages/home?skipLiteApp=1")
-			utils.Info("   或：https://channels.weixin.qq.com/web/pages/feed?skipLiteApp=1")
-			utils.Info("   或：https://channels.weixin.qq.com/web/pages/s?q=关键词&skipLiteApp=1")
-			utils.Info("微信将以原生 Web 浏览器打开网页版，所有功能按钮将立即生效！")
-			utils.Info("─────────────────────────────────────────────────────────────────")
-		}
 
 		// 执行连通性自检
 		time.Sleep(1 * time.Second)
@@ -306,7 +295,7 @@ func (app *App) Run() {
 		}
 
 		if _, err := client.Get("https://sunny.io/"); err != nil {
-			utils.Warn("💡 注意：代理自检未通过")
+			// utils.Warn("💡 注意：代理自检未通过")
 		} else {
 			utils.Info("✓ 证书与网络链路正常")
 		}
@@ -467,7 +456,7 @@ func (app *App) startWebSocketServer(wsPort int) {
 
 	utils.Info("🔌 WebSocket服务已启动，端口: %d", wsPort)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		utils.Warn("WebSocket服务启动失败: %v", err)
+		// utils.Warn("WebSocket服务启动失败: %v", err)
 	}
 }
 

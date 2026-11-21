@@ -45,7 +45,7 @@ if not exist "%CSC_EXE%" (
 )
 
 echo [1/3] Compiling SphSearch.cs ...
-"%CSC_EXE%" /nologo /optimize+ /platform:x64 /target:exe /r:"%WPF_DIR%\UIAutomationClient.dll" /r:"%WPF_DIR%\UIAutomationTypes.dll" /r:"%WPF_DIR%\WindowsBase.dll" /out:"%~dp0sph_search.exe" "%~dp0SphSearch.cs"
+"%CSC_EXE%" /nologo /optimize+ /platform:x64 /target:exe /r:"%WPF_DIR%\UIAutomationClient.dll" /r:"%WPF_DIR%\UIAutomationTypes.dll" /r:"%WPF_DIR%\WindowsBase.dll" /r:"Accessibility.dll" /out:"%~dp0sph_search.exe" "%~dp0SphSearch.cs"
 if errorlevel 1 (
     echo [ERROR] Compilation failed.
     goto fail
